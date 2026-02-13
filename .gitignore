@@ -39,3 +39,18 @@
 
 # debug information files
 *.dwo
+
+# More
+**/CMakeFiles/
+**/CMakeCache
+**/CMakeCache.txt
+*.cmake
+**/Makefile
+**/build/
+**/Testing
+stb/*
+layout.*
+spritesheet.*
+frames
+spritelayout
+spritepack
