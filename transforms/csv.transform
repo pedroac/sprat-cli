@@ -1,0 +1,15 @@
+[meta]
+name=csv
+description=CSV rows for spreadsheets and data tools
+extension=.csv
+
+[header]
+index,path,x,y,w,h,src_x,src_y,trim_right,trim_bottom,has_trim
+
+[sprites]
+{{index}},{{path_csv}},{{x}},{{y}},{{w}},{{h}},{{src_x}},{{src_y}},{{trim_right}},{{trim_bottom}},{{has_trim}}
+
+[separator]
+
+[footer]
+

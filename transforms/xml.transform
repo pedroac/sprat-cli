@@ -1,0 +1,17 @@
+[meta]
+name=xml
+description=XML layout format for engine import pipelines
+extension=.xml
+
+[header]
+<?xml version="1.0" encoding="UTF-8"?>
+<atlas width="{{atlas_width}}" height="{{atlas_height}}" scale="{{scale}}">
+
+[sprites]
+  <sprite index="{{index}}" path="{{path_xml}}" x="{{x}}" y="{{y}}" w="{{w}}" h="{{h}}" src_x="{{src_x}}" src_y="{{src_y}}" trim_right="{{trim_right}}" trim_bottom="{{trim_bottom}}" has_trim="{{has_trim}}" />
+
+[separator]
+
+[footer]
+
+</atlas>

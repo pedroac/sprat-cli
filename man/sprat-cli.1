@@ -1,0 +1,136 @@
+.TH SPRAT-CLI 1 "February 2026" "sprat-cli" "User Commands"
+.SH NAME
+sprat-cli \- sprite atlas layout and packing pipeline
+.SH SYNOPSIS
+.B spritelayout
+.I folder
+[\fB\-\-profile\fR desktop|mobile|legacy|space|fast|css]
+[\fB\-\-max\-width\fR \fIN\fR]
+[\fB\-\-max\-height\fR \fIN\fR]
+[\fB\-\-padding\fR \fIN\fR]
+[\fB\-\-scale\fR \fIF\fR]
+[\fB\-\-trim\-transparent\fR]
+.PP
+.B spritepack
+[\fB\-\-frame\-lines\fR]
+[\fB\-\-line\-width\fR \fIN\fR]
+[\fB\-\-line\-color\fR \fIR,G,B[,A]\fR]
+.PP
+.B spratconvert
+[\fB\-\-transform\fR \fINAME|PATH\fR]
+[\fB\-\-list\-transforms\fR]
+.SH DESCRIPTION
+\fBsprat\-cli\fR is a UNIX pipeline for generating sprite sheets and transforming layout metadata.
+.PP
+\fBspritelayout\fR scans an image folder and writes a text layout to standard output.
+.PP
+\fBspritepack\fR reads the layout from standard input and writes a PNG atlas to standard output.
+.PP
+\fBspratconvert\fR reads the same layout format from standard input and transforms it into text formats (for example JSON, CSV, XML, CSS) using template-driven transforms.
+.PP
+Normal output is written to stdout. Errors are written to stderr.
+.SH COMMANDS
+.SS spritelayout
+Reads image metadata from files in \fIfolder\fR and prints layout lines:
+.PP
+atlas \fIwidth,height\fR
+.br
+scale \fIfactor\fR
+.br
+sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR]
+.PP
+If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
+.SS spritepack
+Reads layout text from stdin and writes a PNG stream to stdout.
+.PP
+Layout accepts:
+.br
+atlas \fIwidth,height\fR (or legacy \fIatlas width height\fR)
+.br
+scale \fIfactor\fR
+.br
+sprite lines in current or legacy numeric format
+.SS spratconvert
+Reads layout text from stdin and writes transformed text to stdout.
+.PP
+Transforms can be selected by name from \fBtransforms/\fR (for example \fBjson\fR, \fBcsv\fR, \fBxml\fR, \fBcss\fR) or by path to a custom \fB.transform\fR file.
+.SH OPTIONS
+.SS spritelayout
+.TP
+\fB\-\-profile\fR desktop|mobile|legacy|space|fast|css
+Packing profile. Default: \fBdesktop\fR.
+.TP
+\fB\-\-max\-width\fR \fIN\fR
+Maximum atlas width.
+.TP
+\fB\-\-max\-height\fR \fIN\fR
+Maximum atlas height.
+.TP
+\fB\-\-padding\fR \fIN\fR
+Extra pixels between packed sprites. Default: \fB0\fR.
+.TP
+\fB\-\-scale\fR \fIF\fR
+Scale factor applied to sprite dimensions. Default: \fB1\fR.
+.TP
+\fB\-\-trim\-transparent\fR
+Trim transparent borders before packing.
+.PP
+Profile defaults:
+.IP "\(bu" 2
+\fBdesktop\fR: compact packing, GPU-oriented selection.
+.IP "\(bu" 2
+\fBmobile\fR: desktop behavior, default limits 2048x2048.
+.IP "\(bu" 2
+\fBlegacy\fR: power-of-two output, default limits 1024x1024.
+.IP "\(bu" 2
+\fBspace\fR: compact packing, area-oriented selection.
+.IP "\(bu" 2
+\fBfast\fR: shelf packing, GPU-oriented selection.
+.IP "\(bu" 2
+\fBcss\fR: shelf packing, area-oriented selection.
+.SS spritepack
+.TP
+\fB\-\-frame\-lines\fR
+Draw rectangle outlines for each sprite.
+.TP
+\fB\-\-line\-width\fR \fIN\fR
+Outline thickness in pixels. Default: \fB1\fR.
+.TP
+\fB\-\-line\-color\fR \fIR,G,B[,A]\fR
+Outline color channels (0-255). Default: \fB255,0,0,255\fR.
+.SS spratconvert
+.TP
+\fB\-\-transform\fR \fINAME|PATH\fR
+Transform name from \fBtransforms/\fR or path to a custom transform file. Default: \fBjson\fR.
+.TP
+\fB\-\-list\-transforms\fR
+Print available transforms and exit.
+.SH EXAMPLES
+.TP
+Generate layout text:
+.B spritelayout ./frames > layout.txt
+.TP
+Pack PNG from layout:
+.B spritepack < layout.txt > spritesheet.png
+.TP
+Transform layout to JSON:
+.B spratconvert --transform json < layout.txt > layout.json
+.TP
+Transform layout with custom template:
+.B spratconvert --transform ./my.transform < layout.txt > layout.custom.txt
+.TP
+Run as one pipeline:
+.B spritelayout ./frames --trim-transparent --padding 2 | spritepack > spritesheet.png
+.TP
+Debug frame bounds:
+.B spritepack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet_lines.png
+.SH EXIT STATUS
+All commands return:
+.TP
+\fB0\fR
+Success.
+.TP
+\fB1\fR
+Invalid arguments, invalid input data, image decode/encode failure, or packing failure.
+.SH SEE ALSO
+\fBspritelayout\fR(1), \fBspritepack\fR(1), \fBspratconvert\fR(1)

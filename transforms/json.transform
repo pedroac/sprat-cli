@@ -1,0 +1,21 @@
+[meta]
+name=json
+description=JSON metadata for scripting and runtime loading
+extension=.json
+
+[header]
+{
+  "atlas": {"width": {{atlas_width}}, "height": {{atlas_height}}},
+  "scale": {{scale}},
+  "sprites": [
+
+[sprites]
+    {"index": {{index}}, "path": "{{path_json}}", "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "src_x": {{src_x}}, "src_y": {{src_y}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "has_trim": {{has_trim}}}
+
+[separator]
+,
+
+[footer]
+
+  ]
+}
