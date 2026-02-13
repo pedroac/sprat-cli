@@ -2,21 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SPRITELAYOUT_BIN="${SPRITELAYOUT_BIN:-$ROOT_DIR/spritelayout}"
-SPRITEPACK_BIN="${SPRITEPACK_BIN:-$ROOT_DIR/spritepack}"
+SPRATLAYOUT_BIN="${SPRATLAYOUT_BIN:-$ROOT_DIR/spratlayout}"
+SPRATPACK_BIN="${SPRATPACK_BIN:-$ROOT_DIR/spratpack}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/README-assets}"
 FRAMES_DIR="${FRAMES_DIR:-$OUTPUT_DIR/frames}"
 ROBOTFREE_ZIP_URL="${ROBOTFREE_ZIP_URL:-https://opengameart.org/sites/default/files/RobotFree.zip}"
 FRAME_MAX_SIZE="${FRAME_MAX_SIZE:-64x64>}"
 
-if [ ! -x "$SPRITELAYOUT_BIN" ]; then
-    echo "Missing executable: $SPRITELAYOUT_BIN" >&2
+if [ ! -x "$SPRATLAYOUT_BIN" ]; then
+    echo "Missing executable: $SPRATLAYOUT_BIN" >&2
     echo "Build first (for example: cmake --build .)" >&2
     exit 1
 fi
 
-if [ ! -x "$SPRITEPACK_BIN" ]; then
-    echo "Missing executable: $SPRITEPACK_BIN" >&2
+if [ ! -x "$SPRATPACK_BIN" ]; then
+    echo "Missing executable: $SPRATPACK_BIN" >&2
     echo "Build first (for example: cmake --build .)" >&2
     exit 1
 fi
@@ -92,8 +92,8 @@ render_sample() {
     layout_tmp="$(mktemp)"
     image_tmp="$(mktemp --suffix=.png)"
 
-    "$SPRITELAYOUT_BIN" "$FRAMES_DIR" "$@" > "$layout_tmp"
-    "$SPRITEPACK_BIN" < "$layout_tmp" > "$image_tmp"
+    "$SPRATLAYOUT_BIN" "$FRAMES_DIR" "$@" > "$layout_tmp"
+    "$SPRATPACK_BIN" < "$layout_tmp" > "$image_tmp"
 
     mv "$image_tmp" "$OUTPUT_DIR/$output_name"
     rm -f "$layout_tmp"
@@ -109,8 +109,8 @@ render_sample_with_frame_lines() {
     layout_tmp="$(mktemp)"
     image_tmp="$(mktemp --suffix=.png)"
 
-    "$SPRITELAYOUT_BIN" "$FRAMES_DIR" "$@" > "$layout_tmp"
-    "$SPRITEPACK_BIN" --frame-lines < "$layout_tmp" > "$image_tmp"
+    "$SPRATLAYOUT_BIN" "$FRAMES_DIR" "$@" > "$layout_tmp"
+    "$SPRATPACK_BIN" --frame-lines < "$layout_tmp" > "$image_tmp"
 
     mv "$image_tmp" "$OUTPUT_DIR/$output_name"
     rm -f "$layout_tmp"
@@ -136,8 +136,8 @@ render_sample_with_frame_lines "recipe-11-frame-lines-red.png" --profile desktop
 
 layout_tmp="$(mktemp)"
 image_tmp="$(mktemp --suffix=.png)"
-"$SPRITELAYOUT_BIN" "$FRAMES_DIR" --profile desktop --trim-transparent --padding 2 > "$layout_tmp"
-"$SPRITEPACK_BIN" --frame-lines --line-width 2 --line-color 0,255,0 < "$layout_tmp" > "$image_tmp"
+"$SPRATLAYOUT_BIN" "$FRAMES_DIR" --profile desktop --trim-transparent --padding 2 > "$layout_tmp"
+"$SPRATPACK_BIN" --frame-lines --line-width 2 --line-color 0,255,0 < "$layout_tmp" > "$image_tmp"
 mv "$image_tmp" "$OUTPUT_DIR/recipe-12-pipeline-lines-green.png"
 rm -f "$layout_tmp"
 echo "Wrote $OUTPUT_DIR/recipe-12-pipeline-lines-green.png"

@@ -1,6 +1,6 @@
-// spritelayout.cpp
+// spratlayout.cpp
 // MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++17 -O2 spritelayout.cpp -o spritelayout
+// Compile: g++ -std=c++17 -O2 spratlayout.cpp -o spratlayout
 
 #include <iostream>
 #include <vector>
@@ -504,7 +504,7 @@ bool pick_better_layout_candidate(
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "Usage: spritelayout <folder> [--profile desktop|mobile|legacy|space|fast|css] [--max-width N] [--max-height N] [--padding N] [--scale F] [--trim-transparent]\n";
+        std::cerr << "Usage: spratlayout <folder> [--profile desktop|mobile|legacy|space|fast|css] [--max-width N] [--max-height N] [--padding N] [--scale F] [--trim-transparent]\n";
         return 1;
     }
 

@@ -42,7 +42,7 @@ make
 Generate layout first (most common workflow):
 
 ```sh
-./spritelayout ./frames > layout.txt
+./spratlayout ./frames > layout.txt
 ```
 
 Inspect layout text:
@@ -54,13 +54,13 @@ head -n 20 layout.txt
 Pack PNG from that layout:
 
 ```sh
-./spritepack < layout.txt > spritesheet.png
+./spratpack < layout.txt > spritesheet.png
 ```
 
 Optional one-pipe run:
 
 ```sh
-./spritelayout ./frames --trim-transparent --padding 2 | ./spritepack > spritesheet.png
+./spratlayout ./frames --trim-transparent --padding 2 | ./spratpack > spritesheet.png
 ```
 
 Convert layout to JSON/CSV/XML/CSS:
@@ -84,8 +84,8 @@ make
 
 This builds three binaries:
 
-- `spritelayout`
-- `spritepack`
+- `spratlayout`
+- `spratpack`
 - `spratconvert`
 
 ## Test
@@ -96,15 +96,15 @@ Run the end-to-end pipeline test:
 ctest --test-dir tests --output-on-failure
 ```
 
-This test generates tiny PNG fixtures, runs `spritelayout` to produce layout text,
-then runs `spritepack` and verifies the output is a valid PNG.
+This test generates tiny PNG fixtures, runs `spratlayout` to produce layout text,
+then runs `spratpack` and verifies the output is a valid PNG.
 
 ## Workflow
 
-`spritelayout` scans a folder of input images and prints a text layout to stdout:
+`spratlayout` scans a folder of input images and prints a text layout to stdout:
 
 ```sh
-./spritelayout ./frames > layout.txt
+./spratlayout ./frames > layout.txt
 ```
 
 Profile differences (concise):
@@ -116,7 +116,7 @@ Profile differences (concise):
 - `css`: shelf-style packing + area-oriented selection (stable/simple CSS workflows).
 - `legacy`: POT output + default limits `1024x1024`.
 
-`spritelayout` options:
+`spratlayout` options:
 
 - `--profile desktop|mobile|legacy|space|fast|css` (default: `desktop`)
 - `--padding N` (default: `0`)
@@ -130,44 +130,44 @@ Why these options help:
 - `--scale F`: generate smaller atlases for lower-resolution targets (for example mobile variants).
 - `--trim-transparent`: removes empty borders to reduce atlas usage.
 - `--max-width/--max-height`: enforce hardware/platform texture limits.
-- `spritepack --frame-lines`: visual debug of sprite bounds, spacing, and overlaps.
+- `spratpack --frame-lines`: visual debug of sprite bounds, spacing, and overlaps.
 
 Example recipes:
 
 ```sh
 # 1) desktop (default): GPU-oriented packing
-./spritelayout ./frames --profile desktop > layout_desktop.txt
+./spratlayout ./frames --profile desktop > layout_desktop.txt
 
 # 2) mobile: desktop behavior + default 2048x2048 atlas limits
-./spritelayout ./frames --profile mobile > layout_mobile.txt
+./spratlayout ./frames --profile mobile > layout_mobile.txt
 
 # 3) space: tighter area packing
-./spritelayout ./frames --profile space > layout_space.txt
+./spratlayout ./frames --profile space > layout_space.txt
 
 # 4) fast: quicker shelf-style packing
-./spritelayout ./frames --profile fast > layout_fast.txt
+./spratlayout ./frames --profile fast > layout_fast.txt
 
 # 5) legacy: POT-oriented output + default 1024x1024 limits
-./spritelayout ./frames --profile legacy > layout_legacy.txt
+./spratlayout ./frames --profile legacy > layout_legacy.txt
 
 # 6) css: shelf-style profile for CSS sprite workflows
-./spritelayout ./frames --profile css > layout_css.txt
+./spratlayout ./frames --profile css > layout_css.txt
 ```
 
 Size/quality recipes:
 
 ```sh
 # Trim transparent borders before packing
-./spritelayout ./frames --profile desktop --trim-transparent > layout_trim.txt
+./spratlayout ./frames --profile desktop --trim-transparent > layout_trim.txt
 
 # Add 2px padding between sprites
-./spritelayout ./frames --profile desktop --padding 2 > layout_padding.txt
+./spratlayout ./frames --profile desktop --padding 2 > layout_padding.txt
 
 # Hard atlas limits (max-width/max-height)
-./spritelayout ./frames --profile desktop --max-width 1024 --max-height 1024 > layout_1024.txt
+./spratlayout ./frames --profile desktop --max-width 1024 --max-height 1024 > layout_1024.txt
 
 # Combine trim + padding + explicit limits
-./spritelayout ./frames --profile mobile --trim-transparent --padding 2 \
+./spratlayout ./frames --profile mobile --trim-transparent --padding 2 \
   --max-width 2048 --max-height 2048 > layout_mobile_tuned.txt
 ```
 
@@ -175,18 +175,18 @@ Rendering recipes with frame lines:
 
 ```sh
 # Draw sprite outlines on the packed sheet
-./spritepack --frame-lines --line-width 1 --line-color 255,0,0 < layout_desktop.txt > spritesheet_lines.png
+./spratpack --frame-lines --line-width 1 --line-color 255,0,0 < layout_desktop.txt > spritesheet_lines.png
 
 # End-to-end pipeline: layout + frame lines
-./spritelayout ./frames --profile desktop --trim-transparent --padding 2 | \
-  ./spritepack --frame-lines --line-width 2 --line-color 0,255,0 > spritesheet_pipeline_lines.png
+./spratlayout ./frames --profile desktop --trim-transparent --padding 2 | \
+  ./spratpack --frame-lines --line-width 2 --line-color 0,255,0 > spritesheet_pipeline_lines.png
 ```
 
 Scale recipe (smaller output for lower resolutions):
 
 ```sh
-./spritelayout ./frames --profile mobile --scale 0.5 > layout_mobile_half.txt
-./spritepack < layout_mobile_half.txt > spritesheet_mobile_half.png
+./spratlayout ./frames --profile mobile --scale 0.5 > layout_mobile_half.txt
+./spratpack < layout_mobile_half.txt > spritesheet_mobile_half.png
 ```
 
 The output format is:
@@ -202,7 +202,7 @@ When `--trim-transparent` is enabled, sprite lines include crop offsets:
 Example output from:
 
 ```sh
-./spritelayout ./frames --trim-transparent > layout.txt
+./spratlayout ./frames --trim-transparent > layout.txt
 ```
 
 ```txt
@@ -289,10 +289,10 @@ Column meanings for the `sprite` line in trim mode:
 - `<left>,<top>`: pixels trimmed from the left and top of the original image.
 - `<right>,<bottom>`: pixels trimmed from the right and bottom of the original image.
 
-`spritepack` reads that layout from stdin and writes the final PNG spritesheet to stdout:
+`spratpack` reads that layout from stdin and writes the final PNG spritesheet to stdout:
 
 ```sh
-./spritepack < layout.txt > spritesheet.png
+./spratpack < layout.txt > spritesheet.png
 ```
 
 Optional frame divider overlay:
@@ -304,13 +304,13 @@ Optional frame divider overlay:
 Example:
 
 ```sh
-./spritepack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet.png
+./spratpack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet.png
 ```
 
 You can also pipe both commands directly:
 
 ```sh
-./spritelayout ./frames | ./spritepack > spritesheet.png
+./spratlayout ./frames | ./spratpack > spritesheet.png
 ```
 
 License for third-party art is defined by the asset author; verify terms before redistribution.
@@ -333,51 +333,51 @@ What the script does:
 
 Sample asset source used in this page: https://opengameart.org/content/the-robot-free-sprite
 
-Recipe 1: Desktop (`./spritelayout ./frames --profile desktop > layout_desktop.txt`)
+Recipe 1: Desktop (`./spratlayout ./frames --profile desktop > layout_desktop.txt`)
 
 ![Recipe 1 Desktop](README-assets/recipe-01-desktop.png)
 
-Recipe 2: Mobile (`./spritelayout ./frames --profile mobile > layout_mobile.txt`)
+Recipe 2: Mobile (`./spratlayout ./frames --profile mobile > layout_mobile.txt`)
 
 ![Recipe 2 Mobile](README-assets/recipe-02-mobile.png)
 
-Recipe 3: Space (`./spritelayout ./frames --profile space > layout_space.txt`)
+Recipe 3: Space (`./spratlayout ./frames --profile space > layout_space.txt`)
 
 ![Recipe 3 Space](README-assets/recipe-03-space.png)
 
-Recipe 4: Fast (`./spritelayout ./frames --profile fast > layout_fast.txt`)
+Recipe 4: Fast (`./spratlayout ./frames --profile fast > layout_fast.txt`)
 
 ![Recipe 4 Fast](README-assets/recipe-04-fast.png)
 
-Recipe 5: Legacy (`./spritelayout ./frames --profile legacy > layout_legacy.txt`)
+Recipe 5: Legacy (`./spratlayout ./frames --profile legacy > layout_legacy.txt`)
 
 ![Recipe 5 Legacy](README-assets/recipe-05-legacy.png)
 
-Recipe 6: CSS (`./spritelayout ./frames --profile css > layout_css.txt`)
+Recipe 6: CSS (`./spratlayout ./frames --profile css > layout_css.txt`)
 
 ![Recipe 6 CSS](README-assets/recipe-06-css.png)
 
-Recipe 7: Trim (`./spritelayout ./frames --profile desktop --trim-transparent > layout_trim.txt`)
+Recipe 7: Trim (`./spratlayout ./frames --profile desktop --trim-transparent > layout_trim.txt`)
 
 ![Recipe 7 Trim](README-assets/recipe-07-trim-transparent.png)
 
-Recipe 8: Padding (`./spritelayout ./frames --profile desktop --padding 2 > layout_padding.txt`)
+Recipe 8: Padding (`./spratlayout ./frames --profile desktop --padding 2 > layout_padding.txt`)
 
 ![Recipe 8 Padding](README-assets/recipe-08-padding-2.png)
 
-Recipe 9: Max 1024 (`./spritelayout ./frames --profile desktop --max-width 1024 --max-height 1024 > layout_1024.txt`)
+Recipe 9: Max 1024 (`./spratlayout ./frames --profile desktop --max-width 1024 --max-height 1024 > layout_1024.txt`)
 
 ![Recipe 9 Max 1024](README-assets/recipe-09-max-1024.png)
 
-Recipe 10: Mobile Tuned (`./spritelayout ./frames --profile mobile --trim-transparent --padding 2 --max-width 2048 --max-height 2048 > layout_mobile_tuned.txt`)
+Recipe 10: Mobile Tuned (`./spratlayout ./frames --profile mobile --trim-transparent --padding 2 --max-width 2048 --max-height 2048 > layout_mobile_tuned.txt`)
 
 ![Recipe 10 Mobile Tuned](README-assets/recipe-10-mobile-tuned.png)
 
-Recipe 11: Frame Lines (`./spritepack --frame-lines --line-width 1 --line-color 255,0,0 < layout_desktop.txt > spritesheet_lines.png`)
+Recipe 11: Frame Lines (`./spratpack --frame-lines --line-width 1 --line-color 255,0,0 < layout_desktop.txt > spritesheet_lines.png`)
 
 ![Recipe 11 Frame Lines](README-assets/recipe-11-frame-lines-red.png)
 
-Recipe 12: Pipeline Lines (`./spritelayout ./frames --profile desktop --trim-transparent --padding 2 | ./spritepack --frame-lines --line-width 2 --line-color 0,255,0 > spritesheet_pipeline_lines.png`)
+Recipe 12: Pipeline Lines (`./spratlayout ./frames --profile desktop --trim-transparent --padding 2 | ./spratpack --frame-lines --line-width 2 --line-color 0,255,0 > spritesheet_pipeline_lines.png`)
 
 ![Recipe 12 Pipeline Lines](README-assets/recipe-12-pipeline-lines-green.png)
 
@@ -426,7 +426,7 @@ High-impact contribution areas:
   - Release automation and artifact publication for multiple platforms.
 - GUI frontends:
   - Desktop/web/mobile wrappers around the CLI pipeline.
-  - Workflow-focused tools that call `spritelayout`, `spritepack`, and `spratconvert` under the hood.
+  - Workflow-focused tools that call `spratlayout`, `spratpack`, and `spratconvert` under the hood.
 - Engine/runtime integrations:
   - Importers/exporters and transform templates for specific game engines or frameworks.
   - Community-maintained presets and examples.

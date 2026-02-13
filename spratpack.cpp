@@ -1,6 +1,6 @@
-// spritepack.cpp
+// spratpack.cpp
 // MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++17 -O2 spritepack.cpp -o spritepack
+// Compile: g++ -std=c++17 -O2 spratpack.cpp -o spratpack
 
 #include <iostream>
 #include <vector>
@@ -363,7 +363,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
         } else {
-            std::cerr << "Usage: spritepack [--frame-lines] [--line-width N] [--line-color R,G,B[,A]]\n";
+            std::cerr << "Usage: spratpack [--frame-lines] [--line-width N] [--line-color R,G,B[,A]]\n";
             return 1;
         }
     }

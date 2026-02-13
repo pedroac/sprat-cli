@@ -52,5 +52,6 @@ stb/*
 layout.*
 spritesheet.*
 frames
-spritelayout
-spritepack
+spratlayout
+spratpack
+spratconvert
