@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: pipeline_test.sh <spritelayout-bin> <spritepack-bin>" >&2
+    echo "Usage: pipeline_test.sh <spratlayout-bin> <spratpack-bin>" >&2
     exit 1
 fi
 
-spritelayout_bin="$1"
-spritepack_bin="$2"
+spratlayout_bin="$1"
+spratpack_bin="$2"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -28,10 +28,10 @@ fast_layout_file="$tmp_dir/layout_fast.txt"
 css_layout_file="$tmp_dir/layout_css.txt"
 sheet_file="$tmp_dir/spritesheet.png"
 
-"$spritelayout_bin" "$frames_dir" --profile desktop --padding 1 > "$layout_file"
-"$spritelayout_bin" "$frames_dir" --padding 1 > "$default_layout_file"
-"$spritelayout_bin" "$frames_dir" --profile fast --padding 1 > "$fast_layout_file"
-"$spritelayout_bin" "$frames_dir" --profile css --padding 1 > "$css_layout_file"
+"$spratlayout_bin" "$frames_dir" --profile desktop --padding 1 > "$layout_file"
+"$spratlayout_bin" "$frames_dir" --padding 1 > "$default_layout_file"
+"$spratlayout_bin" "$frames_dir" --profile fast --padding 1 > "$fast_layout_file"
+"$spratlayout_bin" "$frames_dir" --profile css --padding 1 > "$css_layout_file"
 
 if ! cmp -s "$layout_file" "$default_layout_file"; then
     echo "Default profile output differs from --profile desktop" >&2
@@ -82,7 +82,7 @@ for i in $(seq 1 17); do
 done
 
 pot_layout="$tmp_dir/pot_layout.txt"
-"$spritelayout_bin" "$pot_dir" --profile legacy > "$pot_layout"
+"$spratlayout_bin" "$pot_dir" --profile legacy > "$pot_layout"
 
 pot_atlas="$(grep '^atlas ' "$pot_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 read -r pot_w pot_h <<< "$pot_atlas"
@@ -112,8 +112,8 @@ fi
 # In compact mode, GPU optimization should not produce a worse max-side than space optimization.
 compact_gpu_layout="$tmp_dir/compact_gpu_layout.txt"
 compact_space_layout="$tmp_dir/compact_space_layout.txt"
-"$spritelayout_bin" "$pot_dir" --profile desktop > "$compact_gpu_layout"
-"$spritelayout_bin" "$pot_dir" --profile space > "$compact_space_layout"
+"$spratlayout_bin" "$pot_dir" --profile desktop > "$compact_gpu_layout"
+"$spratlayout_bin" "$pot_dir" --profile space > "$compact_space_layout"
 
 gpu_dims="$(grep '^atlas ' "$compact_gpu_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 space_dims="$(grep '^atlas ' "$compact_space_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
@@ -136,7 +136,7 @@ fi
 
 # Desktop profile (GPU-oriented) should not be worse than fast profile on max-side.
 compact_fast_layout="$tmp_dir/compact_fast_layout.txt"
-"$spritelayout_bin" "$pot_dir" --profile fast > "$compact_fast_layout"
+"$spratlayout_bin" "$pot_dir" --profile fast > "$compact_fast_layout"
 fast_dims="$(grep '^atlas ' "$compact_fast_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 read -r fast_w fast_h <<< "$fast_dims"
 fast_max_side="$fast_w"
@@ -151,7 +151,7 @@ fi
 
 # Respect explicit atlas limits in compact mode.
 bounded_layout="$tmp_dir/compact_bounded_layout.txt"
-"$spritelayout_bin" "$pot_dir" --profile desktop --max-height 4 > "$bounded_layout"
+"$spratlayout_bin" "$pot_dir" --profile desktop --max-height 4 > "$bounded_layout"
 bounded_dims="$(grep '^atlas ' "$bounded_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 read -r bounded_w bounded_h <<< "$bounded_dims"
 if [ "$bounded_h" -gt 4 ]; then
@@ -159,7 +159,7 @@ if [ "$bounded_h" -gt 4 ]; then
     exit 1
 fi
 
-"$spritepack_bin" < "$layout_file" > "$sheet_file"
+"$spratpack_bin" < "$layout_file" > "$sheet_file"
 
 if [ ! -s "$sheet_file" ]; then
     echo "Spritesheet output is empty" >&2
@@ -173,7 +173,7 @@ if [ "$signature" != "89504e470d0a1a0a" ]; then
 fi
 
 line_sheet="$tmp_dir/spritesheet_lines.png"
-"$spritepack_bin" --frame-lines --line-width 1 --line-color 255,0,0 < "$layout_file" > "$line_sheet"
+"$spratpack_bin" --frame-lines --line-width 1 --line-color 255,0,0 < "$layout_file" > "$line_sheet"
 line_signature="$(head -c 8 "$line_sheet" | od -An -t x1 | tr -d ' \n')"
 if [ "$line_signature" != "89504e470d0a1a0a" ]; then
     echo "Output with frame lines is not a PNG file" >&2
@@ -189,11 +189,11 @@ cat > "$tmp_dir/seed_layout.txt" <<EOF
 atlas 3,3
 sprite "$frames_dir/frame_a.png" 1,1 1,1
 EOF
-"$spritepack_bin" < "$tmp_dir/seed_layout.txt" > "$trim_source"
+"$spratpack_bin" < "$tmp_dir/seed_layout.txt" > "$trim_source"
 
 trim_layout="$tmp_dir/trim_layout.txt"
 trim_sheet="$tmp_dir/trim_sheet.png"
-"$spritelayout_bin" "$trim_dir" --profile desktop --trim-transparent > "$trim_layout"
+"$spratlayout_bin" "$trim_dir" --profile desktop --trim-transparent > "$trim_layout"
 
 if ! grep -q '^atlas 1,1$' "$trim_layout"; then
     echo "Trim mode did not reduce padded image atlas to 1x1" >&2
@@ -205,14 +205,14 @@ if ! grep -E -q '^sprite ".*frame_trim\.png" [0-9]+,[0-9]+ 1,1 1,1 1,1$' "$trim_
     exit 1
 fi
 
-"$spritepack_bin" < "$trim_layout" > "$trim_sheet"
+"$spratpack_bin" < "$trim_layout" > "$trim_sheet"
 trim_signature="$(head -c 8 "$trim_sheet" | od -An -t x1 | tr -d ' \n')"
 if [ "$trim_signature" != "89504e470d0a1a0a" ]; then
     echo "Trim mode output is not a PNG file" >&2
     exit 1
 fi
 
-# Verify explicit layout scale is emitted and spritepack honors scaled dimensions.
+# Verify explicit layout scale is emitted and spratpack honors scaled dimensions.
 scaled_dir="$tmp_dir/scaled_frames"
 mkdir -p "$scaled_dir"
 scaled_source="$scaled_dir/frame_large.png"
@@ -220,11 +220,11 @@ cat > "$tmp_dir/seed_large_layout.txt" <<EOF
 atlas 4,4
 sprite "$frames_dir/frame_a.png" 0,0 1,1
 EOF
-"$spritepack_bin" < "$tmp_dir/seed_large_layout.txt" > "$scaled_source"
+"$spratpack_bin" < "$tmp_dir/seed_large_layout.txt" > "$scaled_source"
 
 scaled_layout="$tmp_dir/scaled_layout.txt"
 scaled_sheet="$tmp_dir/scaled_sheet.png"
-"$spritelayout_bin" "$scaled_dir" --profile desktop --scale 0.5 > "$scaled_layout"
+"$spratlayout_bin" "$scaled_dir" --profile desktop --scale 0.5 > "$scaled_layout"
 
 if ! grep -Eq '^scale 0\.5[0-9]*$' "$scaled_layout"; then
     echo "Scaled layout did not emit expected scale line" >&2
@@ -236,7 +236,7 @@ if ! grep -q '^atlas 2,2$' "$scaled_layout"; then
     exit 1
 fi
 
-"$spritepack_bin" < "$scaled_layout" > "$scaled_sheet"
+"$spratpack_bin" < "$scaled_layout" > "$scaled_sheet"
 scaled_signature="$(head -c 8 "$scaled_sheet" | od -An -t x1 | tr -d ' \n')"
 if [ "$scaled_signature" != "89504e470d0a1a0a" ]; then
     echo "Scaled layout output is not a PNG file" >&2

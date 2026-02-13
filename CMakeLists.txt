@@ -66,8 +66,8 @@ ensure_stb_header(stb_image_write.h)
 include_directories(${STB_DIR})
 
 # Binaries
-add_executable(spritelayout spritelayout.cpp)
-add_executable(spritepack spritepack.cpp)
+add_executable(spratlayout spratlayout.cpp)
+add_executable(spratpack spratpack.cpp)
 add_executable(spratconvert spratconvert.cpp)
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 

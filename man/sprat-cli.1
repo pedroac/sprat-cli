@@ -2,7 +2,7 @@
 .SH NAME
 sprat-cli \- sprite atlas layout and packing pipeline
 .SH SYNOPSIS
-.B spritelayout
+.B spratlayout
 .I folder
 [\fB\-\-profile\fR desktop|mobile|legacy|space|fast|css]
 [\fB\-\-max\-width\fR \fIN\fR]
@@ -11,7 +11,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
 .PP
-.B spritepack
+.B spratpack
 [\fB\-\-frame\-lines\fR]
 [\fB\-\-line\-width\fR \fIN\fR]
 [\fB\-\-line\-color\fR \fIR,G,B[,A]\fR]
@@ -22,15 +22,15 @@ sprat-cli \- sprite atlas layout and packing pipeline
 .SH DESCRIPTION
 \fBsprat\-cli\fR is a UNIX pipeline for generating sprite sheets and transforming layout metadata.
 .PP
-\fBspritelayout\fR scans an image folder and writes a text layout to standard output.
+\fBspratlayout\fR scans an image folder and writes a text layout to standard output.
 .PP
-\fBspritepack\fR reads the layout from standard input and writes a PNG atlas to standard output.
+\fBspratpack\fR reads the layout from standard input and writes a PNG atlas to standard output.
 .PP
 \fBspratconvert\fR reads the same layout format from standard input and transforms it into text formats (for example JSON, CSV, XML, CSS) using template-driven transforms.
 .PP
 Normal output is written to stdout. Errors are written to stderr.
 .SH COMMANDS
-.SS spritelayout
+.SS spratlayout
 Reads image metadata from files in \fIfolder\fR and prints layout lines:
 .PP
 atlas \fIwidth,height\fR
@@ -40,7 +40,7 @@ scale \fIfactor\fR
 sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR]
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
-.SS spritepack
+.SS spratpack
 Reads layout text from stdin and writes a PNG stream to stdout.
 .PP
 Layout accepts:
@@ -55,7 +55,7 @@ Reads layout text from stdin and writes transformed text to stdout.
 .PP
 Transforms can be selected by name from \fBtransforms/\fR (for example \fBjson\fR, \fBcsv\fR, \fBxml\fR, \fBcss\fR) or by path to a custom \fB.transform\fR file.
 .SH OPTIONS
-.SS spritelayout
+.SS spratlayout
 .TP
 \fB\-\-profile\fR desktop|mobile|legacy|space|fast|css
 Packing profile. Default: \fBdesktop\fR.
@@ -88,7 +88,7 @@ Profile defaults:
 \fBfast\fR: shelf packing, GPU-oriented selection.
 .IP "\(bu" 2
 \fBcss\fR: shelf packing, area-oriented selection.
-.SS spritepack
+.SS spratpack
 .TP
 \fB\-\-frame\-lines\fR
 Draw rectangle outlines for each sprite.
@@ -108,10 +108,10 @@ Print available transforms and exit.
 .SH EXAMPLES
 .TP
 Generate layout text:
-.B spritelayout ./frames > layout.txt
+.B spratlayout ./frames > layout.txt
 .TP
 Pack PNG from layout:
-.B spritepack < layout.txt > spritesheet.png
+.B spratpack < layout.txt > spritesheet.png
 .TP
 Transform layout to JSON:
 .B spratconvert --transform json < layout.txt > layout.json
@@ -120,10 +120,10 @@ Transform layout with custom template:
 .B spratconvert --transform ./my.transform < layout.txt > layout.custom.txt
 .TP
 Run as one pipeline:
-.B spritelayout ./frames --trim-transparent --padding 2 | spritepack > spritesheet.png
+.B spratlayout ./frames --trim-transparent --padding 2 | spratpack > spritesheet.png
 .TP
 Debug frame bounds:
-.B spritepack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet_lines.png
+.B spratpack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet_lines.png
 .SH EXIT STATUS
 All commands return:
 .TP
@@ -133,4 +133,4 @@ Success.
 \fB1\fR
 Invalid arguments, invalid input data, image decode/encode failure, or packing failure.
 .SH SEE ALSO
-\fBspritelayout\fR(1), \fBspritepack\fR(1), \fBspratconvert\fR(1)
+\fBspratlayout\fR(1), \fBspratpack\fR(1), \fBspratconvert\fR(1)
