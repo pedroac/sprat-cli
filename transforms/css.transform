@@ -2,6 +2,7 @@
 name=css
 description=CSS classes for web sprite rendering
 extension=.css
+[/meta]
 
 [header]
 :root {
@@ -14,16 +15,22 @@ extension=.css
   background-repeat: no-repeat;
   display: inline-block;
 }
+[/header]
 
 [sprites]
+  [sprite]
 .sprite-{{index}} {
   background-position: -{{x}}px -{{y}}px;
   width: {{w}}px;
   height: {{h}}px;
   /* source: {{path_css}} */
+  /* name: {{name_css}} */
 }
+  [/sprite]
+[/sprites]
 
 [separator]
+[/separator]
 
 [footer]
-
+[/footer]

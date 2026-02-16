@@ -2,16 +2,45 @@
 name=xml
 description=XML layout format for engine import pipelines
 extension=.xml
+[/meta]
 
 [header]
 <?xml version="1.0" encoding="UTF-8"?>
 <atlas width="{{atlas_width}}" height="{{atlas_height}}" scale="{{scale}}">
+  <sprites>
+[/header]
 
 [sprites]
-  <sprite index="{{index}}" path="{{path_xml}}" x="{{x}}" y="{{y}}" w="{{w}}" h="{{h}}" src_x="{{src_x}}" src_y="{{src_y}}" trim_right="{{trim_right}}" trim_bottom="{{trim_bottom}}" has_trim="{{has_trim}}" />
+  [sprite]
+    <sprite index="{{index}}" name="{{name_xml}}" path="{{path_xml}}" x="{{x}}" y="{{y}}" w="{{w}}" h="{{h}}" src_x="{{src_x}}" src_y="{{src_y}}" trim_right="{{trim_right}}" trim_bottom="{{trim_bottom}}" has_trim="{{has_trim}}" marker_count="{{sprite_markers_count}}" markers_json="{{sprite_markers_xml}}" />
+  [/sprite]
+[/sprites]
 
 [separator]
+[/separator]
+
+[if_animations]
+  </sprites>
+  <animations>
+[/if_animations]
+
+[animations]
+  [animation]
+    <animation index="{{animation_index}}" name="{{animation_name_xml}}" sprite_indexes="{{animation_sprite_indexes}}" sprite_indexes_json="{{animation_sprite_indexes_xml}}" />
+  [/animation]
+[/animations]
+
+[animations_separator]
+[/animations_separator]
+
+[animations_footer]
+  </animations>
+[/animations_footer]
+
+[if_no_animations]
+  </sprites>
+[/if_no_animations]
 
 [footer]
-
 </atlas>
+[/footer]
