@@ -2,14 +2,55 @@
 name=csv
 description=CSV rows for spreadsheets and data tools
 extension=.csv
+[/meta]
 
 [header]
-index,path,x,y,w,h,src_x,src_y,trim_right,trim_bottom,has_trim
+index,name,path,x,y,w,h,src_x,src_y,trim_right,trim_bottom,has_trim,marker_count,markers_json
+
+[/header]
 
 [sprites]
-{{index}},{{path_csv}},{{x}},{{y}},{{w}},{{h}},{{src_x}},{{src_y}},{{trim_right}},{{trim_bottom}},{{has_trim}}
+  [sprite]
+{{index}},{{name_csv}},{{path_csv}},{{x}},{{y}},{{w}},{{h}},{{src_x}},{{src_y}},{{trim_right}},{{trim_bottom}},{{has_trim}},{{sprite_markers_count}},{{sprite_markers_csv}}
+
+  [/sprite]
+
+[/sprites]
 
 [separator]
+[/separator]
+
+[if_markers]
+[/if_markers]
+
+# markers
+
+[markers]
+  [marker]
+marker,{{marker_index}},{{marker_name_csv}},{{marker_sprite_index}},{{marker_sprite_name_csv}},{{marker_sprite_path_csv}}
+
+  [/marker]
+
+[/markers]
+
+[markers_separator]
+[/markers_separator]
+
+[if_animations]
+[/if_animations]
+
+# animations
+
+[animations]
+  [animation]
+animation,{{animation_index}},{{animation_name_csv}},{{animation_sprite_indexes_csv}}
+
+  [/animation]
+
+[/animations]
+
+[animations_separator]
+[/animations_separator]
 
 [footer]
-
+[/footer]

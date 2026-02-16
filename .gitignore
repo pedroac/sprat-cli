@@ -52,6 +52,7 @@ stb/*
 layout.*
 spritesheet.*
 frames
+export
 spratlayout
 spratpack
 spratconvert

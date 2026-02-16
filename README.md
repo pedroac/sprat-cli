@@ -233,6 +233,12 @@ Use a built-in transform:
 ./spratconvert --transform css < layout.txt > layout.css
 ```
 
+Optional extra data files:
+
+```sh
+./spratconvert --transform json --markers markers.json --animations animations.json < layout.txt > layout.json
+```
+
 Built-in transform files live in `transforms/`:
 
 - `transforms/json.transform`
@@ -242,37 +248,67 @@ Built-in transform files live in `transforms/`:
 
 Each transform is section-based:
 
+- Use explicit open/close tags for sections, for example `[meta]` ... `[/meta]`.
 - `[meta]` for metadata like `name`, `description`, `extension`
 - `[header]` printed once before sprites
-- `[sprites]` loop template repeated for each sprite (required)
+- `[if_markers]` / `[if_no_markers]` conditional blocks based on marker items
+- `[markers_header]`, `[markers]`, `[marker]`, `[markers_separator]`, `[markers_footer]` marker loop sections
+- `[sprites]` container with `[sprite]` item template repeated for each sprite (required)
 - `[separator]` inserted between sprite entries
+- `[if_animations]` / `[if_no_animations]` conditional blocks based on animation items
+- `[animations_header]`, `[animations]`, `[animation]`, `[animations_separator]`, `[animations_footer]` animation loop sections
 - `[footer]` printed once after sprites
 
 Common placeholders:
 
 - `{{atlas_width}}`, `{{atlas_height}}`, `{{scale}}`, `{{sprite_count}}`
-- `{{index}}`, `{{path}}`, `{{x}}`, `{{y}}`, `{{w}}`, `{{h}}`
+- `{{index}}`, `{{name}}`, `{{path}}`, `{{x}}`, `{{y}}`, `{{w}}`, `{{h}}`
 - `{{src_x}}`, `{{src_y}}`, `{{trim_right}}`, `{{trim_bottom}}`, `{{has_trim}}`
-- Escaped path variants: `{{path_json}}`, `{{path_csv}}`, `{{path_xml}}`, `{{path_css}}`
+- Escaped sprite fields: `{{name_json}}`, `{{name_csv}}`, `{{name_xml}}`, `{{name_css}}`, `{{path_json}}`, `{{path_csv}}`, `{{path_xml}}`, `{{path_css}}`
+- Per-sprite markers: `{{sprite_markers_count}}`, `{{sprite_markers_json}}`, `{{sprite_markers_csv}}`, `{{sprite_markers_xml}}`, `{{sprite_markers_css}}`
+- Marker loop placeholders:
+  - `{{marker_index}}`, `{{marker_name}}`
+  - `{{marker_sprite_index}}`, `{{marker_sprite_name}}`, `{{marker_sprite_path}}`
+- Animation loop placeholders:
+  - `{{animation_index}}`, `{{animation_name}}`
+  - `{{animation_sprite_count}}`, `{{animation_sprite_indexes}}`, `{{animation_sprite_indexes_json}}`, `{{animation_sprite_indexes_csv}}`
+- Extra file placeholders:
+  - `{{has_markers}}`, `{{has_animations}}`, `{{marker_count}}`, `{{animation_count}}`
+  - `{{markers_path}}`, `{{animations_path}}`
+  - `{{markers_raw}}`, `{{animations_raw}}`
+  - `{{markers_json}}`, `{{markers_csv}}`, `{{markers_xml}}`, `{{markers_css}}`
+  - `{{animations_json}}`, `{{animations_csv}}`, `{{animations_xml}}`, `{{animations_css}}`
+
+Sprite names default to the source file basename without extension (for example `./frames/run_01.png` becomes `run_01`).
+
+`--markers` expects JSON with sprite associations (for example `{"sprites":{"./frames/a.png":{"markers":[{"name":"hit"}]}}}`).
+`--animations` expects JSON timelines (for example `{"timelines":[{"name":"run","frames":["./frames/a.png","b"]}]}`), and frame entries are resolved to sprite indexes by path or sprite name.
 
 Custom transform example:
 
 ```ini
 [meta]
 name=compact-log
+[/meta]
 
 [header]
 atlas={{atlas_width}}x{{atlas_height}} sprites={{sprite_count}}
+[/header]
 
 [sprites]
+  [sprite]
 {{index}} {{path}} @ {{x}},{{y}} {{w}}x{{h}}
+  [/sprite]
+[/sprites]
 
 [separator]
 ;
+[/separator]
 
 [footer]
 
 done
+[/footer]
 ```
 
 Run custom transform:
