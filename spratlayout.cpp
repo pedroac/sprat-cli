@@ -28,6 +28,18 @@
 
 namespace fs = std::filesystem;
 
+std::string trim_copy(const std::string& s) {
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+        --end;
+    }
+    return s.substr(start, end - start);
+}
+
 enum class Mode { POT, COMPACT, FAST };
 enum class OptimizeTarget { GPU, SPACE };
 enum class Profile { DESKTOP, MOBILE, LEGACY, SPACE, FAST, CSS };
@@ -312,6 +324,7 @@ std::string build_layout_signature(Profile profile,
                                    int padding,
                                    double scale,
                                    bool trim_transparent,
+                                   bool preserve_source_order,
                                    const std::vector<ImageSource>& sources) {
     std::vector<std::string> parts;
     parts.reserve(sources.size());
@@ -320,7 +333,9 @@ std::string build_layout_signature(Profile profile,
         line << source.path << "|" << source.meta.file_size << "|" << source.meta.mtime_ticks;
         parts.push_back(line.str());
     }
-    std::sort(parts.begin(), parts.end());
+    if (!preserve_source_order) {
+        std::sort(parts.begin(), parts.end());
+    }
 
     std::ostringstream sig;
     sig << static_cast<int>(profile) << "|"
@@ -330,7 +345,8 @@ std::string build_layout_signature(Profile profile,
         << max_height_limit << "|"
         << padding << "|"
         << std::setprecision(17) << scale << "|"
-        << (trim_transparent ? 1 : 0);
+        << (trim_transparent ? 1 : 0) << "|"
+        << (preserve_source_order ? 1 : 0);
     for (const std::string& part : parts) {
         sig << "\n" << part;
     }
@@ -997,8 +1013,10 @@ int main(int argc, char** argv) {
             break;
     }
 
-    if (!fs::exists(folder) || !fs::is_directory(folder)) {
-        std::cerr << "Error: invalid directory\n";
+    const bool is_dir = fs::exists(folder) && fs::is_directory(folder);
+    const bool is_file = fs::exists(folder) && fs::is_regular_file(folder);
+    if (!is_dir && !is_file) {
+        std::cerr << "Error: invalid directory or list file\n";
         return 1;
     }
 
@@ -1008,28 +1026,75 @@ int main(int argc, char** argv) {
     const long long now_unix = now_unix_seconds();
 
     std::vector<ImageSource> sources;
-    for (const auto& entry : fs::directory_iterator(folder)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const fs::path file_path = entry.path();
-        if (!is_supported_image_extension(file_path)) {
-            continue;
+    auto add_source = [&](const fs::path& image_path, bool strict) -> bool {
+        if (!is_supported_image_extension(image_path)) {
+            if (strict) {
+                std::cerr << "Invalid extension in list input: " << image_path << "\n";
+                return false;
+            }
+            return true;
         }
         ImageMeta meta;
-        if (!read_image_meta(file_path, meta)) {
-            continue;
+        if (!read_image_meta(image_path, meta)) {
+            if (strict) {
+                std::cerr << "Failed to stat image: " << image_path << "\n";
+                return false;
+            }
+            return true;
         }
         ImageSource source;
-        source.file_path = file_path;
-        source.path = file_path.string();
+        source.file_path = image_path;
+        source.path = image_path.string();
         source.meta = meta;
         sources.push_back(std::move(source));
+        return true;
+    };
+
+    if (is_dir) {
+        for (const auto& entry : fs::directory_iterator(folder)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            if (!add_source(entry.path(), false)) {
+                continue;
+            }
+        }
+    } else {
+        std::ifstream list_file(folder);
+        if (!list_file) {
+            std::cerr << "Failed to open list file: " << folder << "\n";
+            return 1;
+        }
+        std::string line;
+        size_t line_number = 0;
+        while (std::getline(list_file, line)) {
+            ++line_number;
+            std::string trimmed = trim_copy(line);
+            if (trimmed.empty() || trimmed.front() == '#') {
+                continue;
+            }
+            fs::path entry_path(trimmed);
+            if (entry_path.is_relative()) {
+                entry_path = folder.parent_path() / entry_path;
+            }
+            if (!fs::exists(entry_path) || !fs::is_regular_file(entry_path)) {
+                std::cerr << "Invalid image path at line " << line_number << ": " << trimmed << "\n";
+                return 1;
+            }
+            if (!add_source(entry_path, true)) {
+                return 1;
+            }
+        }
+    }
+
+    if (sources.empty()) {
+        std::cerr << "Error: no valid images found\n";
+        return 1;
     }
 
     const std::string layout_signature = build_layout_signature(
         profile, mode, optimize_target, max_width_limit, max_height_limit,
-        padding, scale, trim_transparent, sources);
+        padding, scale, trim_transparent, is_file, sources);
     if (!is_file_older_than_seconds(output_cache_path, k_cache_max_age_seconds)) {
         std::string cached_output;
         if (load_output_cache(output_cache_path, layout_signature, cached_output)) {

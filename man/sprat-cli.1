@@ -43,6 +43,8 @@ sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR]
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
+If \fIfolder\fR is actually a text file, it is treated as a newline-delimited list of image paths (comments starting with \fB#\fR and blank lines are ignored). Relative paths are resolved relative to the list file, and each path must point to an existing image or the command fails.
+.PP
 Performance cache:
 .IP "\(bu" 2
 Metadata and output caches are stored in the system temp directory.

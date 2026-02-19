@@ -101,11 +101,13 @@ then runs `spratpack` and verifies the output is a valid PNG.
 
 ## Workflow
 
-`spratlayout` scans a folder of input images and prints a text layout to stdout:
+`spratlayout` scans a folder of input images (or a plaintext list of image paths) and prints a text layout to stdout:
 
 ```sh
 ./spratlayout ./frames > layout.txt
 ```
+
+If the first argument is a file, `spratlayout` treats it as a newline-separated list of image paths. Blank lines and lines beginning with `#` are ignored. Relative paths are resolved relative to the list file, each path must exist, be a regular image file (`.png`, `.jpg`, `.bmp`, etc.), and they are loaded in the order listed; otherwise the command fails.
 
 Profile differences (concise):
 
