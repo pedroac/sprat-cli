@@ -75,6 +75,7 @@ struct AnimationItem {
     size_t index = 0;
     std::string name;
     std::vector<int> sprite_indexes;
+    int fps = 8;
 };
 
 std::string trim_copy(const std::string& s) {
@@ -1094,8 +1095,10 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
 
 std::vector<AnimationItem> parse_animations_data(const std::string& animations_text,
                                                  const std::unordered_map<std::string, int>& by_path,
-                                                 const std::unordered_map<std::string, int>& by_name) {
+                                                 const std::unordered_map<std::string, int>& by_name,
+                                                 int& animation_fps_out) {
     std::vector<AnimationItem> animations;
+    animation_fps_out = -1;
     const std::string trimmed = trim_copy(animations_text);
     if (trimmed.empty()) {
         return animations;
@@ -1106,6 +1109,10 @@ std::vector<AnimationItem> parse_animations_data(const std::string& animations_t
         std::vector<std::pair<std::string, std::string>> root_entries;
         if (!parse_json_object_entries(trimmed, root_entries)) {
             return animations;
+        }
+        std::string fps_token;
+        if (json_entry_value(root_entries, "fps", fps_token)) {
+            parse_json_int_literal(fps_token, animation_fps_out);
         }
         if (!json_entry_value(root_entries, "timelines", timelines_array)) {
             if (!json_entry_value(root_entries, "animations", timelines_array)) {
@@ -1132,6 +1139,15 @@ std::vector<AnimationItem> parse_animations_data(const std::string& animations_t
             if (parse_json_string_literal(name_value, decoded_name) && !decoded_name.empty()) {
                 name = decoded_name;
             }
+        }
+
+        int fps = animation_fps_out;
+        std::string fps_token;
+        if (json_entry_value(timeline_entries, "fps", fps_token)) {
+            parse_json_int_literal(fps_token, fps);
+        }
+        if (fps <= 0) {
+            fps = 8;
         }
 
         std::vector<int> indexes;
@@ -1171,6 +1187,7 @@ std::vector<AnimationItem> parse_animations_data(const std::string& animations_t
         item.index = animations.size();
         item.name = name;
         item.sprite_indexes = std::move(indexes);
+        item.fps = fps;
         animations.push_back(std::move(item));
     }
 
@@ -1517,8 +1534,9 @@ int main(int argc, char** argv) {
     std::vector<std::vector<MarkerItem>> sprite_markers;
     const std::vector<MarkerItem> marker_items =
         parse_markers_data(markers_text, layout, sprite_index_by_path, sprite_index_by_name, sprite_names, sprite_markers);
+    int animation_fps = -1;
     const std::vector<AnimationItem> animation_items =
-        parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name);
+        parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name, animation_fps);
     const int sprite_count_limit = static_cast<int>(layout.sprites.size());
     std::vector<AnimationItem> normalized_animation_items = animation_items;
     for (AnimationItem& item : normalized_animation_items) {
@@ -1539,6 +1557,8 @@ int main(int argc, char** argv) {
     global_vars["sprite_count"] = std::to_string(layout.sprites.size());
     global_vars["marker_count"] = std::to_string(marker_items.size());
     global_vars["animation_count"] = std::to_string(normalized_animation_items.size());
+    global_vars["fps"] = std::to_string(animation_fps > 0 ? animation_fps : 8);
+    global_vars["animation_fps"] = global_vars["fps"];
     global_vars["markers_path"] = markers_path_arg;
     global_vars["animations_path"] = animations_path_arg;
     global_vars["has_markers"] = marker_items.empty() ? "false" : "true";
@@ -1679,6 +1699,8 @@ int main(int argc, char** argv) {
                 vars["animation_sprite_indexes"] = join_ints_csv(animation.sprite_indexes, ",");
                 vars["animation_sprite_indexes_xml"] = escape_xml(vars["animation_sprite_indexes_json"]);
                 vars["animation_sprite_indexes_css"] = escape_css_string(vars["animation_sprite_indexes_json"]);
+                vars["fps"] = std::to_string(animation.fps);
+                vars["animation_fps"] = vars["fps"];
                 std::cout << replace_tokens(transform.animations, vars);
             }
         }

@@ -245,11 +245,13 @@ if grep -q '^A_ON$' "$tmp_dir/out.iter.empty"; then
 fi
 
 "$convert_bin" --transform json --markers "$markers_file" --animations "$animations_file" < "$layout_file" > "$tmp_dir/out.builtin.json"
+python3 -m json.tool "$tmp_dir/out.builtin.json" > /dev/null
 grep -q '"animations": \[' "$tmp_dir/out.builtin.json"
 grep -q '"sprites": \[' "$tmp_dir/out.builtin.json"
 grep -q '"name": "a"' "$tmp_dir/out.builtin.json"
 grep -q '"markers": \[{"name":"hit","type":"point","x":3,"y":5},{"name":"hurt","type":"circle","x":6,"y":7,"radius":4}\]' "$tmp_dir/out.builtin.json"
 grep -q '"name": "run"' "$tmp_dir/out.builtin.json"
+grep -q '"fps": 8' "$tmp_dir/out.builtin.json"
 grep -q '"sprite_indexes": \[0,1\]' "$tmp_dir/out.builtin.json"
 if grep -q '"index":' "$tmp_dir/out.builtin.json"; then
   echo "builtin json transform should not include index fields in sprite/animation objects" >&2

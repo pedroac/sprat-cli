@@ -26,7 +26,7 @@ extension=.xml
 
 [animations]
   [animation]
-    <animation index="{{animation_index}}" name="{{animation_name_xml}}" sprite_indexes="{{animation_sprite_indexes}}" sprite_indexes_json="{{animation_sprite_indexes_xml}}" />
+    <animation index="{{animation_index}}" name="{{animation_name_xml}}" fps="{{fps}}" sprite_indexes="{{animation_sprite_indexes}}" sprite_indexes_json="{{animation_sprite_indexes_xml}}" />
   [/animation]
 [/animations]
 

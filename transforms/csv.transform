@@ -43,7 +43,7 @@ marker,{{marker_index}},{{marker_name_csv}},{{marker_type_csv}},{{marker_x}},{{m
 
 [animations]
   [animation]
-animation,{{animation_index}},{{animation_name_csv}},{{animation_sprite_indexes_csv}}
+animation,{{animation_index}},{{animation_name_csv}},{{fps}},{{animation_sprite_indexes_csv}}
 
   [/animation]
 

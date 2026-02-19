@@ -28,7 +28,7 @@ extension=.json
 
 [animations]
   [animation]
-    {"name": "{{animation_name_json}}", "sprite_indexes": {{animation_sprite_indexes_json}}}
+    {"name": "{{animation_name_json}}", "fps": {{fps}}, "sprite_indexes": {{animation_sprite_indexes_json}}}
   [/animation]
 [/animations]
 
