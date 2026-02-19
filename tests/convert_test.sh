@@ -31,12 +31,12 @@ grep -q '"atlas": {"width": 64, "height": 32}' "$tmp_dir/out.json"
 grep -q '"path": "./frames/b.png"' "$tmp_dir/out.json"
 
 "$convert_bin" --transform csv < "$layout_file" > "$tmp_dir/out.csv"
-grep -q '^index,name,path,x,y,w,h,src_x,src_y,trim_right,trim_bottom,has_trim,marker_count,markers_json$' "$tmp_dir/out.csv"
-grep -q '^1,b,./frames/b.png,16,0,8,8,1,2,3,4,true,0,\[\]$' "$tmp_dir/out.csv"
+grep -q '^index,name,path,x,y,w,h,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json$' "$tmp_dir/out.csv"
+grep -q '^1,b,./frames/b.png,16,0,8,8,1,2,3,4,0,\[\]$' "$tmp_dir/out.csv"
 
 "$convert_bin" --transform xml < "$layout_file" > "$tmp_dir/out.xml"
 grep -q '^<atlas width="64" height="32" scale="1">$' "$tmp_dir/out.xml"
-grep -q 'has_trim="true"' "$tmp_dir/out.xml"
+grep -q 'trim_left="1" trim_top="2" trim_right="3" trim_bottom="4"' "$tmp_dir/out.xml"
 
 "$convert_bin" --transform css < "$layout_file" > "$tmp_dir/out.css"
 grep -Fq '.sprite-1 {' "$tmp_dir/out.css"
@@ -76,8 +76,8 @@ markers_file="$tmp_dir/markers.json"
 cat > "$markers_file" <<'MARKERS'
 {
   "sprites": {
-    "./frames/a.png": {"markers": [{"name": "hit"}, {"name": "hurt"}]},
-    "b": {"markers": ["foot"]}
+    "./frames/a.png": {"markers": [{"name": "hit", "type": "point", "x": 3, "y": 5}, {"name": "hurt", "type": "circle", "x": 6, "y": 7, "radius": 4}]},
+    "b": {"markers": [{"name": "foot", "type": "rectangle", "x": 1, "y": 2, "w": 3, "h": 4}]}
   }
 }
 MARKERS
@@ -120,8 +120,8 @@ grep -q "^markers_path=$markers_file$" "$tmp_dir/out.extras"
 grep -q "^animations_path=$animations_file$" "$tmp_dir/out.extras"
 grep -q '^marker_count=3$' "$tmp_dir/out.extras"
 grep -q '^animation_count=2$' "$tmp_dir/out.extras"
-grep -Fq '0|a|./frames/a.png|2|["hit","hurt"]' "$tmp_dir/out.extras"
-grep -Fq '1|b|./frames/b.png|1|["foot"]' "$tmp_dir/out.extras"
+grep -Fq '0|a|./frames/a.png|2|[{"name":"hit","type":"point","x":3,"y":5},{"name":"hurt","type":"circle","x":6,"y":7,"radius":4}]' "$tmp_dir/out.extras"
+grep -Fq '1|b|./frames/b.png|1|[{"name":"foot","type":"rectangle","x":1,"y":2,"w":3,"h":4}]' "$tmp_dir/out.extras"
 
 iter_transform="$tmp_dir/iter.transform"
 cat > "$iter_transform" <<'ITER'
@@ -248,9 +248,13 @@ fi
 grep -q '"animations": \[' "$tmp_dir/out.builtin.json"
 grep -q '"sprites": \[' "$tmp_dir/out.builtin.json"
 grep -q '"name": "a"' "$tmp_dir/out.builtin.json"
-grep -q '"markers": \["hit","hurt"\]' "$tmp_dir/out.builtin.json"
+grep -q '"markers": \[{"name":"hit","type":"point","x":3,"y":5},{"name":"hurt","type":"circle","x":6,"y":7,"radius":4}\]' "$tmp_dir/out.builtin.json"
 grep -q '"name": "run"' "$tmp_dir/out.builtin.json"
 grep -q '"sprite_indexes": \[0,1\]' "$tmp_dir/out.builtin.json"
+if grep -q '"index":' "$tmp_dir/out.builtin.json"; then
+  echo "builtin json transform should not include index fields in sprite/animation objects" >&2
+  exit 1
+fi
 sprites_line="$(grep -n '"sprites": \[' "$tmp_dir/out.builtin.json" | head -n1 | cut -d: -f1)"
 animations_line="$(grep -n '"animations": \[' "$tmp_dir/out.builtin.json" | head -n1 | cut -d: -f1)"
 if [ "$animations_line" -le "$sprites_line" ]; then

@@ -111,7 +111,7 @@ If the first argument is a file, `spratlayout` treats it as a newline-separated 
 
 Profile differences (concise):
 
-- `desktop`: MaxRects + GPU-oriented selection (good default).
+- `desktop`: MaxRects + GPU-oriented selection.
 - `mobile`: `desktop` behavior with default limits `2048x2048`.
 - `space`: MaxRects + tighter area preference.
 - `fast`: shelf-style packing + GPU-oriented selection (faster runtime).
@@ -120,8 +120,9 @@ Profile differences (concise):
 
 `spratlayout` options:
 
-- `--profile desktop|mobile|legacy|space|fast|css` (default: `desktop`)
+- `--profile desktop|mobile|legacy|space|fast|css` (default: `fast`)
 - `--padding N` (default: `0`)
+- `--max-combinations N` (default: `0` = auto/unlimited; caps compact candidate trials)
 - `--scale F` (default: `1`, for example `0.5` for half-size output)
 - `--trim-transparent` (auto-crop transparent borders)
 - `--max-width N` / `--max-height N` (optional atlas limits)
@@ -144,8 +145,8 @@ Why these options help:
 Example recipes:
 
 ```sh
-# 1) desktop (default): GPU-oriented packing
-./spratlayout ./frames --profile desktop > layout_desktop.txt
+# 1) fast (default): quicker shelf-style packing
+./spratlayout ./frames > layout_fast_default.txt
 
 # 2) mobile: desktop behavior + default 2048x2048 atlas limits
 ./spratlayout ./frames --profile mobile > layout_mobile.txt
@@ -189,6 +190,12 @@ Rendering recipes with frame lines:
 # End-to-end pipeline: layout + frame lines
 ./spratlayout ./frames --profile desktop --trim-transparent --padding 2 | \
   ./spratpack --frame-lines --line-width 2 --line-color 0,255,0 > spritesheet_pipeline_lines.png
+```
+
+Trim benchmark (repeatable local comparison):
+
+```sh
+./scripts/benchmark-trim.sh ./build/spratlayout ./frames 5
 ```
 
 Scale recipe (smaller output for lower resolutions):
@@ -272,11 +279,13 @@ Common placeholders:
 
 - `{{atlas_width}}`, `{{atlas_height}}`, `{{scale}}`, `{{sprite_count}}`
 - `{{index}}`, `{{name}}`, `{{path}}`, `{{x}}`, `{{y}}`, `{{w}}`, `{{h}}`
-- `{{src_x}}`, `{{src_y}}`, `{{trim_right}}`, `{{trim_bottom}}`, `{{has_trim}}`
+- `{{src_x}}`, `{{src_y}}`, `{{trim_left}}`, `{{trim_top}}`, `{{trim_right}}`, `{{trim_bottom}}`
 - Escaped sprite fields: `{{name_json}}`, `{{name_csv}}`, `{{name_xml}}`, `{{name_css}}`, `{{path_json}}`, `{{path_csv}}`, `{{path_xml}}`, `{{path_css}}`
 - Per-sprite markers: `{{sprite_markers_count}}`, `{{sprite_markers_json}}`, `{{sprite_markers_csv}}`, `{{sprite_markers_xml}}`, `{{sprite_markers_css}}`
 - Marker loop placeholders:
-  - `{{marker_index}}`, `{{marker_name}}`
+  - `{{marker_index}}`, `{{marker_name}}`, `{{marker_type}}`
+  - `{{marker_x}}`, `{{marker_y}}`, `{{marker_radius}}`, `{{marker_w}}`, `{{marker_h}}`
+  - `{{marker_vertices}}`, `{{marker_vertices_json}}`, `{{marker_vertices_csv}}`, `{{marker_vertices_xml}}`, `{{marker_vertices_css}}`
   - `{{marker_sprite_index}}`, `{{marker_sprite_name}}`, `{{marker_sprite_path}}`
 - Animation loop placeholders:
   - `{{animation_index}}`, `{{animation_name}}`
@@ -290,7 +299,13 @@ Common placeholders:
 
 Sprite names default to the source file basename without extension (for example `./frames/run_01.png` becomes `run_01`).
 
-`--markers` expects JSON with sprite associations (for example `{"sprites":{"./frames/a.png":{"markers":[{"name":"hit"}]}}}`).
+`--markers` expects JSON with sprite associations. `markers` must be an array of objects with at least `name` and `type`.
+Supported marker types:
+- `point`: `x`, `y`
+- `circle`: `x`, `y`, `radius`
+- `rectangle`: `x`, `y`, `w`, `h`
+- `polygon`: `vertices` (ordered list of `{x,y}` objects)
+Example: `{"sprites":{"./frames/a.png":{"markers":[{"name":"hit","type":"point","x":3,"y":5}]}}}`.
 `--animations` expects JSON timelines (for example `{"timelines":[{"name":"run","frames":["./frames/a.png","b"]}]}`), and frame entries are resolved to sprite indexes by path or sprite name.
 
 Custom transform example:

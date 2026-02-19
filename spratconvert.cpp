@@ -24,7 +24,6 @@ struct Sprite {
     int src_y = 0;
     int trim_right = 0;
     int trim_bottom = 0;
-    bool has_trim = false;
 };
 
 struct Layout {
@@ -63,6 +62,13 @@ struct MarkerItem {
     std::string sprite_name;
     std::string sprite_path;
     std::string name;
+    std::string type;
+    int x = 0;
+    int y = 0;
+    int radius = 0;
+    int w = 0;
+    int h = 0;
+    std::vector<std::pair<int, int>> vertices;
 };
 
 struct AnimationItem {
@@ -222,7 +228,6 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
                 error = "invalid trim offset pair";
                 return false;
             }
-            parsed.has_trim = true;
         }
     } else {
         if (tokens.size() != 4 && tokens.size() != 6) {
@@ -242,7 +247,6 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
                 error = "legacy sprite line has invalid crop offsets";
                 return false;
             }
-            parsed.has_trim = true;
         }
     }
 
@@ -812,6 +816,61 @@ std::string strings_to_json_array(const std::vector<std::string>& values) {
     return oss.str();
 }
 
+std::string markers_to_json_array(const std::vector<MarkerItem>& markers) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < markers.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        const MarkerItem& marker = markers[i];
+        oss << "{\"name\":\"" << escape_json(marker.name) << "\",\"type\":\"" << escape_json(marker.type) << "\"";
+        if (marker.type == "point") {
+            oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y;
+        } else if (marker.type == "circle") {
+            oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y << ",\"radius\":" << marker.radius;
+        } else if (marker.type == "rectangle") {
+            oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y << ",\"w\":" << marker.w << ",\"h\":" << marker.h;
+        } else if (marker.type == "polygon") {
+            oss << ",\"vertices\":[";
+            for (size_t j = 0; j < marker.vertices.size(); ++j) {
+                if (j > 0) {
+                    oss << ",";
+                }
+                oss << "{\"x\":" << marker.vertices[j].first << ",\"y\":" << marker.vertices[j].second << "}";
+            }
+            oss << "]";
+        }
+        oss << "}";
+    }
+    oss << "]";
+    return oss.str();
+}
+
+std::string marker_vertices_to_json_array(const std::vector<std::pair<int, int>>& vertices) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < vertices.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        oss << "{\"x\":" << vertices[i].first << ",\"y\":" << vertices[i].second << "}";
+    }
+    oss << "]";
+    return oss.str();
+}
+
+std::string marker_vertices_to_string(const std::vector<std::pair<int, int>>& vertices) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < vertices.size(); ++i) {
+        if (i > 0) {
+            oss << "|";
+        }
+        oss << vertices[i].first << "," << vertices[i].second;
+    }
+    return oss.str();
+}
+
 std::string sprite_name_from_path(const std::string& path) {
     fs::path p(path);
     std::string name = p.stem().string();
@@ -864,7 +923,7 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
                                            const std::unordered_map<std::string, int>& by_path,
                                            const std::unordered_map<std::string, int>& by_name,
                                            const std::vector<std::string>& sprite_names,
-                                           std::vector<std::vector<std::string>>& sprite_markers) {
+                                           std::vector<std::vector<MarkerItem>>& sprite_markers) {
     sprite_markers.assign(layout.sprites.size(), {});
     std::vector<MarkerItem> markers;
     const std::string trimmed = trim_copy(markers_text);
@@ -923,39 +982,109 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
             continue;
         }
         for (const std::string& marker_value : marker_values) {
-            std::string marker_name;
             std::string marker_trimmed = trim_copy(marker_value);
             if (marker_trimmed.empty()) {
                 continue;
             }
-            if (marker_trimmed.front() == '"') {
-                if (!parse_json_string_literal(marker_trimmed, marker_name)) {
-                    continue;
-                }
-            } else {
-                std::vector<std::pair<std::string, std::string>> marker_obj_entries;
-                if (!parse_json_object_entries(marker_trimmed, marker_obj_entries)) {
-                    continue;
-                }
-                std::string marker_name_value;
-                if (!json_entry_value(marker_obj_entries, "name", marker_name_value)) {
-                    continue;
-                }
-                if (!parse_json_string_literal(marker_name_value, marker_name)) {
-                    continue;
-                }
-            }
-
-            if (marker_name.empty()) {
+            std::vector<std::pair<std::string, std::string>> marker_obj_entries;
+            if (!parse_json_object_entries(marker_trimmed, marker_obj_entries)) {
                 continue;
             }
-            sprite_markers[static_cast<size_t>(sprite_index)].push_back(marker_name);
+
             MarkerItem item;
             item.index = markers.size();
             item.sprite_index = sprite_index;
             item.sprite_name = sprite_names[static_cast<size_t>(sprite_index)];
             item.sprite_path = layout.sprites[static_cast<size_t>(sprite_index)].path;
-            item.name = marker_name;
+
+            std::string marker_name_value;
+            if (!json_entry_value(marker_obj_entries, "name", marker_name_value) ||
+                !parse_json_string_literal(marker_name_value, item.name) ||
+                item.name.empty()) {
+                continue;
+            }
+
+            std::string marker_type_value;
+            if (!json_entry_value(marker_obj_entries, "type", marker_type_value) ||
+                !parse_json_string_literal(marker_type_value, item.type)) {
+                continue;
+            }
+
+            if (item.type == "point") {
+                std::string x_token;
+                std::string y_token;
+                if (!json_entry_value(marker_obj_entries, "x", x_token) ||
+                    !json_entry_value(marker_obj_entries, "y", y_token) ||
+                    !parse_json_int_literal(x_token, item.x) ||
+                    !parse_json_int_literal(y_token, item.y)) {
+                    continue;
+                }
+            } else if (item.type == "circle") {
+                std::string x_token;
+                std::string y_token;
+                std::string radius_token;
+                if (!json_entry_value(marker_obj_entries, "x", x_token) ||
+                    !json_entry_value(marker_obj_entries, "y", y_token) ||
+                    !json_entry_value(marker_obj_entries, "radius", radius_token) ||
+                    !parse_json_int_literal(x_token, item.x) ||
+                    !parse_json_int_literal(y_token, item.y) ||
+                    !parse_json_int_literal(radius_token, item.radius)) {
+                    continue;
+                }
+            } else if (item.type == "rectangle") {
+                std::string x_token;
+                std::string y_token;
+                std::string w_token;
+                std::string h_token;
+                if (!json_entry_value(marker_obj_entries, "x", x_token) ||
+                    !json_entry_value(marker_obj_entries, "y", y_token) ||
+                    !json_entry_value(marker_obj_entries, "w", w_token) ||
+                    !json_entry_value(marker_obj_entries, "h", h_token) ||
+                    !parse_json_int_literal(x_token, item.x) ||
+                    !parse_json_int_literal(y_token, item.y) ||
+                    !parse_json_int_literal(w_token, item.w) ||
+                    !parse_json_int_literal(h_token, item.h)) {
+                    continue;
+                }
+            } else if (item.type == "polygon") {
+                std::string vertices_array;
+                if (!json_entry_value(marker_obj_entries, "vertices", vertices_array)) {
+                    json_entry_value(marker_obj_entries, "verticles", vertices_array);
+                }
+                if (vertices_array.empty()) {
+                    continue;
+                }
+                std::vector<std::string> vertex_values;
+                if (!parse_json_array_items(vertices_array, vertex_values) || vertex_values.empty()) {
+                    continue;
+                }
+                for (const std::string& vertex_value : vertex_values) {
+                    std::vector<std::pair<std::string, std::string>> vertex_entries;
+                    if (!parse_json_object_entries(trim_copy(vertex_value), vertex_entries)) {
+                        item.vertices.clear();
+                        break;
+                    }
+                    std::string x_token;
+                    std::string y_token;
+                    int vx = 0;
+                    int vy = 0;
+                    if (!json_entry_value(vertex_entries, "x", x_token) ||
+                        !json_entry_value(vertex_entries, "y", y_token) ||
+                        !parse_json_int_literal(x_token, vx) ||
+                        !parse_json_int_literal(y_token, vy)) {
+                        item.vertices.clear();
+                        break;
+                    }
+                    item.vertices.push_back({vx, vy});
+                }
+                if (item.vertices.empty()) {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            sprite_markers[static_cast<size_t>(sprite_index)].push_back(item);
             markers.push_back(std::move(item));
         }
     }
@@ -1385,7 +1514,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> sprite_names;
     collect_sprite_name_indexes(layout, sprite_index_by_path, sprite_index_by_name, sprite_names);
 
-    std::vector<std::vector<std::string>> sprite_markers;
+    std::vector<std::vector<MarkerItem>> sprite_markers;
     const std::vector<MarkerItem> marker_items =
         parse_markers_data(markers_text, layout, sprite_index_by_path, sprite_index_by_name, sprite_names, sprite_markers);
     const std::vector<AnimationItem> animation_items =
@@ -1449,6 +1578,21 @@ int main(int argc, char** argv) {
                 vars["marker_name_xml"] = escape_xml(marker.name);
                 vars["marker_name_csv"] = escape_csv(marker.name);
                 vars["marker_name_css"] = escape_css_string(marker.name);
+                vars["marker_type"] = marker.type;
+                vars["marker_type_json"] = escape_json(marker.type);
+                vars["marker_type_xml"] = escape_xml(marker.type);
+                vars["marker_type_csv"] = escape_csv(marker.type);
+                vars["marker_type_css"] = escape_css_string(marker.type);
+                vars["marker_x"] = std::to_string(marker.x);
+                vars["marker_y"] = std::to_string(marker.y);
+                vars["marker_radius"] = std::to_string(marker.radius);
+                vars["marker_w"] = std::to_string(marker.w);
+                vars["marker_h"] = std::to_string(marker.h);
+                vars["marker_vertices"] = marker_vertices_to_string(marker.vertices);
+                vars["marker_vertices_json"] = marker_vertices_to_json_array(marker.vertices);
+                vars["marker_vertices_xml"] = escape_xml(vars["marker_vertices_json"]);
+                vars["marker_vertices_csv"] = escape_csv(vars["marker_vertices_json"]);
+                vars["marker_vertices_css"] = escape_css_string(vars["marker_vertices_json"]);
                 vars["marker_sprite_index"] = std::to_string(marker.sprite_index);
                 vars["marker_sprite_name"] = marker.sprite_name;
                 vars["marker_sprite_path"] = marker.sprite_path;
@@ -1494,11 +1638,14 @@ int main(int argc, char** argv) {
         vars["h"] = std::to_string(s.h);
         vars["src_x"] = std::to_string(s.src_x);
         vars["src_y"] = std::to_string(s.src_y);
+        vars["trim_left"] = std::to_string(s.src_x);
+        vars["trim_top"] = std::to_string(s.src_y);
         vars["trim_right"] = std::to_string(s.trim_right);
         vars["trim_bottom"] = std::to_string(s.trim_bottom);
-        vars["has_trim"] = s.has_trim ? "true" : "false";
+        const bool has_trim = (s.src_x != 0) || (s.src_y != 0) || (s.trim_right != 0) || (s.trim_bottom != 0);
+        vars["has_trim"] = has_trim ? "true" : "false";
         vars["sprite_markers_count"] = std::to_string(sprite_markers[i].size());
-        vars["sprite_markers_json"] = strings_to_json_array(sprite_markers[i]);
+        vars["sprite_markers_json"] = markers_to_json_array(sprite_markers[i]);
         vars["sprite_markers_xml"] = escape_xml(vars["sprite_markers_json"]);
         vars["sprite_markers_csv"] = escape_csv(vars["sprite_markers_json"]);
         vars["sprite_markers_css"] = escape_css_string(vars["sprite_markers_json"]);

@@ -28,13 +28,13 @@ fast_layout_file="$tmp_dir/layout_fast.txt"
 css_layout_file="$tmp_dir/layout_css.txt"
 sheet_file="$tmp_dir/spritesheet.png"
 
-"$spratlayout_bin" "$frames_dir" --profile desktop --padding 1 > "$layout_file"
+"$spratlayout_bin" "$frames_dir" --profile fast --padding 1 > "$layout_file"
 "$spratlayout_bin" "$frames_dir" --padding 1 > "$default_layout_file"
 "$spratlayout_bin" "$frames_dir" --profile fast --padding 1 > "$fast_layout_file"
 "$spratlayout_bin" "$frames_dir" --profile css --padding 1 > "$css_layout_file"
 
 if ! cmp -s "$layout_file" "$default_layout_file"; then
-    echo "Default profile output differs from --profile desktop" >&2
+    echo "Default profile output differs from --profile fast" >&2
     exit 1
 fi
 
@@ -71,6 +71,15 @@ fi
 sprite_count="$(grep -c '^sprite "' "$layout_file" || true)"
 if [ "$sprite_count" -ne 2 ]; then
     echo "Expected 2 sprite lines, got $sprite_count" >&2
+    exit 1
+fi
+
+atlas_dims="$(grep '^atlas ' "$layout_file" | head -n1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
+read -r atlas_w atlas_h <<< "$atlas_dims"
+max_xw="$(awk '/^sprite "/ { split($3, p, ","); split($4, s, ","); v = p[1] + s[1]; if (v > m) m = v } END { print m + 0 }' "$layout_file")"
+max_yh="$(awk '/^sprite "/ { split($3, p, ","); split($4, s, ","); v = p[2] + s[2]; if (v > m) m = v } END { print m + 0 }' "$layout_file")"
+if [ "$max_xw" -ne "$atlas_w" ] || [ "$max_yh" -ne "$atlas_h" ]; then
+    echo "Atlas dimensions include trailing padding-only gap: atlas=${atlas_w}x${atlas_h} used=${max_xw}x${max_yh}" >&2
     exit 1
 fi
 
@@ -209,6 +218,31 @@ fi
 trim_signature="$(head -c 8 "$trim_sheet" | od -An -t x1 | tr -d ' \n')"
 if [ "$trim_signature" != "89504e470d0a1a0a" ]; then
     echo "Trim mode output is not a PNG file" >&2
+    exit 1
+fi
+
+# Regression: cache must not freeze padding changes across trim toggles.
+layout_trim_p2="$tmp_dir/layout_trim_p2.txt"
+layout_notrim_p2="$tmp_dir/layout_notrim_p2.txt"
+layout_notrim_p6="$tmp_dir/layout_notrim_p6.txt"
+layout_trim_p2_again="$tmp_dir/layout_trim_p2_again.txt"
+layout_trim_p6="$tmp_dir/layout_trim_p6.txt"
+"$spratlayout_bin" "$frames_dir" --profile desktop --trim-transparent --padding 2 > "$layout_trim_p2"
+"$spratlayout_bin" "$frames_dir" --profile desktop --padding 2 > "$layout_notrim_p2"
+"$spratlayout_bin" "$frames_dir" --profile desktop --padding 6 > "$layout_notrim_p6"
+"$spratlayout_bin" "$frames_dir" --profile desktop --trim-transparent --padding 2 > "$layout_trim_p2_again"
+"$spratlayout_bin" "$frames_dir" --profile desktop --trim-transparent --padding 6 > "$layout_trim_p6"
+
+atlas_notrim_p2="$(grep '^atlas ' "$layout_notrim_p2" | head -n1)"
+atlas_notrim_p6="$(grep '^atlas ' "$layout_notrim_p6" | head -n1)"
+atlas_trim_p2_again="$(grep '^atlas ' "$layout_trim_p2_again" | head -n1)"
+atlas_trim_p6="$(grep '^atlas ' "$layout_trim_p6" | head -n1)"
+if [ "$atlas_notrim_p2" = "$atlas_notrim_p6" ]; then
+    echo "Padding change had no effect after trim toggle in non-trim mode" >&2
+    exit 1
+fi
+if [ "$atlas_trim_p2_again" = "$atlas_trim_p6" ]; then
+    echo "Padding change had no effect after trim toggle in trim mode" >&2
     exit 1
 fi
 

@@ -5,13 +5,13 @@ extension=.csv
 [/meta]
 
 [header]
-index,name,path,x,y,w,h,src_x,src_y,trim_right,trim_bottom,has_trim,marker_count,markers_json
+index,name,path,x,y,w,h,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json
 
 [/header]
 
 [sprites]
   [sprite]
-{{index}},{{name_csv}},{{path_csv}},{{x}},{{y}},{{w}},{{h}},{{src_x}},{{src_y}},{{trim_right}},{{trim_bottom}},{{has_trim}},{{sprite_markers_count}},{{sprite_markers_csv}}
+{{index}},{{name_csv}},{{path_csv}},{{x}},{{y}},{{w}},{{h}},{{trim_left}},{{trim_top}},{{trim_right}},{{trim_bottom}},{{sprite_markers_count}},{{sprite_markers_csv}}
 
   [/sprite]
 
@@ -27,7 +27,7 @@ index,name,path,x,y,w,h,src_x,src_y,trim_right,trim_bottom,has_trim,marker_count
 
 [markers]
   [marker]
-marker,{{marker_index}},{{marker_name_csv}},{{marker_sprite_index}},{{marker_sprite_name_csv}},{{marker_sprite_path_csv}}
+marker,{{marker_index}},{{marker_name_csv}},{{marker_type_csv}},{{marker_x}},{{marker_y}},{{marker_radius}},{{marker_w}},{{marker_h}},{{marker_vertices_csv}},{{marker_sprite_index}},{{marker_sprite_name_csv}},{{marker_sprite_path_csv}}
 
   [/marker]
 
