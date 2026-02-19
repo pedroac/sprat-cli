@@ -30,11 +30,17 @@ sheet_file="$tmp_dir/spritesheet.png"
 
 "$spratlayout_bin" "$frames_dir" --profile fast --padding 1 > "$layout_file"
 "$spratlayout_bin" "$frames_dir" --padding 1 > "$default_layout_file"
+"$spratlayout_bin" "$frames_dir" --profiles-config "$tmp_dir/missing.cfg" --padding 1 > "$default_layout_file.with_missing_cfg"
 "$spratlayout_bin" "$frames_dir" --profile fast --padding 1 > "$fast_layout_file"
 "$spratlayout_bin" "$frames_dir" --profile css --padding 1 > "$css_layout_file"
 
 if ! cmp -s "$layout_file" "$default_layout_file"; then
     echo "Default profile output differs from --profile fast" >&2
+    exit 1
+fi
+
+if ! cmp -s "$default_layout_file" "$default_layout_file.with_missing_cfg"; then
+    echo "No-profile defaults should not depend on profile config path" >&2
     exit 1
 fi
 

@@ -24,6 +24,8 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <optional>
+#include <system_error>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -31,6 +33,9 @@
 namespace fs = std::filesystem;
 constexpr int k_output_cache_format_version = 2;
 constexpr int k_seed_cache_format_version = 2;
+#ifndef SPRAT_GLOBAL_PROFILE_CONFIG
+#define SPRAT_GLOBAL_PROFILE_CONFIG "/usr/local/share/sprat/spratprofiles.cfg"
+#endif
 
 std::string trim_copy(const std::string& s) {
     size_t start = 0;
@@ -46,7 +51,319 @@ std::string trim_copy(const std::string& s) {
 
 enum class Mode { POT, COMPACT, FAST };
 enum class OptimizeTarget { GPU, SPACE };
-enum class Profile { DESKTOP, MOBILE, LEGACY, SPACE, FAST, CSS };
+
+struct ProfileDefinition {
+    std::string name;
+    Mode mode = Mode::COMPACT;
+    OptimizeTarget optimize_target = OptimizeTarget::GPU;
+    std::optional<int> max_width;
+    std::optional<int> max_height;
+    std::optional<int> padding;
+    std::optional<int> max_combinations;
+    std::optional<double> scale;
+    std::optional<bool> trim_transparent;
+    std::optional<unsigned int> threads;
+};
+
+constexpr const char* k_profiles_config_filename = "spratprofiles.cfg";
+constexpr const char* k_user_profiles_config_relpath = ".config/sprat/spratprofiles.cfg";
+constexpr const char* k_global_profiles_config_path = SPRAT_GLOBAL_PROFILE_CONFIG;
+constexpr const char k_default_profile_name[] = "fast";
+constexpr Mode k_default_mode = Mode::FAST;
+constexpr OptimizeTarget k_default_optimize_target = OptimizeTarget::GPU;
+constexpr int k_default_padding = 0;
+constexpr int k_default_max_combinations = 0;
+constexpr double k_default_scale = 1.0;
+constexpr bool k_default_trim_transparent = false;
+constexpr unsigned int k_default_threads = 0;
+constexpr std::array<const char*, 3> k_compact_prewarm_profiles = {
+    "desktop",
+    "mobile",
+    "space",
+};
+
+std::string to_lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+bool parse_mode_from_string(const std::string& value, Mode& out, std::string& error) {
+    std::string lower = to_lower_copy(value);
+    if (lower == "compact") {
+        out = Mode::COMPACT;
+        return true;
+    }
+    if (lower == "pot") {
+        out = Mode::POT;
+        return true;
+    }
+    if (lower == "fast") {
+        out = Mode::FAST;
+        return true;
+    }
+    error = "invalid mode '" + value + "'";
+    return false;
+}
+
+bool parse_optimize_target_from_string(const std::string& value, OptimizeTarget& out, std::string& error) {
+    std::string lower = to_lower_copy(value);
+    if (lower == "gpu") {
+        out = OptimizeTarget::GPU;
+        return true;
+    }
+    if (lower == "space") {
+        out = OptimizeTarget::SPACE;
+        return true;
+    }
+    error = "invalid optimize target '" + value + "'";
+    return false;
+}
+
+bool parse_positive_int(const std::string& value, int& out) {
+    try {
+        size_t idx = 0;
+        long long parsed = std::stoll(value, &idx);
+        if (idx != value.size() || parsed <= 0 ||
+            parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        out = static_cast<int>(parsed);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_non_negative_int(const std::string& value, int& out) {
+    try {
+        size_t idx = 0;
+        long long parsed = std::stoll(value, &idx);
+        if (idx != value.size() || parsed < 0 ||
+            parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
+            return false;
+        }
+        out = static_cast<int>(parsed);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_positive_uint(const std::string& value, unsigned int& out) {
+    int parsed = 0;
+    if (!parse_positive_int(value, parsed)) {
+        return false;
+    }
+    out = static_cast<unsigned int>(parsed);
+    return true;
+}
+
+bool parse_positive_double(const std::string& value, double& out) {
+    try {
+        size_t idx = 0;
+        double parsed = std::stod(value, &idx);
+        if (idx != value.size() || !std::isfinite(parsed) || parsed <= 0.0) {
+            return false;
+        }
+        out = parsed;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_bool_value(const std::string& value, bool& out) {
+    std::string lower = to_lower_copy(value);
+    if (lower == "1" || lower == "true" || lower == "yes" || lower == "on") {
+        out = true;
+        return true;
+    }
+    if (lower == "0" || lower == "false" || lower == "no" || lower == "off") {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
+bool parse_profiles_config(std::istream& input,
+                           std::vector<ProfileDefinition>& out,
+                           std::string& error) {
+    out.clear();
+    std::unordered_set<std::string> seen_names;
+    std::optional<ProfileDefinition> current;
+    std::string line;
+    size_t line_number = 0;
+    while (std::getline(input, line)) {
+        ++line_number;
+        std::string trimmed = trim_copy(line);
+        if (trimmed.empty() || trimmed.front() == '#' || trimmed.front() == ';') {
+            continue;
+        }
+
+        if (trimmed.front() == '[' && trimmed.back() == ']') {
+            if (current) {
+                out.push_back(*current);
+                current.reset();
+            }
+            std::string header = trimmed.substr(1, trimmed.size() - 2);
+            std::istringstream iss(header);
+            std::string section_type;
+            if (!(iss >> section_type)) {
+                error = "empty section header at line " + std::to_string(line_number);
+                return false;
+            }
+            section_type = to_lower_copy(section_type);
+            if (section_type != "profile") {
+                error = "unsupported section '" + section_type + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            std::string name;
+            if (!(iss >> name)) {
+                error = "missing profile name at line " + std::to_string(line_number);
+                return false;
+            }
+            std::string extra;
+            if (iss >> extra) {
+                error = "unexpected token '" + extra + "' in profile header at line " +
+                        std::to_string(line_number);
+                return false;
+            }
+            if (seen_names.find(name) != seen_names.end()) {
+                error = "duplicate profile '" + name + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            seen_names.insert(name);
+            ProfileDefinition def;
+            def.name = name;
+            def.mode = Mode::COMPACT;
+            def.optimize_target = OptimizeTarget::GPU;
+            current = def;
+            continue;
+        }
+
+        if (!current) {
+            error = "entry outside of profile section at line " + std::to_string(line_number);
+            return false;
+        }
+
+        size_t equals = trimmed.find('=');
+        if (equals == std::string::npos) {
+            error = "invalid line '" + trimmed + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        std::string key = trim_copy(trimmed.substr(0, equals));
+        std::string value = trim_copy(trimmed.substr(equals + 1));
+        if (key.empty()) {
+            error = "empty key at line " + std::to_string(line_number);
+            return false;
+        }
+        if (value.empty()) {
+            error = "empty value for key '" + key + "' at line " + std::to_string(line_number);
+            return false;
+        }
+
+        std::string lower_key = to_lower_copy(key);
+        if (lower_key == "mode") {
+            Mode parsed_mode;
+            if (!parse_mode_from_string(value, parsed_mode, error)) {
+                error += " at line " + std::to_string(line_number);
+                return false;
+            }
+            current->mode = parsed_mode;
+        } else if (lower_key == "optimize") {
+            OptimizeTarget parsed_target;
+            if (!parse_optimize_target_from_string(value, parsed_target, error)) {
+                error += " at line " + std::to_string(line_number);
+                return false;
+            }
+            current->optimize_target = parsed_target;
+        } else if (lower_key == "max_width" || lower_key == "default_max_width") {
+            int parsed_width = 0;
+            if (!parse_positive_int(value, parsed_width)) {
+                error = "invalid max_width '" + value + "' at line " +
+                        std::to_string(line_number);
+                return false;
+            }
+            current->max_width = parsed_width;
+        } else if (lower_key == "max_height" || lower_key == "default_max_height") {
+            int parsed_height = 0;
+            if (!parse_positive_int(value, parsed_height)) {
+                error = "invalid max_height '" + value + "' at line " +
+                        std::to_string(line_number);
+                return false;
+            }
+            current->max_height = parsed_height;
+        } else if (lower_key == "padding") {
+            int parsed_padding = 0;
+            if (!parse_non_negative_int(value, parsed_padding)) {
+                error = "invalid padding '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->padding = parsed_padding;
+        } else if (lower_key == "max_combinations") {
+            int parsed_max_combinations = 0;
+            if (!parse_non_negative_int(value, parsed_max_combinations)) {
+                error = "invalid max_combinations '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->max_combinations = parsed_max_combinations;
+        } else if (lower_key == "scale") {
+            double parsed_scale = 0.0;
+            if (!parse_positive_double(value, parsed_scale)) {
+                error = "invalid scale '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->scale = parsed_scale;
+        } else if (lower_key == "trim_transparent") {
+            bool parsed_trim = false;
+            if (!parse_bool_value(value, parsed_trim)) {
+                error = "invalid trim_transparent '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->trim_transparent = parsed_trim;
+        } else if (lower_key == "threads") {
+            unsigned int parsed_threads = 0;
+            if (!parse_positive_uint(value, parsed_threads)) {
+                error = "invalid threads '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->threads = parsed_threads;
+        } else {
+            error = "unknown key '" + key + "' at line " + std::to_string(line_number);
+            return false;
+        }
+    }
+
+    if (current) {
+        out.push_back(*current);
+    }
+
+    if (out.empty()) {
+        error = "no profiles defined";
+        return false;
+    }
+    return true;
+}
+
+bool load_profiles_config_from_file(const fs::path& path,
+                                    std::vector<ProfileDefinition>& out,
+                                    std::string& error) {
+    std::ifstream input(path);
+    if (!input) {
+        error = "failed to open '" + path.string() + "'";
+        return false;
+    }
+    return parse_profiles_config(input, out, error);
+}
+
+std::optional<fs::path> resolve_user_profiles_config_path() {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+        return std::nullopt;
+    }
+    return fs::path(home) / k_user_profiles_config_relpath;
+}
 
 struct Sprite {
     std::string path;
@@ -451,7 +768,7 @@ bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds)
     return age > max_age_seconds;
 }
 
-std::string build_layout_signature(Profile profile,
+std::string build_layout_signature(const std::string& profile_name,
                                    Mode mode,
                                    OptimizeTarget optimize_target,
                                    int max_width_limit,
@@ -474,7 +791,7 @@ std::string build_layout_signature(Profile profile,
     }
 
     std::ostringstream sig;
-    sig << static_cast<int>(profile) << "|"
+    sig << profile_name << "|"
         << static_cast<int>(mode) << "|"
         << static_cast<int>(optimize_target) << "|"
         << max_width_limit << "|"
@@ -490,7 +807,7 @@ std::string build_layout_signature(Profile profile,
     return to_hex_size_t(std::hash<std::string>{}(sig.str()));
 }
 
-std::string build_layout_seed_signature(Profile profile,
+std::string build_layout_seed_signature(const std::string& profile_name,
                                         Mode mode,
                                         OptimizeTarget optimize_target,
                                         int max_width_limit,
@@ -512,7 +829,7 @@ std::string build_layout_seed_signature(Profile profile,
     }
 
     std::ostringstream sig;
-    sig << static_cast<int>(profile) << "|"
+    sig << profile_name << "|"
         << static_cast<int>(mode) << "|"
         << static_cast<int>(optimize_target) << "|"
         << max_width_limit << "|"
@@ -1443,12 +1760,20 @@ bool pick_better_layout_candidate(
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "Usage: spratlayout <folder> [--profile desktop|mobile|legacy|space|fast|css] [--max-width N] [--max-height N] [--padding N] [--max-combinations N] [--scale F] [--trim-transparent] [--threads N]\n";
+        std::cerr << "Usage: spratlayout <folder> [--profile NAME] [--profiles-config PATH] "
+                  << "[--mode compact|pot|fast] [--optimize gpu|space] [--max-width N] [--max-height N] "
+                  << "[--padding N] [--max-combinations N] [--scale F] [--trim-transparent|--no-trim-transparent] "
+                  << "[--threads N]\n";
         return 1;
     }
 
     fs::path folder = argv[1];
-    Profile profile = Profile::FAST;
+    std::string requested_profile_name;
+    std::string profiles_config_path;
+    bool has_mode_override = false;
+    Mode mode_override = Mode::COMPACT;
+    bool has_optimize_override = false;
+    OptimizeTarget optimize_override = OptimizeTarget::GPU;
     Mode mode = Mode::COMPACT;
     OptimizeTarget optimize_target = OptimizeTarget::GPU;
     int max_width_limit = 0;
@@ -1456,32 +1781,39 @@ int main(int argc, char** argv) {
     bool has_max_width_limit = false;
     bool has_max_height_limit = false;
     int padding = 0;
+    bool has_padding_override = false;
     int max_combinations = 0;
+    bool has_max_combinations_override = false;
     double scale = 1.0;
+    bool has_scale_override = false;
     bool trim_transparent = false;
+    bool has_trim_override = false;
     unsigned int thread_limit = 0;
+    bool has_threads_override = false;
 
     // parse args
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--profile" && i + 1 < argc) {
-            std::string val = argv[++i];
-            if (val == "desktop") {
-                profile = Profile::DESKTOP;
-            } else if (val == "mobile") {
-                profile = Profile::MOBILE;
-            } else if (val == "legacy") {
-                profile = Profile::LEGACY;
-            } else if (val == "space") {
-                profile = Profile::SPACE;
-            } else if (val == "fast") {
-                profile = Profile::FAST;
-            } else if (val == "css") {
-                profile = Profile::CSS;
-            } else {
-                std::cerr << "Invalid profile\n";
+            requested_profile_name = argv[++i];
+        } else if (arg == "--profiles-config" && i + 1 < argc) {
+            profiles_config_path = argv[++i];
+        } else if (arg == "--mode" && i + 1 < argc) {
+            std::string value = argv[++i];
+            std::string error;
+            if (!parse_mode_from_string(value, mode_override, error)) {
+                std::cerr << "Invalid mode value: " << value << "\n";
                 return 1;
             }
+            has_mode_override = true;
+        } else if (arg == "--optimize" && i + 1 < argc) {
+            std::string value = argv[++i];
+            std::string error;
+            if (!parse_optimize_target_from_string(value, optimize_override, error)) {
+                std::cerr << "Invalid optimize value: " << value << "\n";
+                return 1;
+            }
+            has_optimize_override = true;
         } else if (arg == "--max-width" && i + 1 < argc) {
             std::string value = argv[++i];
             try {
@@ -1526,6 +1858,7 @@ int main(int argc, char** argv) {
             if (padding < 0) {
                 padding = 0;
             }
+            has_padding_override = true;
         } else if (arg == "--max-combinations" && i + 1 < argc) {
             std::string value = argv[++i];
             try {
@@ -1539,6 +1872,7 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid max combinations value: " << value << "\n";
                 return 1;
             }
+            has_max_combinations_override = true;
         } else if (arg == "--scale" && i + 1 < argc) {
             std::string value = argv[++i];
             try {
@@ -1552,8 +1886,13 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid scale value: " << value << "\n";
                 return 1;
             }
+            has_scale_override = true;
         } else if (arg == "--trim-transparent") {
             trim_transparent = true;
+            has_trim_override = true;
+        } else if (arg == "--no-trim-transparent") {
+            trim_transparent = false;
+            has_trim_override = true;
         } else if (arg == "--threads" && i + 1 < argc) {
             std::string value = argv[++i];
             try {
@@ -1568,50 +1907,146 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid thread count: " << value << "\n";
                 return 1;
             }
+            has_threads_override = true;
         } else {
             std::cerr << "Unknown argument: " << arg << "\n";
             return 1;
         }
     }
 
-    // Resolve algorithm strategy from the selected profile.
-    switch (profile) {
-        case Profile::DESKTOP:
-            mode = Mode::COMPACT;
-            optimize_target = OptimizeTarget::GPU;
-            break;
-        case Profile::MOBILE:
-            mode = Mode::COMPACT;
-            optimize_target = OptimizeTarget::GPU;
-            if (!has_max_width_limit) {
-                max_width_limit = 2048;
+    std::vector<ProfileDefinition> profile_definitions;
+    std::unordered_map<std::string, ProfileDefinition> profile_map;
+    std::string selected_profile_name = k_default_profile_name;
+    const bool has_requested_profile = !requested_profile_name.empty();
+    if (has_requested_profile) {
+        selected_profile_name = requested_profile_name;
+    }
+
+    if (!has_mode_override) {
+        mode = k_default_mode;
+    } else {
+        mode = mode_override;
+    }
+    if (!has_optimize_override) {
+        optimize_target = k_default_optimize_target;
+    } else {
+        optimize_target = optimize_override;
+    }
+    if (!has_padding_override) {
+        padding = k_default_padding;
+    }
+    if (!has_max_combinations_override) {
+        max_combinations = k_default_max_combinations;
+    }
+    if (!has_scale_override) {
+        scale = k_default_scale;
+    }
+    if (!has_trim_override) {
+        trim_transparent = k_default_trim_transparent;
+    }
+    if (!has_threads_override) {
+        thread_limit = k_default_threads;
+    }
+
+    fs::path cwd = fs::current_path();
+    fs::path exec_path(argv[0]);
+    if (exec_path.is_relative() && !cwd.empty()) {
+        exec_path = cwd / exec_path;
+    }
+    fs::path exec_dir = exec_path.parent_path();
+    if (exec_dir.empty()) {
+        exec_dir = cwd;
+    }
+
+    if (has_requested_profile) {
+        std::string config_error;
+        std::vector<fs::path> config_candidates;
+        if (!profiles_config_path.empty()) {
+            fs::path config_candidate(profiles_config_path);
+            if (config_candidate.is_relative() && !cwd.empty()) {
+                config_candidate = cwd / config_candidate;
             }
-            if (!has_max_height_limit) {
-                max_height_limit = 2048;
+            config_candidates.push_back(std::move(config_candidate));
+        } else {
+            if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
+                config_candidates.push_back(*user_config);
             }
-            break;
-        case Profile::LEGACY:
-            mode = Mode::POT;
-            optimize_target = OptimizeTarget::SPACE;
-            if (!has_max_width_limit) {
-                max_width_limit = 1024;
+            config_candidates.push_back(exec_dir / k_profiles_config_filename);
+            config_candidates.push_back(fs::path(k_global_profiles_config_path));
+        }
+
+        bool loaded_profile_file = false;
+        std::vector<std::string> tried_candidates;
+        for (const fs::path& candidate : config_candidates) {
+            std::error_code ec;
+            const bool exists = fs::exists(candidate, ec);
+            if (ec || !exists) {
+                tried_candidates.push_back(candidate.string());
+                continue;
             }
-            if (!has_max_height_limit) {
-                max_height_limit = 1024;
+            if (!load_profiles_config_from_file(candidate, profile_definitions, config_error)) {
+                std::cerr << "Failed to load profile config (" << candidate << "): " << config_error << "\n";
+                return 1;
             }
+            loaded_profile_file = true;
             break;
-        case Profile::SPACE:
-            mode = Mode::COMPACT;
-            optimize_target = OptimizeTarget::SPACE;
-            break;
-        case Profile::FAST:
-            mode = Mode::FAST;
-            optimize_target = OptimizeTarget::GPU;
-            break;
-        case Profile::CSS:
-            mode = Mode::FAST;
-            optimize_target = OptimizeTarget::SPACE;
-            break;
+        }
+
+        if (!loaded_profile_file) {
+            std::cerr << "Failed to load profile config. Tried:";
+            for (const std::string& candidate : tried_candidates) {
+                std::cerr << " " << candidate;
+            }
+            std::cerr << "\n";
+            return 1;
+        }
+
+        for (const auto& def : profile_definitions) {
+            profile_map.emplace(def.name, def);
+        }
+
+        auto profile_it = profile_map.find(selected_profile_name);
+        if (profile_it == profile_map.end()) {
+            std::string available;
+            for (size_t idx = 0; idx < profile_definitions.size(); ++idx) {
+                if (idx > 0) {
+                    available += ", ";
+                }
+                available += profile_definitions[idx].name;
+            }
+            std::cerr << "Invalid profile '" << selected_profile_name << "'. Available profiles: "
+                      << available << "\n";
+            return 1;
+        }
+
+        const ProfileDefinition& selected_profile = profile_it->second;
+        if (!has_mode_override) {
+            mode = selected_profile.mode;
+        }
+        if (!has_optimize_override) {
+            optimize_target = selected_profile.optimize_target;
+        }
+        if (!has_max_width_limit && selected_profile.max_width) {
+            max_width_limit = *selected_profile.max_width;
+        }
+        if (!has_max_height_limit && selected_profile.max_height) {
+            max_height_limit = *selected_profile.max_height;
+        }
+        if (!has_padding_override && selected_profile.padding) {
+            padding = *selected_profile.padding;
+        }
+        if (!has_max_combinations_override && selected_profile.max_combinations) {
+            max_combinations = *selected_profile.max_combinations;
+        }
+        if (!has_scale_override && selected_profile.scale) {
+            scale = *selected_profile.scale;
+        }
+        if (!has_trim_override && selected_profile.trim_transparent) {
+            trim_transparent = *selected_profile.trim_transparent;
+        }
+        if (!has_threads_override && selected_profile.threads) {
+            thread_limit = *selected_profile.threads;
+        }
     }
 
     const bool is_dir = fs::exists(folder) && fs::is_directory(folder);
@@ -1698,10 +2133,10 @@ int main(int argc, char** argv) {
     }
 
     const std::string layout_signature = build_layout_signature(
-        profile, mode, optimize_target, max_width_limit, max_height_limit,
+        selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         padding, max_combinations, scale, trim_transparent, is_file, sources);
     const std::string layout_seed_signature = build_layout_seed_signature(
-        profile, mode, optimize_target, max_width_limit, max_height_limit,
+        selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         max_combinations, scale, trim_transparent, is_file, sources);
     const fs::path output_cache_path = build_output_cache_path(cache_path, layout_signature);
     const fs::path seed_cache_path = build_seed_cache_path(cache_path, layout_seed_signature);
@@ -2415,27 +2850,53 @@ int main(int argc, char** argv) {
         atlas_height = selected_candidate->h;
 
         if (best_gpu_candidate.valid && best_space_candidate.valid) {
-            struct CompactProfileCache {
-                Profile profile;
-                OptimizeTarget target;
-            };
-            const std::array<CompactProfileCache, 3> compact_profiles = {{
-                {Profile::DESKTOP, OptimizeTarget::GPU},
-                {Profile::MOBILE, OptimizeTarget::GPU},
-                {Profile::SPACE, OptimizeTarget::SPACE},
-            }};
-
-            for (const auto& compact_profile : compact_profiles) {
+            for (const char* profile_name : k_compact_prewarm_profiles) {
+                auto prewarm_it = profile_map.find(profile_name);
+                if (prewarm_it == profile_map.end()) {
+                    continue;
+                }
+                const ProfileDefinition& compact_profile = prewarm_it->second;
+                const Mode prewarm_mode =
+                    has_mode_override ? mode_override : compact_profile.mode;
+                const OptimizeTarget prewarm_optimize_target =
+                    has_optimize_override ? optimize_override : compact_profile.optimize_target;
+                if (prewarm_mode != Mode::COMPACT) {
+                    continue;
+                }
+                const int prewarm_max_width =
+                    has_max_width_limit
+                        ? max_width_limit
+                        : (compact_profile.max_width ? *compact_profile.max_width : 0);
+                const int prewarm_max_height =
+                    has_max_height_limit
+                        ? max_height_limit
+                        : (compact_profile.max_height ? *compact_profile.max_height : 0);
+                const int prewarm_padding =
+                    has_padding_override
+                        ? padding
+                        : (compact_profile.padding ? *compact_profile.padding : 0);
+                const int prewarm_max_combinations =
+                    has_max_combinations_override
+                        ? max_combinations
+                        : (compact_profile.max_combinations ? *compact_profile.max_combinations : 0);
+                const double prewarm_scale =
+                    has_scale_override
+                        ? scale
+                        : (compact_profile.scale ? *compact_profile.scale : 1.0);
+                const bool prewarm_trim_transparent =
+                    has_trim_override
+                        ? trim_transparent
+                        : (compact_profile.trim_transparent ? *compact_profile.trim_transparent : false);
                 const std::string prewarm_signature = build_layout_signature(
-                    compact_profile.profile,
-                    Mode::COMPACT,
-                    compact_profile.target,
-                    max_width_limit,
-                    max_height_limit,
-                    padding,
-                    max_combinations,
-                    scale,
-                    trim_transparent,
+                    compact_profile.name,
+                    prewarm_mode,
+                    prewarm_optimize_target,
+                    prewarm_max_width,
+                    prewarm_max_height,
+                    prewarm_padding,
+                    prewarm_max_combinations,
+                    prewarm_scale,
+                    prewarm_trim_transparent,
                     is_file,
                     sources
                 );
@@ -2444,14 +2905,14 @@ int main(int argc, char** argv) {
                 }
 
                 const LayoutCandidate& prewarm_candidate =
-                    compact_profile.target == OptimizeTarget::GPU
+                    prewarm_optimize_target == OptimizeTarget::GPU
                         ? best_gpu_candidate
                         : best_space_candidate;
                 const std::string prewarm_output = build_layout_output_text(
                     prewarm_candidate.w,
                     prewarm_candidate.h,
-                    scale,
-                    trim_transparent,
+                    prewarm_scale,
+                    prewarm_trim_transparent,
                     prewarm_candidate.sprites
                 );
                 save_output_cache(

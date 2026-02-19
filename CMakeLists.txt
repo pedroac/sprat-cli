@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 project(sprat LANGUAGES CXX)
+include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -70,6 +71,15 @@ add_executable(spratlayout spratlayout.cpp)
 add_executable(spratpack spratpack.cpp)
 add_executable(spratconvert spratconvert.cpp)
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(spratlayout PRIVATE
+    SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")
+
+install(TARGETS spratlayout spratpack spratconvert
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES spratprofiles.cfg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/sprat)
+install(FILES man/sprat-cli.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
 enable_testing()
 add_subdirectory(tests)

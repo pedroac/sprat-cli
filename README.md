@@ -88,6 +88,12 @@ This builds three binaries:
 - `spratpack`
 - `spratconvert`
 
+Install binaries, man page, and global profile config:
+
+```sh
+sudo cmake --install .
+```
+
 ## Test
 
 Run the end-to-end pipeline test:
@@ -109,22 +115,43 @@ then runs `spratpack` and verifies the output is a valid PNG.
 
 If the first argument is a file, `spratlayout` treats it as a newline-separated list of image paths. Blank lines and lines beginning with `#` are ignored. Relative paths are resolved relative to the list file, each path must exist, be a regular image file (`.png`, `.jpg`, `.bmp`, etc.), and they are loaded in the order listed; otherwise the command fails.
 
-Profile differences (concise):
+Profiles are flexible named rule sets. A profile groups packing rules (for example mode, optimize target, limits, padding, trim, scale, threads) under one name, so you can run `--profile NAME` instead of repeating many options each time.
 
-- `desktop`: MaxRects + GPU-oriented selection.
-- `mobile`: `desktop` behavior with default limits `2048x2048`.
-- `space`: MaxRects + tighter area preference.
-- `fast`: shelf-style packing + GPU-oriented selection (faster runtime).
-- `css`: shelf-style packing + area-oriented selection (stable/simple CSS workflows).
-- `legacy`: POT output + default limits `1024x1024`.
+Profile definitions are driven by `spratprofiles.cfg`. The lookup order is:
+
+1. `--profiles-config PATH` (when provided)
+2. `~/.config/sprat/spratprofiles.cfg`
+3. `spratprofiles.cfg` in the same directory as `spratlayout`
+4. Global installed config (from `make install`, typically `${prefix}/share/sprat/spratprofiles.cfg`)
+
+Each `[profile name]` section can define:
+
+- `mode=compact|pot|fast`
+- `optimize=gpu|space`
+- `max_width` and `max_height` (optional atlas limits)
+- `padding` (integer >= 0)
+- `max_combinations` (integer >= 0)
+- `scale` (number > 0)
+- `trim_transparent=true|false`
+- `threads` (integer > 0)
+
+Add new sections to define custom profiles and refer to them with `--profile NAME`. Profile values are defaults; command options override them per run.
+
+Examples (concept):
+
+- `--profile mobile` applies the rules stored under `mobile`.
+- `--profile mobile --padding 4` uses `mobile` and overrides only padding for that run.
 
 `spratlayout` options:
 
-- `--profile desktop|mobile|legacy|space|fast|css` (default: `fast`)
+- `--profile NAME` (default: `fast`)
+- `--profiles-config PATH` (override the config file path; can be relative or absolute)
+- `--mode compact|pot|fast`
+- `--optimize gpu|space`
 - `--padding N` (default: `0`)
 - `--max-combinations N` (default: `0` = auto/unlimited; caps compact candidate trials)
 - `--scale F` (default: `1`, for example `0.5` for half-size output)
-- `--trim-transparent` (auto-crop transparent borders)
+- `--trim-transparent` / `--no-trim-transparent`
 - `--max-width N` / `--max-height N` (optional atlas limits)
 - `--threads N` (override worker count for compact profile search; default: auto)
 

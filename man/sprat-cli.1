@@ -4,13 +4,17 @@ sprat-cli \- sprite atlas layout and packing pipeline
 .SH SYNOPSIS
 .B spratlayout
 .I folder
-[\fB\-\-profile\fR desktop|mobile|legacy|space|fast|css]
+[\fB\-\-profile\fR \fINAME\fR]
+[\fB\-\-profiles\-config\fR \fIPATH\fR]
+[\fB\-\-mode\fR compact|pot|fast]
+[\fB\-\-optimize\fR gpu|space]
 [\fB\-\-max\-width\fR \fIN\fR]
 [\fB\-\-max\-height\fR \fIN\fR]
 [\fB\-\-padding\fR \fIN\fR]
 [\fB\-\-max\-combinations\fR \fIN\fR]
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
+[\fB\-\-no\-trim\-transparent\fR]
 [\fB\-\-threads\fR \fIN\fR]
 .PP
 .B spratpack
@@ -46,6 +50,18 @@ If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
 If \fIfolder\fR is actually a text file, it is treated as a newline-delimited list of image paths (comments starting with \fB#\fR and blank lines are ignored). Relative paths are resolved relative to the list file, and each path must point to an existing image or the command fails.
 .PP
+Profile configuration is loaded from the first existing file in this order:
+.IP "\(bu" 2
+\fB\-\-profiles\-config\fR path (when provided)
+.IP "\(bu" 2
+\fB~/.config/sprat/spratprofiles.cfg\fR
+.IP "\(bu" 2
+\fBspratprofiles.cfg\fR in the same directory as \fBspratlayout\fR
+.IP "\(bu" 2
+Global installed config (typically \fB/usr/local/share/sprat/spratprofiles.cfg\fR)
+.PP
+Profile values act as defaults; CLI options override them per run.
+.PP
 Performance cache:
 .IP "\(bu" 2
 Metadata and output caches are stored in the system temp directory.
@@ -77,43 +93,53 @@ Built-in JSON transform output omits \fBindex\fR fields from \fBsprites[]\fR and
 .SH OPTIONS
 .SS spratlayout
 .TP
-\fB\-\-profile\fR desktop|mobile|legacy|space|fast|css
-Packing profile. Default: \fBfast\fR.
+\fB\-\-profile\fR \fINAME\fR
+Profile name loaded from profile config. Default: \fBfast\fR.
+.TP
+\fB\-\-profiles\-config\fR \fIPATH\fR
+Use an explicit profile configuration file.
+.TP
+\fB\-\-mode\fR compact|pot|fast
+Override packing mode from selected profile.
+.TP
+\fB\-\-optimize\fR gpu|space
+Override optimization target from selected profile.
 .TP
 \fB\-\-max\-width\fR \fIN\fR
-Maximum atlas width.
+Maximum atlas width. Overrides profile value.
 .TP
 \fB\-\-max\-height\fR \fIN\fR
-Maximum atlas height.
+Maximum atlas height. Overrides profile value.
 .TP
 \fB\-\-padding\fR \fIN\fR
-Extra pixels between packed sprites. Default: \fB0\fR.
+Extra pixels between packed sprites. Overrides profile value.
 .TP
 \fB\-\-max\-combinations\fR \fIN\fR
-Maximum number of compact candidate combinations to test (\fB0\fR means auto/unlimited).
+Maximum number of compact candidate combinations to test (\fB0\fR means auto/unlimited). Overrides profile value.
 .TP
 \fB\-\-scale\fR \fIF\fR
-Scale factor applied to sprite dimensions. Default: \fB1\fR.
+Scale factor applied to sprite dimensions. Overrides profile value.
 .TP
 \fB\-\-trim\-transparent\fR
-Trim transparent borders before packing.
+Enable transparent-border trimming (overrides profile value).
+.TP
+\fB\-\-no\-trim\-transparent\fR
+Disable transparent-border trimming (overrides profile value).
 .TP
 \fB\-\-threads\fR \fIN\fR
-Worker thread count for compact profile search. Default: auto.
+Worker thread count for compact profile search. Overrides profile value.
 .PP
-Profile defaults:
+Config keys available per profile section:
 .IP "\(bu" 2
-\fBdesktop\fR: compact packing, GPU-oriented selection.
+\fBmode=compact|pot|fast\fR
 .IP "\(bu" 2
-\fBmobile\fR: desktop behavior, default limits 2048x2048.
+\fBoptimize=gpu|space\fR
 .IP "\(bu" 2
-\fBlegacy\fR: power-of-two output, default limits 1024x1024.
+\fBmax_width\fR, \fBmax_height\fR
 .IP "\(bu" 2
-\fBspace\fR: compact packing, area-oriented selection.
+\fBpadding\fR, \fBmax_combinations\fR
 .IP "\(bu" 2
-\fBfast\fR: shelf packing, GPU-oriented selection.
-.IP "\(bu" 2
-\fBcss\fR: shelf packing, area-oriented selection.
+\fBscale\fR, \fBtrim_transparent\fR, \fBthreads\fR
 .SS spratpack
 .TP
 \fB\-\-frame\-lines\fR
