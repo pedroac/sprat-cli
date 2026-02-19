@@ -1,0 +1,15 @@
+{
+  "sprites": {
+    "./frames/a.png": {
+      "markers": [
+        {"name": "hit"},
+        {"name": "hurt"}
+      ]
+    },
+    "b": {
+      "markers": [
+        "foot"
+      ]
+    }
+  }
+}

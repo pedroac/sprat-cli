@@ -1,0 +1,12 @@
+{
+  "timelines": [
+    {
+      "name": "run",
+      "frames": ["./frames/a.png", "b"]
+    },
+    {
+      "name": "idle",
+      "sprite_indexes": [1]
+    }
+  ]
+}
