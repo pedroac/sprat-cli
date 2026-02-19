@@ -7,13 +7,21 @@
 #include <string>
 #include <filesystem>
 #include <algorithm>
+#include <cstdlib>
+#include <cctype>
+#include <functional>
 #include <memory>
 #include <limits>
 #include <cmath>
 #include <utility>
 #include <array>
 #include <cstddef>
+#include <chrono>
+#include <fstream>
 #include <iomanip>
+#include <sstream>
+#include <thread>
+#include <unordered_map>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -30,6 +38,38 @@ struct Sprite {
     int x = 0, y = 0;
     int trim_left = 0, trim_top = 0;
     int trim_right = 0, trim_bottom = 0;
+};
+
+struct ImageMeta {
+    uintmax_t file_size = 0;
+    long long mtime_ticks = 0;
+};
+
+struct ImageSource {
+    fs::path file_path;
+    std::string path;
+    ImageMeta meta;
+};
+
+struct ImageCacheEntry {
+    bool trim_transparent = false;
+    uintmax_t file_size = 0;
+    long long mtime_ticks = 0;
+    int w = 0;
+    int h = 0;
+    int trim_left = 0;
+    int trim_top = 0;
+    int trim_right = 0;
+    int trim_bottom = 0;
+    long long cached_at_unix = 0;
+};
+
+struct LayoutCandidate {
+    bool valid = false;
+    size_t area = 0;
+    int w = 0;
+    int h = 0;
+    std::vector<Sprite> sprites;
 };
 
 struct Node {
@@ -58,6 +98,302 @@ bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
         return true;
     }
     return false;
+}
+
+bool read_image_meta(const fs::path& path, ImageMeta& out) {
+    std::error_code ec;
+    uintmax_t size = fs::file_size(path, ec);
+    if (ec) {
+        return false;
+    }
+    fs::file_time_type mtime = fs::last_write_time(path, ec);
+    if (ec) {
+        return false;
+    }
+    out.file_size = size;
+    out.mtime_ticks = mtime.time_since_epoch().count();
+    return true;
+}
+
+long long now_unix_seconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+bool is_supported_image_extension(const fs::path& path) {
+    std::string ext = path.extension().string();
+    if (ext.empty()) {
+        return false;
+    }
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
+           ext == ".tga" || ext == ".gif" || ext == ".psd" || ext == ".pic" ||
+           ext == ".pnm" || ext == ".pgm" || ext == ".ppm" || ext == ".hdr" ||
+           ext == ".webp";
+}
+
+void prune_stale_cache_entries(std::unordered_map<std::string, ImageCacheEntry>& entries,
+                               long long now_unix,
+                               long long max_age_seconds) {
+    for (auto it = entries.begin(); it != entries.end();) {
+        const long long cached_at = it->second.cached_at_unix;
+        if (cached_at <= 0 || cached_at > now_unix || (now_unix - cached_at) > max_age_seconds) {
+            it = entries.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool load_image_cache(const fs::path& cache_path,
+                      std::unordered_map<std::string, ImageCacheEntry>& out) {
+    out.clear();
+    std::ifstream in(cache_path);
+    if (!in) {
+        return false;
+    }
+
+    std::string header_tag;
+    int version = 0;
+    if (!(in >> header_tag >> version)) {
+        return false;
+    }
+    if (header_tag != "spratlayout_cache" || (version != 1 && version != 2)) {
+        return false;
+    }
+
+    std::string path;
+    int trim_flag = 0;
+    ImageCacheEntry entry;
+    while (true) {
+        entry = ImageCacheEntry{};
+        if (!(in >> std::quoted(path)
+                 >> trim_flag
+                 >> entry.file_size
+                 >> entry.mtime_ticks
+                 >> entry.w
+                 >> entry.h
+                 >> entry.trim_left
+                 >> entry.trim_top
+                 >> entry.trim_right
+                 >> entry.trim_bottom)) {
+            break;
+        }
+        if (version == 2) {
+            if (!(in >> entry.cached_at_unix)) {
+                break;
+            }
+        }
+        if (entry.w <= 0 || entry.h <= 0) {
+            continue;
+        }
+        entry.trim_transparent = trim_flag != 0;
+        const std::string key = path + (entry.trim_transparent ? "|1" : "|0");
+        out[key] = entry;
+    }
+
+    return true;
+}
+
+bool save_image_cache(const fs::path& cache_path,
+                      const std::unordered_map<std::string, ImageCacheEntry>& entries) {
+    fs::path tmp = cache_path;
+    tmp += ".tmp";
+
+    std::ofstream out(tmp, std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+
+    out << "spratlayout_cache 2\n";
+    for (const auto& kv : entries) {
+        std::string path = kv.first;
+        if (path.size() > 2 &&
+            path[path.size() - 2] == '|' &&
+            (path.back() == '0' || path.back() == '1')) {
+            path = path.substr(0, path.size() - 2);
+        }
+        const ImageCacheEntry& e = kv.second;
+        out << std::quoted(path) << " "
+            << (e.trim_transparent ? 1 : 0) << " "
+            << e.file_size << " "
+            << e.mtime_ticks << " "
+            << e.w << " "
+            << e.h << " "
+            << e.trim_left << " "
+            << e.trim_top << " "
+            << e.trim_right << " "
+            << e.trim_bottom << " "
+            << e.cached_at_unix << "\n";
+    }
+    out.close();
+    if (!out) {
+        return false;
+    }
+
+    std::error_code ec;
+    fs::rename(tmp, cache_path, ec);
+    if (ec) {
+        fs::remove(cache_path, ec);
+        ec.clear();
+        fs::rename(tmp, cache_path, ec);
+        if (ec) {
+            fs::remove(tmp, ec);
+            return false;
+        }
+    }
+    return true;
+}
+
+fs::path default_temp_dir() {
+    std::error_code ec;
+    fs::path path = fs::temp_directory_path(ec);
+    if (!ec && !path.empty()) {
+        return path;
+    }
+
+    const char* tmp = std::getenv("TMP");
+    if (tmp != nullptr && *tmp != '\0') {
+        return fs::path(tmp);
+    }
+    const char* temp = std::getenv("TEMP");
+    if (temp != nullptr && *temp != '\0') {
+        return fs::path(temp);
+    }
+    const char* tmpdir = std::getenv("TMPDIR");
+    if (tmpdir != nullptr && *tmpdir != '\0') {
+        return fs::path(tmpdir);
+    }
+
+    return fs::path("/tmp");
+}
+
+fs::path build_cache_path(const fs::path& folder) {
+    std::error_code ec;
+    fs::path normalized = fs::absolute(folder, ec);
+    std::string folder_key = (!ec ? normalized.lexically_normal().string() : folder.string());
+    size_t hash = std::hash<std::string>{}(folder_key);
+
+    std::ostringstream name;
+    name << "spratlayout_" << std::hex << hash << ".cache";
+    return default_temp_dir() / name.str();
+}
+
+std::string to_hex_size_t(size_t value) {
+    std::ostringstream oss;
+    oss << std::hex << value;
+    return oss.str();
+}
+
+bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || ec) {
+        return true;
+    }
+    fs::file_time_type file_time = fs::last_write_time(path, ec);
+    if (ec) {
+        return true;
+    }
+    fs::file_time_type now = fs::file_time_type::clock::now();
+    if (file_time > now) {
+        return false;
+    }
+    long long age = std::chrono::duration_cast<std::chrono::seconds>(now - file_time).count();
+    return age > max_age_seconds;
+}
+
+std::string build_layout_signature(Profile profile,
+                                   Mode mode,
+                                   OptimizeTarget optimize_target,
+                                   int max_width_limit,
+                                   int max_height_limit,
+                                   int padding,
+                                   double scale,
+                                   bool trim_transparent,
+                                   const std::vector<ImageSource>& sources) {
+    std::vector<std::string> parts;
+    parts.reserve(sources.size());
+    for (const auto& source : sources) {
+        std::ostringstream line;
+        line << source.path << "|" << source.meta.file_size << "|" << source.meta.mtime_ticks;
+        parts.push_back(line.str());
+    }
+    std::sort(parts.begin(), parts.end());
+
+    std::ostringstream sig;
+    sig << static_cast<int>(profile) << "|"
+        << static_cast<int>(mode) << "|"
+        << static_cast<int>(optimize_target) << "|"
+        << max_width_limit << "|"
+        << max_height_limit << "|"
+        << padding << "|"
+        << std::setprecision(17) << scale << "|"
+        << (trim_transparent ? 1 : 0);
+    for (const std::string& part : parts) {
+        sig << "\n" << part;
+    }
+    return to_hex_size_t(std::hash<std::string>{}(sig.str()));
+}
+
+bool load_output_cache(const fs::path& cache_path,
+                       const std::string& expected_signature,
+                       std::string& output) {
+    std::ifstream in(cache_path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+
+    std::string header;
+    if (!std::getline(in, header) || header != "spratlayout_output_cache 1") {
+        return false;
+    }
+
+    std::string signature;
+    if (!std::getline(in, signature) || signature != expected_signature) {
+        return false;
+    }
+
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    if (!in.good() && !in.eof()) {
+        return false;
+    }
+    output = buffer.str();
+    return true;
+}
+
+bool save_output_cache(const fs::path& cache_path,
+                       const std::string& signature,
+                       const std::string& output) {
+    fs::path tmp = cache_path;
+    tmp += ".tmp";
+
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+    out << "spratlayout_output_cache 1\n";
+    out << signature << "\n";
+    out << output;
+    out.close();
+    if (!out) {
+        return false;
+    }
+
+    std::error_code ec;
+    fs::rename(tmp, cache_path, ec);
+    if (ec) {
+        fs::remove(cache_path, ec);
+        ec.clear();
+        fs::rename(tmp, cache_path, ec);
+        if (ec) {
+            fs::remove(tmp, ec);
+            return false;
+        }
+    }
+    return true;
 }
 
 bool scale_dimension(int input, double scale, int& output) {
@@ -504,7 +840,7 @@ bool pick_better_layout_candidate(
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "Usage: spratlayout <folder> [--profile desktop|mobile|legacy|space|fast|css] [--max-width N] [--max-height N] [--padding N] [--scale F] [--trim-transparent]\n";
+        std::cerr << "Usage: spratlayout <folder> [--profile desktop|mobile|legacy|space|fast|css] [--max-width N] [--max-height N] [--padding N] [--scale F] [--trim-transparent] [--threads N]\n";
         return 1;
     }
 
@@ -519,6 +855,7 @@ int main(int argc, char** argv) {
     int padding = 0;
     double scale = 1.0;
     bool trim_transparent = false;
+    unsigned int thread_limit = 0;
 
     // parse args
     for (int i = 2; i < argc; ++i) {
@@ -600,6 +937,20 @@ int main(int argc, char** argv) {
             }
         } else if (arg == "--trim-transparent") {
             trim_transparent = true;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            std::string value = argv[++i];
+            try {
+                size_t idx = 0;
+                int parsed = std::stoi(value, &idx);
+                if (idx != value.size() || parsed <= 0) {
+                    std::cerr << "Invalid thread count: " << value << "\n";
+                    return 1;
+                }
+                thread_limit = static_cast<unsigned int>(parsed);
+            } catch (const std::exception&) {
+                std::cerr << "Invalid thread count: " << value << "\n";
+                return 1;
+            }
         } else {
             std::cerr << "Unknown argument: " << arg << "\n";
             return 1;
@@ -651,18 +1002,95 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::vector<Sprite> sprites;
-    for (auto& entry : fs::directory_iterator(folder)) {
+    const fs::path cache_path = build_cache_path(folder);
+    const fs::path output_cache_path = cache_path.string() + ".layout";
+    constexpr long long k_cache_max_age_seconds = 3600;
+    const long long now_unix = now_unix_seconds();
+
+    std::vector<ImageSource> sources;
+    for (const auto& entry : fs::directory_iterator(folder)) {
         if (!entry.is_regular_file()) {
             continue;
         }
-        std::string path = entry.path().string();
+        const fs::path file_path = entry.path();
+        if (!is_supported_image_extension(file_path)) {
+            continue;
+        }
+        ImageMeta meta;
+        if (!read_image_meta(file_path, meta)) {
+            continue;
+        }
+        ImageSource source;
+        source.file_path = file_path;
+        source.path = file_path.string();
+        source.meta = meta;
+        sources.push_back(std::move(source));
+    }
+
+    const std::string layout_signature = build_layout_signature(
+        profile, mode, optimize_target, max_width_limit, max_height_limit,
+        padding, scale, trim_transparent, sources);
+    if (!is_file_older_than_seconds(output_cache_path, k_cache_max_age_seconds)) {
+        std::string cached_output;
+        if (load_output_cache(output_cache_path, layout_signature, cached_output)) {
+            std::cout << cached_output;
+            return 0;
+        }
+    }
+
+    std::unordered_map<std::string, ImageCacheEntry> cache_entries;
+    load_image_cache(cache_path, cache_entries);
+    prune_stale_cache_entries(cache_entries, now_unix, k_cache_max_age_seconds);
+
+    std::vector<Sprite> sprites;
+    for (const auto& source : sources) {
+        const fs::path& file_path = source.file_path;
+        const std::string& path = source.path;
+        const ImageMeta& meta = source.meta;
+
+        const std::string cache_key = path + (trim_transparent ? "|1" : "|0");
+        auto cache_it = cache_entries.find(cache_key);
+        if (cache_it != cache_entries.end()) {
+            const ImageCacheEntry& cached = cache_it->second;
+            if (cached.trim_transparent == trim_transparent &&
+                cached.file_size == meta.file_size &&
+                cached.mtime_ticks == meta.mtime_ticks) {
+                Sprite s;
+                s.path = path;
+                s.w = cached.w;
+                s.h = cached.h;
+                s.trim_left = cached.trim_left;
+                s.trim_top = cached.trim_top;
+                s.trim_right = cached.trim_right;
+                s.trim_bottom = cached.trim_bottom;
+                sprites.push_back(std::move(s));
+                cache_it->second.cached_at_unix = now_unix;
+                continue;
+            }
+        }
+
+        Sprite loaded_sprite;
+        loaded_sprite.path = path;
         if (!trim_transparent) {
             int w, h, channels;
             if (!stbi_info(path.c_str(), &w, &h, &channels)) {
                 continue;
             }
-            sprites.push_back({path, w, h});
+            loaded_sprite.w = w;
+            loaded_sprite.h = h;
+            sprites.push_back(loaded_sprite);
+            cache_entries[cache_key] = ImageCacheEntry{
+                trim_transparent,
+                meta.file_size,
+                meta.mtime_ticks,
+                loaded_sprite.w,
+                loaded_sprite.h,
+                loaded_sprite.trim_left,
+                loaded_sprite.trim_top,
+                loaded_sprite.trim_right,
+                loaded_sprite.trim_bottom,
+                now_unix
+            };
             continue;
         }
 
@@ -692,28 +1120,40 @@ int main(int argc, char** argv) {
             }
         }
 
-        Sprite s;
-        s.path = path;
         if (max_x >= min_x && max_y >= min_y) {
-            s.trim_left = min_x;
-            s.trim_top = min_y;
-            s.trim_right = (w - 1) - max_x;
-            s.trim_bottom = (h - 1) - max_y;
-            s.w = max_x - min_x + 1;
-            s.h = max_y - min_y + 1;
+            loaded_sprite.trim_left = min_x;
+            loaded_sprite.trim_top = min_y;
+            loaded_sprite.trim_right = (w - 1) - max_x;
+            loaded_sprite.trim_bottom = (h - 1) - max_y;
+            loaded_sprite.w = max_x - min_x + 1;
+            loaded_sprite.h = max_y - min_y + 1;
         } else {
             // Fully transparent image: keep a 1x1 transparent region.
-            s.trim_left = 0;
-            s.trim_top = 0;
-            s.trim_right = std::max(0, w - 1);
-            s.trim_bottom = std::max(0, h - 1);
-            s.w = 1;
-            s.h = 1;
+            loaded_sprite.trim_left = 0;
+            loaded_sprite.trim_top = 0;
+            loaded_sprite.trim_right = std::max(0, w - 1);
+            loaded_sprite.trim_bottom = std::max(0, h - 1);
+            loaded_sprite.w = 1;
+            loaded_sprite.h = 1;
         }
 
         stbi_image_free(data);
-        sprites.push_back(std::move(s));
+        sprites.push_back(loaded_sprite);
+        cache_entries[cache_key] = ImageCacheEntry{
+            trim_transparent,
+            meta.file_size,
+            meta.mtime_ticks,
+            loaded_sprite.w,
+            loaded_sprite.h,
+            loaded_sprite.trim_left,
+            loaded_sprite.trim_top,
+            loaded_sprite.trim_right,
+            loaded_sprite.trim_bottom,
+            now_unix
+        };
     }
+
+    save_image_cache(cache_path, cache_entries);
 
     if (sprites.empty()) {
         std::cerr << "Error: no valid images found\n";
@@ -935,6 +1375,21 @@ int main(int argc, char** argv) {
         int best_h = 0;
         std::vector<Sprite> best_sprites;
         bool have_best = false;
+        auto consider_candidate = [&](LayoutCandidate&& candidate) {
+            if (!candidate.valid) {
+                return;
+            }
+            if (!have_best || pick_better_layout_candidate(
+                                  candidate.area, candidate.w, candidate.h,
+                                  true, best_area, best_w, best_h,
+                                  optimize_target)) {
+                best_area = candidate.area;
+                best_w = candidate.w;
+                best_h = candidate.h;
+                best_sprites = std::move(candidate.sprites);
+                have_best = true;
+            }
+        };
 
         for (SortMode sort_mode : sort_modes) {
             for (RectHeuristic rect_heuristic : rect_heuristics) {
@@ -946,13 +1401,13 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 size_t seed_area = static_cast<size_t>(seed_used_w) * static_cast<size_t>(seed_used_h);
-                if (!have_best || pick_better_layout_candidate(seed_area, seed_used_w, seed_used_h, have_best, best_area, best_w, best_h, optimize_target)) {
-                    best_area = seed_area;
-                    best_w = seed_used_w;
-                    best_h = seed_used_h;
-                    best_sprites = std::move(seed_sprites);
-                    have_best = true;
-                }
+                LayoutCandidate seed_candidate;
+                seed_candidate.valid = true;
+                seed_candidate.area = seed_area;
+                seed_candidate.w = seed_used_w;
+                seed_candidate.h = seed_used_h;
+                seed_candidate.sprites = std::move(seed_sprites);
+                consider_candidate(std::move(seed_candidate));
             }
         }
 
@@ -961,61 +1416,108 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        for (int width = max_width; width <= width_upper_bound; ++width) {
-            if (optimize_target == OptimizeTarget::SPACE && total_area > 0) {
-                size_t min_height = (total_area + static_cast<size_t>(width) - 1) / static_cast<size_t>(width);
-                size_t lower_bound_area = static_cast<size_t>(width) * min_height;
-                if (lower_bound_area > best_area) {
-                    continue;
-                }
-            }
+        const int width_count = width_upper_bound - max_width + 1;
+        const size_t area_upper_bound = best_area;
+        unsigned int worker_count = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
+        if (worker_count == 0) {
+            worker_count = 1;
+        }
+        worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(std::max(1, width_count)));
 
-            for (SortMode sort_mode : sort_modes) {
-                for (RectHeuristic rect_heuristic : rect_heuristics) {
-                    std::vector<Sprite> trial_sprites = sprites;
-                    sort_sprites_by_mode(trial_sprites, sort_mode);
-                    int used_w = 0;
-                    int used_h = 0;
-                    if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, used_w, used_h)) {
-                        continue;
+        std::vector<std::thread> compact_workers;
+        std::vector<LayoutCandidate> compact_candidates(worker_count);
+        compact_workers.reserve(worker_count);
+        for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
+            compact_workers.emplace_back([&, worker_index]() {
+                const int begin = max_width + static_cast<int>((static_cast<long long>(width_count) * worker_index) / worker_count);
+                const int end = max_width + static_cast<int>((static_cast<long long>(width_count) * (worker_index + 1)) / worker_count) - 1;
+                LayoutCandidate local_best;
+                for (int width = begin; width <= end; ++width) {
+                    if (optimize_target == OptimizeTarget::SPACE && total_area > 0) {
+                        size_t min_height = (total_area + static_cast<size_t>(width) - 1) / static_cast<size_t>(width);
+                        size_t lower_bound_area = static_cast<size_t>(width) * min_height;
+                        if (lower_bound_area > area_upper_bound) {
+                            continue;
+                        }
                     }
-                    size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
-                    if (pick_better_layout_candidate(area, used_w, used_h, true, best_area, best_w, best_h, optimize_target)) {
-                        best_area = area;
-                        best_w = used_w;
-                        best_h = used_h;
-                        best_sprites = std::move(trial_sprites);
+
+                    for (SortMode sort_mode : sort_modes) {
+                        for (RectHeuristic rect_heuristic : rect_heuristics) {
+                            std::vector<Sprite> trial_sprites = sprites;
+                            sort_sprites_by_mode(trial_sprites, sort_mode);
+                            int used_w = 0;
+                            int used_h = 0;
+                            if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, used_w, used_h)) {
+                                continue;
+                            }
+                            size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
+                            if (!local_best.valid ||
+                                pick_better_layout_candidate(area, used_w, used_h, true,
+                                                             local_best.area, local_best.w, local_best.h,
+                                                             optimize_target)) {
+                                local_best.valid = true;
+                                local_best.area = area;
+                                local_best.w = used_w;
+                                local_best.h = used_h;
+                                local_best.sprites = std::move(trial_sprites);
+                            }
+                        }
                     }
                 }
-            }
+                compact_candidates[worker_index] = std::move(local_best);
+            });
+        }
+        for (auto& worker : compact_workers) {
+            worker.join();
+        }
+        for (auto& candidate : compact_candidates) {
+            consider_candidate(std::move(candidate));
         }
 
         // For GPU-focused optimization, also evaluate shelf candidates and keep
         // whichever result is better for GPU shape.
         if (optimize_target == OptimizeTarget::GPU) {
-            for (int width = max_width; width <= width_upper_bound; ++width) {
-                for (SortMode sort_mode : sort_modes) {
-                    std::vector<Sprite> shelf_sprites = sprites;
-                    sort_sprites_by_mode(shelf_sprites, sort_mode);
-                    int shelf_w = 0;
-                    int shelf_h = 0;
-                    if (!pack_fast_shelf(shelf_sprites, width, padding, shelf_w, shelf_h)) {
-                        continue;
+            std::vector<std::thread> shelf_workers;
+            std::vector<LayoutCandidate> shelf_candidates(worker_count);
+            shelf_workers.reserve(worker_count);
+            for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
+                shelf_workers.emplace_back([&, worker_index]() {
+                    const int begin = max_width + static_cast<int>((static_cast<long long>(width_count) * worker_index) / worker_count);
+                    const int end = max_width + static_cast<int>((static_cast<long long>(width_count) * (worker_index + 1)) / worker_count) - 1;
+                    LayoutCandidate local_best;
+                    for (int width = begin; width <= end; ++width) {
+                        for (SortMode sort_mode : sort_modes) {
+                            std::vector<Sprite> shelf_sprites = sprites;
+                            sort_sprites_by_mode(shelf_sprites, sort_mode);
+                            int shelf_w = 0;
+                            int shelf_h = 0;
+                            if (!pack_fast_shelf(shelf_sprites, width, padding, shelf_w, shelf_h)) {
+                                continue;
+                            }
+                            if (shelf_h > height_upper_bound) {
+                                continue;
+                            }
+                            size_t shelf_area = static_cast<size_t>(shelf_w) * static_cast<size_t>(shelf_h);
+                            if (!local_best.valid ||
+                                pick_better_layout_candidate(shelf_area, shelf_w, shelf_h, true,
+                                                             local_best.area, local_best.w, local_best.h,
+                                                             optimize_target)) {
+                                local_best.valid = true;
+                                local_best.area = shelf_area;
+                                local_best.w = shelf_w;
+                                local_best.h = shelf_h;
+                                local_best.sprites = std::move(shelf_sprites);
+                            }
+                        }
                     }
-                    if (shelf_h > height_upper_bound) {
-                        continue;
-                    }
-                    size_t shelf_area = static_cast<size_t>(shelf_w) * static_cast<size_t>(shelf_h);
-                    if (pick_better_layout_candidate(
-                            shelf_area, shelf_w, shelf_h,
-                            true, best_area, best_w, best_h,
-                            optimize_target)) {
-                        best_area = shelf_area;
-                        best_w = shelf_w;
-                        best_h = shelf_h;
-                        best_sprites = std::move(shelf_sprites);
-                    }
-                }
+                    shelf_candidates[worker_index] = std::move(local_best);
+                });
+            }
+            for (auto& worker : shelf_workers) {
+                worker.join();
+            }
+            for (auto& candidate : shelf_candidates) {
+                consider_candidate(std::move(candidate));
             }
 
             // Hard safeguard: compare against the exact FAST baseline candidate.
@@ -1040,15 +1542,13 @@ int main(int argc, char** argv) {
                 if (pack_fast_shelf(fast_baseline, fast_target_width, padding, fast_w, fast_h) &&
                     fast_h <= height_upper_bound) {
                     size_t fast_area = static_cast<size_t>(fast_w) * static_cast<size_t>(fast_h);
-                    if (pick_better_layout_candidate(
-                            fast_area, fast_w, fast_h,
-                            true, best_area, best_w, best_h,
-                            optimize_target)) {
-                        best_area = fast_area;
-                        best_w = fast_w;
-                        best_h = fast_h;
-                        best_sprites = std::move(fast_baseline);
-                    }
+                    LayoutCandidate fast_candidate;
+                    fast_candidate.valid = true;
+                    fast_candidate.area = fast_area;
+                    fast_candidate.w = fast_w;
+                    fast_candidate.h = fast_h;
+                    fast_candidate.sprites = std::move(fast_baseline);
+                    consider_candidate(std::move(fast_candidate));
                 }
             }
         }
@@ -1098,8 +1598,9 @@ int main(int argc, char** argv) {
     }
 
     // Output layout
-    std::cout << "atlas " << atlas_width << "," << atlas_height << "\n";
-    std::cout << "scale " << std::setprecision(8) << scale << "\n";
+    std::ostringstream output;
+    output << "atlas " << atlas_width << "," << atlas_height << "\n";
+    output << "scale " << std::setprecision(8) << scale << "\n";
     for (auto& s : sprites) {
         std::string path = s.path;
         size_t pos = 0;
@@ -1107,15 +1608,18 @@ int main(int argc, char** argv) {
             path.insert(pos, "\\");
             pos += 2;
         }
-        std::cout << "sprite \"" << path << "\" "
-                  << s.x << "," << s.y << " "
-                  << s.w << "," << s.h;
+        output << "sprite \"" << path << "\" "
+               << s.x << "," << s.y << " "
+               << s.w << "," << s.h;
         if (trim_transparent) {
-            std::cout << " " << s.trim_left << "," << s.trim_top
-                      << " " << s.trim_right << "," << s.trim_bottom;
+            output << " " << s.trim_left << "," << s.trim_top
+                   << " " << s.trim_right << "," << s.trim_bottom;
         }
-        std::cout << "\n";
+        output << "\n";
     }
+    const std::string output_text = output.str();
+    std::cout << output_text;
+    save_output_cache(output_cache_path, layout_signature, output_text);
 
     return 0;
 }

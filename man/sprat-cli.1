@@ -10,11 +10,13 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-padding\fR \fIN\fR]
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
+[\fB\-\-threads\fR \fIN\fR]
 .PP
 .B spratpack
 [\fB\-\-frame\-lines\fR]
 [\fB\-\-line\-width\fR \fIN\fR]
 [\fB\-\-line\-color\fR \fIR,G,B[,A]\fR]
+[\fB\-\-threads\fR \fIN\fR]
 .PP
 .B spratconvert
 [\fB\-\-transform\fR \fINAME|PATH\fR]
@@ -40,6 +42,14 @@ scale \fIfactor\fR
 sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR]
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
+.PP
+Performance cache:
+.IP "\(bu" 2
+Metadata and output caches are stored in the system temp directory.
+.IP "\(bu" 2
+Unchanged inputs/options reuse cached results.
+.IP "\(bu" 2
+Entries older than one hour are pruned automatically.
 .SS spratpack
 Reads layout text from stdin and writes a PNG stream to stdout.
 .PP
@@ -80,6 +90,9 @@ Scale factor applied to sprite dimensions. Default: \fB1\fR.
 .TP
 \fB\-\-trim\-transparent\fR
 Trim transparent borders before packing.
+.TP
+\fB\-\-threads\fR \fIN\fR
+Worker thread count for compact profile search. Default: auto.
 .PP
 Profile defaults:
 .IP "\(bu" 2
@@ -104,6 +117,9 @@ Outline thickness in pixels. Default: \fB1\fR.
 .TP
 \fB\-\-line\-color\fR \fIR,G,B[,A]\fR
 Outline color channels (0-255). Default: \fB255,0,0,255\fR.
+.TP
+\fB\-\-threads\fR \fIN\fR
+Worker thread count for sprite decode/blit. Used when sprite rectangles do not overlap. Default: auto.
 .SS spratconvert
 .TP
 \fB\-\-transform\fR \fINAME|PATH\fR
@@ -139,6 +155,9 @@ Run as one pipeline:
 .TP
 Debug frame bounds:
 .B spratpack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet_lines.png
+.TP
+Limit worker threads:
+.B spratlayout ./frames --threads 4 > layout.txt ; spratpack --threads 4 < layout.txt > spritesheet.png
 .SH EXIT STATUS
 All commands return:
 .TP

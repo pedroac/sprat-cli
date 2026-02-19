@@ -13,6 +13,9 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -340,10 +343,48 @@ void draw_sprite_outline(
     }
 }
 
+bool rectangles_overlap(const Sprite& a, const Sprite& b) {
+    const int a_right = a.x + a.w;
+    const int a_bottom = a.y + a.h;
+    const int b_right = b.x + b.w;
+    const int b_bottom = b.y + b.h;
+    return !(a_right <= b.x || b_right <= a.x || a_bottom <= b.y || b_bottom <= a.y);
+}
+
+bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
+    if (sprites.size() < 2) {
+        return false;
+    }
+    std::vector<size_t> order(sprites.size());
+    for (size_t i = 0; i < sprites.size(); ++i) {
+        order[i] = i;
+    }
+    std::sort(order.begin(), order.end(), [&](size_t lhs, size_t rhs) {
+        if (sprites[lhs].x != sprites[rhs].x) return sprites[lhs].x < sprites[rhs].x;
+        return sprites[lhs].y < sprites[rhs].y;
+    });
+
+    for (size_t i = 0; i < order.size(); ++i) {
+        const Sprite& a = sprites[order[i]];
+        const int a_right = a.x + a.w;
+        for (size_t j = i + 1; j < order.size(); ++j) {
+            const Sprite& b = sprites[order[j]];
+            if (b.x >= a_right) {
+                break;
+            }
+            if (rectangles_overlap(a, b)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 int main(int argc, char** argv) {
     bool draw_frame_lines = false;
     int line_width = 1;
     std::array<unsigned char, 4> line_color = {255, 0, 0, 255};
+    unsigned int thread_limit = 0;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -362,8 +403,16 @@ int main(int argc, char** argv) {
                 std::cerr << "Expected format: R,G,B or R,G,B,A with 0-255 channels\n";
                 return 1;
             }
+        } else if (arg == "--threads" && i + 1 < argc) {
+            std::string value = argv[++i];
+            int parsed = 0;
+            if (!parse_int(value, parsed) || parsed <= 0) {
+                std::cerr << "Invalid thread count: " << value << "\n";
+                return 1;
+            }
+            thread_limit = static_cast<unsigned int>(parsed);
         } else {
-            std::cerr << "Usage: spratpack [--frame-lines] [--line-width N] [--line-color R,G,B[,A]]\n";
+            std::cerr << "Usage: spratpack [--frame-lines] [--line-width N] [--line-color R,G,B[,A]] [--threads N]\n";
             return 1;
         }
     }
@@ -434,12 +483,16 @@ int main(int argc, char** argv) {
             std::cerr << "Sprite out of atlas bounds: " << s.path << "\n";
             return 1;
         }
+    }
 
-        int w, h, channels;
+    auto blit_sprite = [&](const Sprite& s, std::string& error_out) -> bool {
+        int w = 0;
+        int h = 0;
+        int channels = 0;
         unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, 4);
         if (!data) {
-            std::cerr << "Failed to load: " << s.path << "\n";
-            return 1;
+            error_out = "Failed to load: " + s.path;
+            return false;
         }
         int source_x = s.has_trim ? s.src_x : 0;
         int source_y = s.has_trim ? s.src_y : 0;
@@ -447,14 +500,14 @@ int main(int argc, char** argv) {
         int source_h = s.has_trim ? (h - s.src_y - s.trim_bottom) : h;
 
         if (source_x < 0 || source_y < 0 || source_w <= 0 || source_h <= 0) {
-            std::cerr << "Crop out of bounds: " << s.path << "\n";
+            error_out = "Crop out of bounds: " + s.path;
             stbi_image_free(data);
-            return 1;
+            return false;
         }
         if (source_x > w - source_w || source_y > h - source_h) {
-            std::cerr << "Trim offsets out of bounds: " << s.path << "\n";
+            error_out = "Trim offsets out of bounds: " + s.path;
             stbi_image_free(data);
-            return 1;
+            return false;
         }
 
         size_t scaled_source_w = static_cast<size_t>(s.w);
@@ -463,68 +516,152 @@ int main(int argc, char** argv) {
             // Validate that scaled destination dimensions are plausible for the
             // declared source crop rectangle to guard malformed inputs.
             if (source_w == 0 || source_h == 0) {
-                std::cerr << "Invalid scaled source crop: " << s.path << "\n";
+                error_out = "Invalid scaled source crop: " + s.path;
                 stbi_image_free(data);
-                return 1;
+                return false;
             }
         }
 
         if (scaled_source_w == 0 || scaled_source_h == 0) {
-            std::cerr << "Invalid destination sprite size: " << s.path << "\n";
+            error_out = "Invalid destination sprite size: " + s.path;
             stbi_image_free(data);
-            return 1;
+            return false;
         }
 
         size_t source_pixels = 0;
         size_t source_bytes = 0;
         if (!checked_mul_size_t(static_cast<size_t>(w), static_cast<size_t>(h), source_pixels) ||
             !checked_mul_size_t(source_pixels, static_cast<size_t>(4), source_bytes)) {
-            std::cerr << "Source image is too large: " << s.path << "\n";
+            error_out = "Source image is too large: " + s.path;
             stbi_image_free(data);
-            return 1;
+            return false;
         }
 
-        for (int row = 0; row < s.h; ++row) {
-            int sample_y = source_y + (row * source_h) / s.h;
-            for (int col = 0; col < s.w; ++col) {
-                int sample_x = source_x + (col * source_w) / s.w;
-
+        const bool copy_rows_direct = (source_w == s.w && source_h == s.h);
+        if (copy_rows_direct) {
+            const size_t row_bytes = static_cast<size_t>(s.w) * static_cast<size_t>(4);
+            for (int row = 0; row < s.h; ++row) {
                 size_t dest_pixels = 0;
                 size_t dest_offset = 0;
-                if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels)) {
-                    std::cerr << "Atlas indexing overflow: " << s.path << "\n";
-                    stbi_image_free(data);
-                    return 1;
-                }
-                dest_pixels += static_cast<size_t>(s.x + col);
-                if (!checked_mul_size_t(dest_pixels, static_cast<size_t>(4), dest_offset) ||
+                if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels) ||
+                    !checked_add_size_t(dest_pixels, static_cast<size_t>(s.x), dest_pixels) ||
+                    !checked_mul_size_t(dest_pixels, static_cast<size_t>(4), dest_offset) ||
                     dest_offset > atlas.size() ||
-                    static_cast<size_t>(4) > atlas.size() - dest_offset) {
-                    std::cerr << "Atlas indexing out of bounds: " << s.path << "\n";
+                    row_bytes > atlas.size() - dest_offset) {
+                    error_out = "Atlas indexing out of bounds: " + s.path;
                     stbi_image_free(data);
-                    return 1;
+                    return false;
                 }
 
                 size_t src_pixels = 0;
                 size_t src_offset = 0;
-                if (!checked_mul_size_t(static_cast<size_t>(sample_y), static_cast<size_t>(w), src_pixels) ||
-                    !checked_add_size_t(src_pixels, static_cast<size_t>(sample_x), src_pixels) ||
+                if (!checked_mul_size_t(static_cast<size_t>(source_y + row), static_cast<size_t>(w), src_pixels) ||
+                    !checked_add_size_t(src_pixels, static_cast<size_t>(source_x), src_pixels) ||
                     !checked_mul_size_t(src_pixels, static_cast<size_t>(4), src_offset) ||
                     src_offset > source_bytes ||
-                    static_cast<size_t>(4) > source_bytes - src_offset) {
-                    std::cerr << "Source indexing overflow: " << s.path << "\n";
+                    row_bytes > source_bytes - src_offset) {
+                    error_out = "Source indexing overflow: " + s.path;
                     stbi_image_free(data);
-                    return 1;
+                    return false;
                 }
+                std::memcpy(atlas.data() + dest_offset, data + src_offset, row_bytes);
+            }
+        } else {
+            for (int row = 0; row < s.h; ++row) {
+                int sample_y = source_y + (row * source_h) / s.h;
+                for (int col = 0; col < s.w; ++col) {
+                    int sample_x = source_x + (col * source_w) / s.w;
 
-                atlas[dest_offset + 0] = data[src_offset + 0];
-                atlas[dest_offset + 1] = data[src_offset + 1];
-                atlas[dest_offset + 2] = data[src_offset + 2];
-                atlas[dest_offset + 3] = data[src_offset + 3];
+                    size_t dest_pixels = 0;
+                    size_t dest_offset = 0;
+                    if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels)) {
+                        error_out = "Atlas indexing overflow: " + s.path;
+                        stbi_image_free(data);
+                        return false;
+                    }
+                    dest_pixels += static_cast<size_t>(s.x + col);
+                    if (!checked_mul_size_t(dest_pixels, static_cast<size_t>(4), dest_offset) ||
+                        dest_offset > atlas.size() ||
+                        static_cast<size_t>(4) > atlas.size() - dest_offset) {
+                        error_out = "Atlas indexing out of bounds: " + s.path;
+                        stbi_image_free(data);
+                        return false;
+                    }
+
+                    size_t src_pixels = 0;
+                    size_t src_offset = 0;
+                    if (!checked_mul_size_t(static_cast<size_t>(sample_y), static_cast<size_t>(w), src_pixels) ||
+                        !checked_add_size_t(src_pixels, static_cast<size_t>(sample_x), src_pixels) ||
+                        !checked_mul_size_t(src_pixels, static_cast<size_t>(4), src_offset) ||
+                        src_offset > source_bytes ||
+                        static_cast<size_t>(4) > source_bytes - src_offset) {
+                        error_out = "Source indexing overflow: " + s.path;
+                        stbi_image_free(data);
+                        return false;
+                    }
+
+                    atlas[dest_offset + 0] = data[src_offset + 0];
+                    atlas[dest_offset + 1] = data[src_offset + 1];
+                    atlas[dest_offset + 2] = data[src_offset + 2];
+                    atlas[dest_offset + 3] = data[src_offset + 3];
+                }
             }
         }
 
         stbi_image_free(data);
+        return true;
+    };
+
+    unsigned int worker_count = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
+    if (worker_count == 0) {
+        worker_count = 1;
+    }
+    worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(std::max<size_t>(1, sprites.size())));
+
+    const bool can_parallel_blit = (worker_count > 1) && !sprites_have_overlap(sprites);
+    if (!can_parallel_blit) {
+        for (const auto& s : sprites) {
+            std::string error;
+            if (!blit_sprite(s, error)) {
+                std::cerr << error << "\n";
+                return 1;
+            }
+        }
+    } else {
+        std::atomic<size_t> next_index{0};
+        std::atomic<bool> failed{false};
+        std::mutex error_mutex;
+        std::string first_error;
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count);
+        for (unsigned int i = 0; i < worker_count; ++i) {
+            workers.emplace_back([&]() {
+                while (!failed.load(std::memory_order_relaxed)) {
+                    size_t idx = next_index.fetch_add(1, std::memory_order_relaxed);
+                    if (idx >= sprites.size()) {
+                        break;
+                    }
+                    std::string error;
+                    if (!blit_sprite(sprites[idx], error)) {
+                        {
+                            std::lock_guard<std::mutex> lock(error_mutex);
+                            if (first_error.empty()) {
+                                first_error = std::move(error);
+                            }
+                        }
+                        failed.store(true, std::memory_order_relaxed);
+                        break;
+                    }
+                }
+            });
+        }
+        for (auto& worker : workers) {
+            worker.join();
+        }
+        if (failed.load(std::memory_order_relaxed)) {
+            std::cerr << (first_error.empty() ? "Failed to process sprite" : first_error) << "\n";
+            return 1;
+        }
     }
 
     if (draw_frame_lines) {

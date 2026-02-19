@@ -123,6 +123,13 @@ Profile differences (concise):
 - `--scale F` (default: `1`, for example `0.5` for half-size output)
 - `--trim-transparent` (auto-crop transparent borders)
 - `--max-width N` / `--max-height N` (optional atlas limits)
+- `--threads N` (override worker count for compact profile search; default: auto)
+
+Layout caching:
+
+- `spratlayout` keeps metadata and output caches in the system temp directory (for example `/tmp` on Linux/macOS, `%TEMP%` on Windows).
+- Cache entries are reused when inputs and options are unchanged.
+- Cache entries older than one hour are pruned automatically.
 
 Why these options help:
 
@@ -336,6 +343,7 @@ Optional frame divider overlay:
 - `--frame-lines` (draw sprite rectangle outlines)
 - `--line-width N` (default: `1`)
 - `--line-color R,G,B[,A]` (default: `255,0,0,255`)
+- `--threads N` (parallel sprite decode/blit when sprite rectangles do not overlap)
 
 Example:
 
