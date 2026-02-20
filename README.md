@@ -131,7 +131,7 @@ Each `[profile name]` section can define:
 - `max_width` and `max_height` (optional atlas limits)
 - `padding` (integer >= 0)
 - `max_combinations` (integer >= 0)
-- `scale` (number > 0)
+- `scale` (number > 0 and <= 1)
 - `trim_transparent=true|false`
 - `threads` (integer > 0)
 
@@ -150,7 +150,10 @@ Examples (concept):
 - `--optimize gpu|space`
 - `--padding N` (default: `0`)
 - `--max-combinations N` (default: `0` = auto/unlimited; caps compact candidate trials)
-- `--scale F` (default: `1`, for example `0.5` for half-size output)
+- `--source-resolution WxH` (must be used with `--target-resolution WxH`; format like `800x600`)
+- `--target-resolution WxH` (must be used with `--source-resolution WxH`; format like `800x600`)
+- `--resolution-reference largest|smallest` (default: `largest`; picks which axis ratio drives resolution scaling)
+- `--scale F` (default: `1`, valid range: `(0, 1]`; applies before resolution mapping)
 - `--trim-transparent` / `--no-trim-transparent`
 - `--max-width N` / `--max-height N` (optional atlas limits)
 - `--threads N` (override worker count for compact profile search; default: auto)
@@ -164,7 +167,10 @@ Layout caching:
 Why these options help:
 
 - `--padding N`: avoids texture bleeding/artifacts from sampling and subpixel math.
-- `--scale F`: generate smaller atlases for lower-resolution targets (for example mobile variants).
+- `--source-resolution` + `--target-resolution`: compute a ratio from width/height and choose by `--resolution-reference`:
+  - `largest`: `max(target_w/source_w, target_h/source_h)` (default)
+  - `smallest`: `min(target_w/source_w, target_h/source_h)`
+- `--scale F`: normalize intentionally oversized source sprites before target resolution mapping.
 - `--trim-transparent`: removes empty borders to reduce atlas usage.
 - `--max-width/--max-height`: enforce hardware/platform texture limits.
 - `spratpack --frame-lines`: visual debug of sprite bounds, spacing, and overlaps.
@@ -230,6 +236,15 @@ Scale recipe (smaller output for lower resolutions):
 ```sh
 ./spratlayout ./frames --profile mobile --scale 0.5 > layout_mobile_half.txt
 ./spratpack < layout_mobile_half.txt > spritesheet_mobile_half.png
+```
+
+Resolution-aware scale recipe:
+
+```sh
+./spratlayout ./frames --profile mobile \
+  --source-resolution 3840x2160 --target-resolution 1920x1080 --scale 0.5 \
+  > layout_mobile_targeted.txt
+./spratpack < layout_mobile_targeted.txt > spritesheet_mobile_targeted.png
 ```
 
 The output format is:

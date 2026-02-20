@@ -51,6 +51,7 @@ std::string trim_copy(const std::string& s) {
 
 enum class Mode { POT, COMPACT, FAST };
 enum class OptimizeTarget { GPU, SPACE };
+enum class ResolutionReference { Largest, Smallest };
 
 struct ProfileDefinition {
     std::string name;
@@ -120,6 +121,22 @@ bool parse_optimize_target_from_string(const std::string& value, OptimizeTarget&
     return false;
 }
 
+bool parse_resolution_reference_from_string(const std::string& value,
+                                            ResolutionReference& out,
+                                            std::string& error) {
+    std::string lower = to_lower_copy(value);
+    if (lower == "largest") {
+        out = ResolutionReference::Largest;
+        return true;
+    }
+    if (lower == "smallest") {
+        out = ResolutionReference::Smallest;
+        return true;
+    }
+    error = "invalid resolution reference '" + value + "'";
+    return false;
+}
+
 bool parse_positive_int(const std::string& value, int& out) {
     try {
         size_t idx = 0;
@@ -159,11 +176,11 @@ bool parse_positive_uint(const std::string& value, unsigned int& out) {
     return true;
 }
 
-bool parse_positive_double(const std::string& value, double& out) {
+bool parse_scale_factor(const std::string& value, double& out) {
     try {
         size_t idx = 0;
         double parsed = std::stod(value, &idx);
-        if (idx != value.size() || !std::isfinite(parsed) || parsed <= 0.0) {
+        if (idx != value.size() || !std::isfinite(parsed) || parsed <= 0.0 || parsed > 1.0) {
             return false;
         }
         out = parsed;
@@ -171,6 +188,26 @@ bool parse_positive_double(const std::string& value, double& out) {
     } catch (const std::exception&) {
         return false;
     }
+}
+
+bool parse_resolution(const std::string& value, int& out_width, int& out_height) {
+    if (value.empty()) {
+        return false;
+    }
+    const size_t sep = value.find('x');
+    if (sep == std::string::npos || sep == 0 || sep + 1 >= value.size()) {
+        return false;
+    }
+    if (value.find('x', sep + 1) != std::string::npos) {
+        return false;
+    }
+
+    const std::string width_str = value.substr(0, sep);
+    const std::string height_str = value.substr(sep + 1);
+    if (!parse_positive_int(width_str, out_width) || !parse_positive_int(height_str, out_height)) {
+        return false;
+    }
+    return true;
 }
 
 bool parse_bool_value(const std::string& value, bool& out) {
@@ -310,7 +347,7 @@ bool parse_profiles_config(std::istream& input,
             current->max_combinations = parsed_max_combinations;
         } else if (lower_key == "scale") {
             double parsed_scale = 0.0;
-            if (!parse_positive_double(value, parsed_scale)) {
+            if (!parse_scale_factor(value, parsed_scale)) {
                 error = "invalid scale '" + value + "' at line " + std::to_string(line_number);
                 return false;
             }
@@ -1762,7 +1799,9 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "Usage: spratlayout <folder> [--profile NAME] [--profiles-config PATH] "
                   << "[--mode compact|pot|fast] [--optimize gpu|space] [--max-width N] [--max-height N] "
-                  << "[--padding N] [--max-combinations N] [--scale F] [--trim-transparent|--no-trim-transparent] "
+                  << "[--padding N] [--max-combinations N] [--source-resolution WxH] [--target-resolution WxH] "
+                  << "[--resolution-reference largest|smallest] "
+                  << "[--scale F] [--trim-transparent|--no-trim-transparent] "
                   << "[--threads N]\n";
         return 1;
     }
@@ -1784,6 +1823,14 @@ int main(int argc, char** argv) {
     bool has_padding_override = false;
     int max_combinations = 0;
     bool has_max_combinations_override = false;
+    int source_resolution_width = 0;
+    int source_resolution_height = 0;
+    int target_resolution_width = 0;
+    int target_resolution_height = 0;
+    bool has_source_resolution = false;
+    bool has_target_resolution = false;
+    ResolutionReference resolution_reference = ResolutionReference::Largest;
+    bool has_resolution_reference_override = false;
     double scale = 1.0;
     bool has_scale_override = false;
     bool trim_transparent = false;
@@ -1873,16 +1920,35 @@ int main(int argc, char** argv) {
                 return 1;
             }
             has_max_combinations_override = true;
+        } else if (arg == "--source-resolution" && i + 1 < argc) {
+            std::string value = argv[++i];
+            if (!parse_resolution(value, source_resolution_width, source_resolution_height)) {
+                std::cerr << "Invalid source resolution value: " << value << "\n";
+                return 1;
+            }
+            has_source_resolution = true;
+        } else if (arg == "--target-resolution" && i + 1 < argc) {
+            std::string value = argv[++i];
+            if (!parse_resolution(value, target_resolution_width, target_resolution_height)) {
+                std::cerr << "Invalid target resolution value: " << value << "\n";
+                return 1;
+            }
+            has_target_resolution = true;
+        } else if (arg == "--resolution-reference" && i + 1 < argc) {
+            if (has_resolution_reference_override) {
+                std::cerr << "Error: --resolution-reference can only be provided once\n";
+                return 1;
+            }
+            std::string value = argv[++i];
+            std::string error;
+            if (!parse_resolution_reference_from_string(value, resolution_reference, error)) {
+                std::cerr << "Invalid resolution reference value: " << value << "\n";
+                return 1;
+            }
+            has_resolution_reference_override = true;
         } else if (arg == "--scale" && i + 1 < argc) {
             std::string value = argv[++i];
-            try {
-                size_t idx = 0;
-                scale = std::stod(value, &idx);
-                if (idx != value.size() || !std::isfinite(scale) || scale <= 0.0) {
-                    std::cerr << "Invalid scale value: " << value << "\n";
-                    return 1;
-                }
-            } catch (const std::exception&) {
+            if (!parse_scale_factor(value, scale)) {
                 std::cerr << "Invalid scale value: " << value << "\n";
                 return 1;
             }
@@ -2047,6 +2113,22 @@ int main(int argc, char** argv) {
         if (!has_threads_override && selected_profile.threads) {
             thread_limit = *selected_profile.threads;
         }
+    }
+
+    if (has_source_resolution != has_target_resolution) {
+        std::cerr << "Error: --source-resolution and --target-resolution must be provided together\n";
+        return 1;
+    }
+    if (has_source_resolution) {
+        const double scale_x =
+            static_cast<double>(target_resolution_width) / static_cast<double>(source_resolution_width);
+        const double scale_y =
+            static_cast<double>(target_resolution_height) / static_cast<double>(source_resolution_height);
+        const double resolution_scale =
+            (resolution_reference == ResolutionReference::Largest)
+                ? std::max(scale_x, scale_y)
+                : std::min(scale_x, scale_y);
+        scale *= resolution_scale;
     }
 
     const bool is_dir = fs::exists(folder) && fs::is_directory(folder);

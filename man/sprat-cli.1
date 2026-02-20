@@ -12,6 +12,9 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-max\-height\fR \fIN\fR]
 [\fB\-\-padding\fR \fIN\fR]
 [\fB\-\-max\-combinations\fR \fIN\fR]
+[\fB\-\-source\-resolution\fR \fIWxH\fR]
+[\fB\-\-target\-resolution\fR \fIWxH\fR]
+[\fB\-\-resolution\-reference\fR largest|smallest]
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
 [\fB\-\-no\-trim\-transparent\fR]
@@ -117,8 +120,17 @@ Extra pixels between packed sprites. Overrides profile value.
 \fB\-\-max\-combinations\fR \fIN\fR
 Maximum number of compact candidate combinations to test (\fB0\fR means auto/unlimited). Overrides profile value.
 .TP
+\fB\-\-source\-resolution\fR \fIWxH\fR
+Source design resolution baseline (for example \fB800x600\fR). Must be used together with \fB\-\-target\-resolution\fR.
+.TP
+\fB\-\-target\-resolution\fR \fIWxH\fR
+Target output resolution (for example \fB800x600\fR). Must be used together with \fB\-\-source\-resolution\fR.
+.TP
+\fB\-\-resolution\-reference\fR largest|smallest
+Choose which axis ratio drives source/target resolution scaling. Default: \fBlargest\fR.
+.TP
 \fB\-\-scale\fR \fIF\fR
-Scale factor applied to sprite dimensions. Overrides profile value.
+Pre-scale factor applied before source/target resolution mapping. Valid range: \fB0 < F <= 1\fR. Overrides profile value.
 .TP
 \fB\-\-trim\-transparent\fR
 Enable transparent-border trimming (overrides profile value).
@@ -139,7 +151,7 @@ Config keys available per profile section:
 .IP "\(bu" 2
 \fBpadding\fR, \fBmax_combinations\fR
 .IP "\(bu" 2
-\fBscale\fR, \fBtrim_transparent\fR, \fBthreads\fR
+\fBscale\fR (\fB0 < scale <= 1\fR), \fBtrim_transparent\fR, \fBthreads\fR
 .SS spratpack
 .TP
 \fB\-\-frame\-lines\fR
