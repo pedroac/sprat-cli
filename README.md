@@ -28,18 +28,10 @@ This project started after using TexturePacker and looking for free, open-source
 Build:
 
 ```sh
-cmake .
-make
+sh build.sh
 ```
 
-If `stb/` headers are missing and you want CMake to fetch them:
-
-```sh
-cmake -DSPRAT_DOWNLOAD_STB=ON -DSTB_REF=master .
-make
-```
-
-Generate layout first (most common workflow):
+Generate layout first:
 
 ```sh
 ./spratlayout ./frames > layout.txt
@@ -48,7 +40,7 @@ Generate layout first (most common workflow):
 Inspect layout text:
 
 ```sh
-head -n 20 layout.txt
+cat layout.txt
 ```
 
 Pack PNG from that layout:
@@ -75,35 +67,13 @@ Manual page:
 man ./man/sprat-cli.1
 ```
 
-## Build
-
-```sh
-cmake .
-make
-```
-
-This builds three binaries:
-
-- `spratlayout`
-- `spratpack`
-- `spratconvert`
+## Installation
 
 Install binaries, man page, and global profile config:
 
 ```sh
 sudo cmake --install .
 ```
-
-## Test
-
-Run the end-to-end pipeline test:
-
-```sh
-ctest --test-dir tests --output-on-failure
-```
-
-This test generates tiny PNG fixtures, runs `spratlayout` to produce layout text,
-then runs `spratpack` and verifies the output is a valid PNG.
 
 ## Workflow
 
@@ -172,51 +142,75 @@ Why these options help:
 - `--max-width/--max-height`: enforce hardware/platform texture limits.
 - `spratpack --frame-lines`: visual debug of sprite bounds, spacing, and overlaps.
 
-Example recipes:
+## Recipes
+
+### Compact Mode (GPU Optimized)
+
+Default behavior. Tries to keep the atlas square-ish but prioritizes width/height that fits well in GPU memory.
+
+!Compact GPU
 
 ```sh
-# 1) fast (default): quicker shelf-style packing
-./spratlayout ./frames > layout_fast_default.txt
-
-# 2) mobile: desktop behavior + default 2048x2048 atlas limits
-./spratlayout ./frames --profile mobile > layout_mobile.txt
-
-# 3) space: tighter area packing
-./spratlayout ./frames --profile space > layout_space.txt
-
-# 4) fast: quicker shelf-style packing
-./spratlayout ./frames --profile fast > layout_fast.txt
-
-# 5) legacy: POT-oriented output + default 1024x1024 limits
-./spratlayout ./frames --profile legacy > layout_legacy.txt
-
-# 6) css: shelf-style profile for CSS sprite workflows
-./spratlayout ./frames --profile css > layout_css.txt
+./spratlayout ./frames --mode compact --optimize gpu --padding 2 > layout.txt
+./spratpack < layout.txt > compact_gpu_pad2.png
 ```
+![compact gpu](README-assets/compact_gpu_pad2.png)
 
-Size/quality recipes:
+### Compact Mode (Space Optimized)
+
+Tries to minimize total area, regardless of aspect ratio.
 
 ```sh
-# Trim transparent borders before packing
-./spratlayout ./frames --profile desktop --trim-transparent > layout_trim.txt
-
-# Add 2px padding between sprites
-./spratlayout ./frames --profile desktop --padding 2 > layout_padding.txt
-
-# Hard atlas limits (max-width/max-height)
-./spratlayout ./frames --profile desktop --max-width 800 --max-height 600 > layout_max_800x600.txt
+./spratlayout ./frames --mode compact --optimize space --padding 2 > layout.txt
+./spratpack < layout.txt > compact_space.png
 ```
+![compact space](README-assets/compact_space_pad2.png)
 
-Rendering recipes with frame lines:
+### Fast Mode
+
+Uses a shelf packing algorithm. Much faster for huge datasets, but less efficient packing.
 
 ```sh
-# Draw sprite outlines on the packed sheet
-./spratpack --frame-lines --line-width 1 --line-color 255,0,0 < layout_desktop.txt > spritesheet_lines.png
-
-# End-to-end pipeline: layout + frame lines
-./spratlayout ./frames --profile desktop --trim-transparent --padding 2 | \
-  ./spratpack --frame-lines --line-width 2 --line-color 0,255,0 > spritesheet_pipeline_lines.png
+./spratlayout ./frames --mode fast --padding 2 > layout.txt
+./spratpack < layout.txt > fast.png
 ```
+![fast](README-assets/fast_pad2.png)
+
+### Power of Two (POT)
+
+Forces the output atlas to be a power of two (e.g., 512x512, 1024x512).
+
+```sh
+./spratlayout ./frames --mode pot --padding 2 > layout.txt
+./spratpack < layout.txt > pot.png
+```
+![pot](README-assets/pot_pad2.png)
+
+### Trimming Transparency
+
+Removes transparent pixels from sprite edges. `spratpack` can draw frame lines to visualize the trimmed bounds.
+
+```sh
+./spratlayout ./frames --trim-transparent --padding 2 > layout.txt
+./spratpack --frame-lines --line-color 0,255,0 < layout.txt > trim.png
+```
+![trim](README-assets/trim_pad2_lines.png)
+
+### Resolution Mapping
+
+Automatically scales sprites based on a target resolution. Useful for multi-platform builds (e.g., designing for 4K, building for 1080p).
+
+```sh
+# Scale = 1920 / 3840 = 0.5
+./spratlayout ./frames \
+  --source-resolution 3840x2160 \
+  --target-resolution 1920x1080 \
+  --padding 2 > layout.txt
+./spratpack < layout.txt > resolution.png
+```
+![resolutions](README-assets/res_3840x2160_1920x1080_pad2.png)
+
+## Benchmarking
 
 Trim benchmark (repeatable local comparison):
 
@@ -411,73 +405,9 @@ You can also pipe both commands directly:
 
 License for third-party art is defined by the asset author; verify terms before redistribution.
 
-## Image Samples
-
-To regenerate these images:
-
-```sh
-./scripts/regenerate-readme-assets.sh
-```
-
-What the script does:
-
-- Downloads `https://opengameart.org/sites/default/files/RobotFree.zip`
-- Extracts PNG frames into `README-assets/frames`
-- Reduces frame sizes with ImageMagick (`FRAME_MAX_SIZE`, default `64x64>`)
-- Generates spritesheets from those reduced frames (without resizing output sheets)
-- Generates one image per command in `Example recipes` (`recipe-01-...png` to `recipe-12-...png`)
+## Free Sprite Sources
 
 Sample asset source used in this page: https://opengameart.org/content/the-robot-free-sprite
-
-Recipe 1: Desktop (`./spratlayout ./frames --profile desktop > layout_desktop.txt`)
-
-![Recipe 1 Desktop](README-assets/recipe-01-desktop.png)
-
-Recipe 2: Mobile (`./spratlayout ./frames --profile mobile > layout_mobile.txt`)
-
-![Recipe 2 Mobile](README-assets/recipe-02-mobile.png)
-
-Recipe 3: Space (`./spratlayout ./frames --profile space > layout_space.txt`)
-
-![Recipe 3 Space](README-assets/recipe-03-space.png)
-
-Recipe 4: Fast (`./spratlayout ./frames --profile fast > layout_fast.txt`)
-
-![Recipe 4 Fast](README-assets/recipe-04-fast.png)
-
-Recipe 5: Legacy (`./spratlayout ./frames --profile legacy > layout_legacy.txt`)
-
-![Recipe 5 Legacy](README-assets/recipe-05-legacy.png)
-
-Recipe 6: CSS (`./spratlayout ./frames --profile css > layout_css.txt`)
-
-![Recipe 6 CSS](README-assets/recipe-06-css.png)
-
-Recipe 7: Trim (`./spratlayout ./frames --profile desktop --trim-transparent > layout_trim.txt`)
-
-![Recipe 7 Trim](README-assets/recipe-07-trim-transparent.png)
-
-Recipe 8: Padding (`./spratlayout ./frames --profile desktop --padding 2 > layout_padding.txt`)
-
-![Recipe 8 Padding](README-assets/recipe-08-padding-2.png)
-
-Recipe 9: Max 1024 (`./spratlayout ./frames --profile desktop --max-width 1024 --max-height 1024 > layout_1024.txt`)
-
-![Recipe 9 Max 1024](README-assets/recipe-09-max-1024.png)
-
-Recipe 10: Mobile Tuned (`./spratlayout ./frames --profile mobile --trim-transparent --padding 2 --max-width 2048 --max-height 2048 > layout_mobile_tuned.txt`)
-
-![Recipe 10 Mobile Tuned](README-assets/recipe-10-mobile-tuned.png)
-
-Recipe 11: Frame Lines (`./spratpack --frame-lines --line-width 1 --line-color 255,0,0 < layout_desktop.txt > spritesheet_lines.png`)
-
-![Recipe 11 Frame Lines](README-assets/recipe-11-frame-lines-red.png)
-
-Recipe 12: Pipeline Lines (`./spratlayout ./frames --profile desktop --trim-transparent --padding 2 | ./spratpack --frame-lines --line-width 2 --line-color 0,255,0 > spritesheet_pipeline_lines.png`)
-
-![Recipe 12 Pipeline Lines](README-assets/recipe-12-pipeline-lines-green.png)
-
-## Free Sprite Sources
 
 - https://kenney.nl/assets (CC0/public-domain-style game assets)
 - https://opengameart.org/ (mixed licenses, check each pack)

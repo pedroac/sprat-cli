@@ -56,4 +56,5 @@ export
 spratlayout
 spratpack
 spratconvert
-README-assets/snapshot_*.png
+README-assets/*
+!README-assets/*.png
