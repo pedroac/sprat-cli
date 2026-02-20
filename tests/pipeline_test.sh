@@ -22,6 +22,36 @@ EOF
 base64 -d "$tmp_dir/pixel.b64" > "$frames_dir/frame_a.png"
 cp "$frames_dir/frame_a.png" "$frames_dir/frame_b.png"
 
+# Isolate test from user configuration and provide required profiles
+mkdir -p "$tmp_dir/.config/sprat"
+cat > "$tmp_dir/.config/sprat/spratprofiles.cfg" <<EOF
+[profile fast]
+mode=fast
+
+[profile desktop]
+mode=compact
+optimize=gpu
+
+[profile mobile]
+mode=compact
+optimize=gpu
+max_width=2048
+max_height=2048
+
+[profile space]
+mode=compact
+optimize=space
+
+[profile legacy]
+mode=pot
+max_width=1024
+max_height=1024
+
+[profile css]
+mode=fast
+EOF
+export HOME="$tmp_dir"
+
 layout_file="$tmp_dir/layout.txt"
 default_layout_file="$tmp_dir/layout_default.txt"
 fast_layout_file="$tmp_dir/layout_fast.txt"

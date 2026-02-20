@@ -134,6 +134,9 @@ Each `[profile name]` section can define:
 - `scale` (number > 0 and <= 1)
 - `trim_transparent=true|false`
 - `threads` (integer > 0)
+- `source_resolution` (WxH)
+- `target_resolution` (WxH or `source`)
+- `resolution_reference=largest|smallest`
 
 Add new sections to define custom profiles and refer to them with `--profile NAME`. Profile values are defaults; command options override them per run.
 
@@ -150,9 +153,6 @@ Examples (concept):
 - `--optimize gpu|space`
 - `--padding N` (default: `0`)
 - `--max-combinations N` (default: `0` = auto/unlimited; caps compact candidate trials)
-- `--source-resolution WxH` (must be used with `--target-resolution WxH`; format like `800x600`)
-- `--target-resolution WxH` (must be used with `--source-resolution WxH`; format like `800x600`)
-- `--resolution-reference largest|smallest` (default: `largest`; picks which axis ratio drives resolution scaling)
 - `--scale F` (default: `1`, valid range: `(0, 1]`; applies before resolution mapping)
 - `--trim-transparent` / `--no-trim-transparent`
 - `--max-width N` / `--max-height N` (optional atlas limits)
@@ -167,9 +167,6 @@ Layout caching:
 Why these options help:
 
 - `--padding N`: avoids texture bleeding/artifacts from sampling and subpixel math.
-- `--source-resolution` + `--target-resolution`: compute a ratio from width/height and choose by `--resolution-reference`:
-  - `largest`: `max(target_w/source_w, target_h/source_h)` (default)
-  - `smallest`: `min(target_w/source_w, target_h/source_h)`
 - `--scale F`: normalize intentionally oversized source sprites before target resolution mapping.
 - `--trim-transparent`: removes empty borders to reduce atlas usage.
 - `--max-width/--max-height`: enforce hardware/platform texture limits.
@@ -207,11 +204,7 @@ Size/quality recipes:
 ./spratlayout ./frames --profile desktop --padding 2 > layout_padding.txt
 
 # Hard atlas limits (max-width/max-height)
-./spratlayout ./frames --profile desktop --max-width 1024 --max-height 1024 > layout_1024.txt
-
-# Combine trim + padding + explicit limits
-./spratlayout ./frames --profile mobile --trim-transparent --padding 2 \
-  --max-width 2048 --max-height 2048 > layout_mobile_tuned.txt
+./spratlayout ./frames --profile desktop --max-width 800 --max-height 600 > layout_max_800x600.txt
 ```
 
 Rendering recipes with frame lines:

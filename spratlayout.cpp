@@ -64,6 +64,9 @@ struct ProfileDefinition {
     std::optional<double> scale;
     std::optional<bool> trim_transparent;
     std::optional<unsigned int> threads;
+    std::optional<std::pair<int, int>> source_resolution;
+    std::optional<std::pair<int, int>> target_resolution;
+    std::optional<ResolutionReference> resolution_reference;
 };
 
 constexpr const char* k_profiles_config_filename = "spratprofiles.cfg";
@@ -366,6 +369,31 @@ bool parse_profiles_config(std::istream& input,
                 return false;
             }
             current->threads = parsed_threads;
+        } else if (lower_key == "source_resolution") {
+            int w = 0, h = 0;
+            if (!parse_resolution(value, w, h)) {
+                error = "invalid source_resolution '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->source_resolution = std::make_pair(w, h);
+        } else if (lower_key == "target_resolution") {
+            if (to_lower_copy(value) == "source") {
+                current->target_resolution = std::make_pair(-1, -1);
+            } else {
+                int w = 0, h = 0;
+                if (!parse_resolution(value, w, h)) {
+                    error = "invalid target_resolution '" + value + "' at line " + std::to_string(line_number);
+                    return false;
+                }
+                current->target_resolution = std::make_pair(w, h);
+            }
+        } else if (lower_key == "resolution_reference") {
+            ResolutionReference ref;
+            if (!parse_resolution_reference_from_string(value, ref, error)) {
+                error += " at line " + std::to_string(line_number);
+                return false;
+            }
+            current->resolution_reference = ref;
         } else {
             error = "unknown key '" + key + "' at line " + std::to_string(line_number);
             return false;
@@ -1771,11 +1799,11 @@ bool pick_better_layout_candidate(
         if (candidate_max_side != best_max_side) {
             return candidate_max_side < best_max_side;
         }
-        if (candidate_aspect_delta != best_aspect_delta) {
-            return candidate_aspect_delta < best_aspect_delta;
-        }
         if (candidate_area != best_area) {
             return candidate_area < best_area;
+        }
+        if (candidate_aspect_delta != best_aspect_delta) {
+            return candidate_aspect_delta < best_aspect_delta;
         }
         return candidate_w < best_w;
     }
@@ -2112,6 +2140,28 @@ int main(int argc, char** argv) {
         }
         if (!has_threads_override && selected_profile.threads) {
             thread_limit = *selected_profile.threads;
+        }
+        if (!has_source_resolution && selected_profile.source_resolution) {
+            source_resolution_width = selected_profile.source_resolution->first;
+            source_resolution_height = selected_profile.source_resolution->second;
+            has_source_resolution = true;
+        }
+        if (!has_target_resolution && selected_profile.target_resolution) {
+            if (selected_profile.target_resolution->first == -1 &&
+                selected_profile.target_resolution->second == -1) {
+                if (has_source_resolution) {
+                    target_resolution_width = source_resolution_width;
+                    target_resolution_height = source_resolution_height;
+                    has_target_resolution = true;
+                }
+            } else {
+                target_resolution_width = selected_profile.target_resolution->first;
+                target_resolution_height = selected_profile.target_resolution->second;
+                has_target_resolution = true;
+            }
+        }
+        if (!has_resolution_reference_override && selected_profile.resolution_reference) {
+            resolution_reference = *selected_profile.resolution_reference;
         }
     }
 

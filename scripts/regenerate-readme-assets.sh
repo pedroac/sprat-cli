@@ -1,143 +1,86 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SPRATLAYOUT_BIN="${SPRATLAYOUT_BIN:-$ROOT_DIR/spratlayout}"
-SPRATPACK_BIN="${SPRATPACK_BIN:-$ROOT_DIR/spratpack}"
-OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/README-assets}"
-FRAMES_DIR="${FRAMES_DIR:-$OUTPUT_DIR/frames}"
-ROBOTFREE_ZIP_URL="${ROBOTFREE_ZIP_URL:-https://opengameart.org/sites/default/files/RobotFree.zip}"
-FRAME_MAX_SIZE="${FRAME_MAX_SIZE:-64x64>}"
+# Configuration
+ASSET_URL="https://opengameart.org/sites/default/files/RobotFree.zip"
+ASSET_ZIP="RobotFree.zip"
+ASSET_DIR="README-assets"
+FRAMES_DIR="$ASSET_DIR/frames"
+FRAME_MAX_SIZE="64x64>"
 
-if [ ! -x "$SPRATLAYOUT_BIN" ]; then
-    echo "Missing executable: $SPRATLAYOUT_BIN" >&2
-    echo "Build first (for example: cmake --build .)" >&2
+# Ensure directories exist
+mkdir -p "$ASSET_DIR"
+mkdir -p "$FRAMES_DIR"
+
+# Download assets
+if [ ! -f "$ASSET_DIR/$ASSET_ZIP" ]; then
+    echo "Downloading assets..."
+    curl -L -o "$ASSET_DIR/$ASSET_ZIP" "$ASSET_URL"
+fi
+
+# Extract and process frames
+if [ -z "$(ls -A "$FRAMES_DIR")" ]; then
+    echo "Extracting and processing frames..."
+    unzip -j -o "$ASSET_DIR/$ASSET_ZIP" "png/*" -d "$FRAMES_DIR"
+    
+    # Resize frames to make spritesheets manageable for README
+    # Requires ImageMagick
+    mogrify -resize "$FRAME_MAX_SIZE" "$FRAMES_DIR"/*.png
+fi
+
+# Build paths
+SPRATLAYOUT="./build/spratlayout"
+SPRATPACK="./build/spratpack"
+PROFILES_CONFIG="./spratprofiles.cfg"
+
+if [ ! -f "$SPRATLAYOUT" ] || [ ! -f "$SPRATPACK" ]; then
+    echo "Binaries not found. Please build sprat-cli first."
     exit 1
 fi
 
-if [ ! -x "$SPRATPACK_BIN" ]; then
-    echo "Missing executable: $SPRATPACK_BIN" >&2
-    echo "Build first (for example: cmake --build .)" >&2
-    exit 1
-fi
+echo "Generating recipes..."
 
-mkdir -p "$OUTPUT_DIR" "$FRAMES_DIR"
+# Recipe 1: Desktop (Default)
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile desktop > "$ASSET_DIR/layout_desktop.txt"
+$SPRATPACK < "$ASSET_DIR/layout_desktop.txt" > "$ASSET_DIR/recipe-01-desktop.png"
 
-if command -v magick >/dev/null 2>&1; then
-    IM_CMD=(magick)
-elif command -v convert >/dev/null 2>&1; then
-    IM_CMD=(convert)
-else
-    echo "ImageMagick not found. Install 'magick' (preferred) or 'convert'." >&2
-    exit 1
-fi
+# Recipe 2: Mobile
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile mobile > "$ASSET_DIR/layout_mobile.txt"
+$SPRATPACK < "$ASSET_DIR/layout_mobile.txt" > "$ASSET_DIR/recipe-02-mobile.png"
 
-if command -v curl >/dev/null 2>&1; then
-    DOWNLOAD_WITH="curl"
-elif command -v wget >/dev/null 2>&1; then
-    DOWNLOAD_WITH="wget"
-else
-    echo "Downloader not found. Install 'curl' or 'wget'." >&2
-    exit 1
-fi
+# Recipe 3: Space (Optimized for space)
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile space > "$ASSET_DIR/layout_space.txt"
+$SPRATPACK < "$ASSET_DIR/layout_space.txt" > "$ASSET_DIR/recipe-03-space.png"
 
-if ! command -v unzip >/dev/null 2>&1; then
-    echo "Missing dependency: unzip" >&2
-    exit 1
-fi
+# Recipe 4: Fast
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile fast > "$ASSET_DIR/layout_fast.txt"
+$SPRATPACK < "$ASSET_DIR/layout_fast.txt" > "$ASSET_DIR/recipe-04-fast.png"
 
-tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT
+# Recipe 5: Legacy (POT)
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile legacy > "$ASSET_DIR/layout_legacy.txt"
+$SPRATPACK < "$ASSET_DIR/layout_legacy.txt" > "$ASSET_DIR/recipe-05-legacy.png"
 
-zip_path="$tmp_dir/RobotFree.zip"
-extract_dir="$tmp_dir/extracted"
-mkdir -p "$extract_dir"
+# Recipe 6: CSS
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile css > "$ASSET_DIR/layout_css.txt"
+$SPRATPACK < "$ASSET_DIR/layout_css.txt" > "$ASSET_DIR/recipe-06-css.png"
 
-echo "Downloading source zip..."
-if [ "$DOWNLOAD_WITH" = "curl" ]; then
-    curl -fL --retry 3 "$ROBOTFREE_ZIP_URL" -o "$zip_path"
-else
-    wget -O "$zip_path" "$ROBOTFREE_ZIP_URL"
-fi
+# Recipe 7: Trim Transparent
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile desktop --trim-transparent > "$ASSET_DIR/layout_trim.txt"
+$SPRATPACK < "$ASSET_DIR/layout_trim.txt" > "$ASSET_DIR/recipe-07-trim-transparent.png"
 
-echo "Extracting source zip..."
-unzip -q -o "$zip_path" -d "$extract_dir"
+# Recipe 8: Padding
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile desktop --padding 2 > "$ASSET_DIR/layout_padding.txt"
+$SPRATPACK < "$ASSET_DIR/layout_padding.txt" > "$ASSET_DIR/recipe-08-padding-2.png"
 
-echo "Reducing source frames into $FRAMES_DIR..."
-find "$FRAMES_DIR" -maxdepth 1 -type f -iname '*.png' -delete
+# Recipe 9: Max 800x600 (Hard limits)
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile desktop --max-width 800 --max-height 600 > "$ASSET_DIR/layout_max_800x600.txt"
+$SPRATPACK < "$ASSET_DIR/layout_max_800x600.txt" > "$ASSET_DIR/recipe-09-max-800x600.png"
 
-frame_count=0
-while IFS= read -r -d '' src_png; do
-    out_png="$FRAMES_DIR/$(basename "$src_png")"
-    "${IM_CMD[@]}" "$src_png" \
-        -filter point \
-        -resize "$FRAME_MAX_SIZE" \
-        -strip \
-        -define png:compression-level=9 \
-        "$out_png"
-    frame_count=$((frame_count + 1))
-done < <(find "$extract_dir" -type f -iname '*.png' -print0 | sort -z)
+# Recipe 10: Frame Lines
+$SPRATPACK --frame-lines --line-width 1 --line-color 255,0,0 < "$ASSET_DIR/layout_desktop.txt" > "$ASSET_DIR/recipe-10-frame-lines-red.png"
 
-if [ "$frame_count" -eq 0 ]; then
-    echo "No PNG frames found in downloaded archive." >&2
-    exit 1
-fi
+# Recipe 11: Pipeline with Lines
+$SPRATLAYOUT "$FRAMES_DIR" --profiles-config "$PROFILES_CONFIG" --profile desktop --trim-transparent --padding 2 | \
+  $SPRATPACK --frame-lines --line-width 2 --line-color 0,255,0 > "$ASSET_DIR/recipe-11-pipeline-lines-green.png"
 
-render_sample() {
-    local output_name="$1"
-    shift
-
-    local layout_tmp
-    local image_tmp
-    layout_tmp="$(mktemp)"
-    image_tmp="$(mktemp --suffix=.png)"
-
-    "$SPRATLAYOUT_BIN" "$FRAMES_DIR" "$@" > "$layout_tmp"
-    "$SPRATPACK_BIN" < "$layout_tmp" > "$image_tmp"
-
-    mv "$image_tmp" "$OUTPUT_DIR/$output_name"
-    rm -f "$layout_tmp"
-    echo "Wrote $OUTPUT_DIR/$output_name"
-}
-
-render_sample_with_frame_lines() {
-    local output_name="$1"
-    shift
-
-    local layout_tmp
-    local image_tmp
-    layout_tmp="$(mktemp)"
-    image_tmp="$(mktemp --suffix=.png)"
-
-    "$SPRATLAYOUT_BIN" "$FRAMES_DIR" "$@" > "$layout_tmp"
-    "$SPRATPACK_BIN" --frame-lines < "$layout_tmp" > "$image_tmp"
-
-    mv "$image_tmp" "$OUTPUT_DIR/$output_name"
-    rm -f "$layout_tmp"
-    echo "Wrote $OUTPUT_DIR/$output_name"
-}
-
-# Example recipes: profile recipes
-render_sample "recipe-01-desktop.png" --profile desktop
-render_sample "recipe-02-mobile.png" --profile mobile
-render_sample "recipe-03-space.png" --profile space
-render_sample "recipe-04-fast.png" --profile fast
-render_sample "recipe-05-legacy.png" --profile legacy
-render_sample "recipe-06-css.png" --profile css
-
-# Example recipes: size/quality recipes
-render_sample "recipe-07-trim-transparent.png" --profile desktop --trim-transparent
-render_sample "recipe-08-padding-2.png" --profile desktop --padding 2
-render_sample "recipe-09-max-1024.png" --profile desktop --max-width 1024 --max-height 1024
-render_sample "recipe-10-mobile-tuned.png" --profile mobile --trim-transparent --padding 2 --max-width 2048 --max-height 2048
-
-# Example recipes: rendering recipes with frame lines
-render_sample_with_frame_lines "recipe-11-frame-lines-red.png" --profile desktop
-
-layout_tmp="$(mktemp)"
-image_tmp="$(mktemp --suffix=.png)"
-"$SPRATLAYOUT_BIN" "$FRAMES_DIR" --profile desktop --trim-transparent --padding 2 > "$layout_tmp"
-"$SPRATPACK_BIN" --frame-lines --line-width 2 --line-color 0,255,0 < "$layout_tmp" > "$image_tmp"
-mv "$image_tmp" "$OUTPUT_DIR/recipe-12-pipeline-lines-green.png"
-rm -f "$layout_tmp"
-echo "Wrote $OUTPUT_DIR/recipe-12-pipeline-lines-green.png"
+echo "Done."

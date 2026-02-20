@@ -1,0 +1,94 @@
+atlas 512,512
+scale 1
+sprite "README-assets/frames/Muzzle_004.png" 0,0 4,64 1,0 0,0
+sprite "README-assets/frames/Bullet_001.png" 4,0 63,52 0,0 1,0
+sprite "README-assets/frames/Bullet_000.png" 67,0 63,52 0,0 1,0
+sprite "README-assets/frames/Bullet_003.png" 130,0 60,52 4,0 0,0
+sprite "README-assets/frames/Bullet_002.png" 190,0 60,52 4,0 0,0
+sprite "README-assets/frames/Bullet_004.png" 250,0 59,49 5,2 0,1
+sprite "README-assets/frames/Melee (6).png" 0,64 37,58 6,1 21,4
+sprite "README-assets/frames/Dead (7).png" 309,0 58,27 2,29 4,3
+sprite "README-assets/frames/Dead (8).png" 367,0 58,25 3,31 3,3
+sprite "README-assets/frames/Dead (10).png" 425,0 58,25 3,31 3,3
+sprite "README-assets/frames/Dead (9).png" 37,64 58,25 3,31 3,3
+sprite "README-assets/frames/Dead (6).png" 37,89 57,32 0,24 7,3
+sprite "README-assets/frames/RunShoot (6).png" 0,122 42,56 12,6 10,1
+sprite "README-assets/frames/RunShoot (2).png" 42,122 41,56 14,6 9,1
+sprite "README-assets/frames/Jump (9).png" 83,122 40,56 11,7 13,0
+sprite "README-assets/frames/Run (6).png" 123,122 38,56 12,6 14,1
+sprite "README-assets/frames/Jump (10).png" 161,122 37,56 15,7 12,0
+sprite "README-assets/frames/Run (2).png" 198,122 28,56 14,6 22,1
+sprite "README-assets/frames/RunShoot (1).png" 226,122 38,55 17,6 9,2
+sprite "README-assets/frames/Run (1).png" 264,122 28,55 17,6 19,2
+sprite "README-assets/frames/RunShoot (4).png" 292,122 44,54 11,6 9,3
+sprite "README-assets/frames/RunShoot (8).png" 336,122 40,54 15,6 9,3
+sprite "README-assets/frames/RunShoot (5).png" 376,122 40,54 15,6 9,3
+sprite "README-assets/frames/Jump (2).png" 416,122 36,54 15,7 13,2
+sprite "README-assets/frames/Run (4).png" 452,122 35,54 11,6 18,3
+sprite "README-assets/frames/Run (8).png" 0,178 35,54 15,6 14,3
+sprite "README-assets/frames/Run (5).png" 35,178 34,54 15,6 15,3
+sprite "README-assets/frames/Melee (4).png" 69,178 53,52 10,7 1,4
+sprite "README-assets/frames/JumpMelee (4).png" 122,178 53,51 8,6 3,6
+sprite "README-assets/frames/Melee (5).png" 0,232 46,53 7,6 11,4
+sprite "README-assets/frames/RunShoot (7).png" 46,232 45,53 9,6 10,4
+sprite "README-assets/frames/Jump (7).png" 91,232 43,53 8,7 13,3
+sprite "README-assets/frames/Jump (8).png" 134,232 43,53 7,7 14,3
+sprite "README-assets/frames/RunShoot (3).png" 177,232 41,53 13,6 10,4
+sprite "README-assets/frames/Run (7).png" 218,232 41,53 9,6 14,4
+sprite "README-assets/frames/RunShoot (9).png" 259,232 39,53 14,6 11,4
+sprite "README-assets/frames/Shoot (4).png" 298,232 38,53 14,6 12,4
+sprite "README-assets/frames/Shoot (1).png" 336,232 38,53 12,6 14,4
+sprite "README-assets/frames/Melee (8).png" 374,232 38,53 13,6 13,4
+sprite "README-assets/frames/Dead (2).png" 412,232 37,53 3,6 24,0
+sprite "README-assets/frames/Shoot (2).png" 449,232 37,53 11,6 16,4
+sprite "README-assets/frames/Shoot (3).png" 0,285 37,53 13,6 14,4
+sprite "README-assets/frames/Run (3).png" 37,285 36,53 13,6 15,4
+sprite "README-assets/frames/Dead (5).png" 175,178 53,35 1,20 10,4
+sprite "README-assets/frames/Melee (1).png" 73,285 32,53 13,6 19,4
+sprite "README-assets/frames/Jump (1).png" 105,285 32,53 18,7 14,3
+sprite "README-assets/frames/Idle (1).png" 137,285 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (7).png" 168,285 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (10).png" 199,285 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (8).png" 230,285 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (2).png" 261,285 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (9).png" 292,285 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (3).png" 323,285 31,53 14,6 19,4
+sprite "README-assets/frames/Melee (7).png" 354,285 36,52 8,7 20,4
+sprite "README-assets/frames/Dead (1).png" 390,285 32,52 3,4 29,3
+sprite "README-assets/frames/Idle (6).png" 422,285 31,52 14,7 19,4
+sprite "README-assets/frames/Idle (4).png" 453,285 31,52 14,7 19,4
+sprite "README-assets/frames/Idle (5).png" 0,338 31,52 14,7 19,4
+sprite "README-assets/frames/Melee (3).png" 31,338 47,51 14,8 3,4
+sprite "README-assets/frames/Jump (3).png" 78,338 38,51 11,6 15,6
+sprite "README-assets/frames/JumpMelee (5).png" 116,338 49,50 8,6 7,7
+sprite "README-assets/frames/JumpMelee (3).png" 165,338 46,50 11,7 7,6
+sprite "README-assets/frames/JumpMelee (6).png" 211,338 46,50 7,6 11,7
+sprite "README-assets/frames/JumpMelee (8).png" 257,338 41,50 13,7 10,6
+sprite "README-assets/frames/JumpShoot (5).png" 298,338 41,50 11,7 12,6
+sprite "README-assets/frames/JumpShoot (1).png" 339,338 41,50 12,7 11,6
+sprite "README-assets/frames/JumpShoot (4).png" 380,338 40,50 10,7 14,6
+sprite "README-assets/frames/JumpMelee (2).png" 420,338 37,50 13,7 14,6
+sprite "README-assets/frames/JumpMelee (7).png" 457,338 41,49 12,7 11,7
+sprite "README-assets/frames/JumpShoot (3).png" 0,390 41,49 9,7 14,7
+sprite "README-assets/frames/JumpShoot (2).png" 41,390 40,49 10,7 14,7
+sprite "README-assets/frames/Jump (4).png" 81,390 39,49 10,7 15,7
+sprite "README-assets/frames/JumpMelee (1).png" 120,390 35,49 14,8 15,6
+sprite "README-assets/frames/Melee (2).png" 155,390 40,48 14,11 10,4
+sprite "README-assets/frames/Jump (5).png" 195,390 40,48 9,7 15,8
+sprite "README-assets/frames/Dead (4).png" 235,390 48,40 2,15 14,4
+sprite "README-assets/frames/Muzzle_003.png" 487,122 5,47 0,8 0,9
+sprite "README-assets/frames/Jump (6).png" 0,439 42,46 9,7 13,10
+sprite "README-assets/frames/Dead (3).png" 42,439 42,45 3,10 19,4
+sprite "README-assets/frames/Slide (3).png" 283,390 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (9).png" 328,390 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (1).png" 373,390 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (2).png" 418,390 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (8).png" 463,390 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (10).png" 84,439 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (7).png" 129,439 44,40 5,19 15,4
+sprite "README-assets/frames/Slide (4).png" 173,439 44,40 5,19 15,4
+sprite "README-assets/frames/Slide (5).png" 217,439 44,40 5,19 15,4
+sprite "README-assets/frames/Slide (6).png" 261,439 44,40 5,19 15,4
+sprite "README-assets/frames/Muzzle_002.png" 492,122 5,37 0,12 0,15
+sprite "README-assets/frames/Muzzle_000.png" 94,89 4,29 1,15 0,20
+sprite "README-assets/frames/Muzzle_001.png" 98,89 4,29 1,15 0,20

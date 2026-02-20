@@ -1,0 +1,94 @@
+atlas 417,455
+scale 1
+sprite "README-assets/frames/Muzzle_004.png" 0,0 4,64 1,0 0,0
+sprite "README-assets/frames/Melee (6).png" 4,0 37,58 6,1 21,4
+sprite "README-assets/frames/RunShoot (6).png" 41,0 42,56 12,6 10,1
+sprite "README-assets/frames/RunShoot (2).png" 83,0 41,56 14,6 9,1
+sprite "README-assets/frames/Jump (9).png" 124,0 40,56 11,7 13,0
+sprite "README-assets/frames/Run (6).png" 164,0 38,56 12,6 14,1
+sprite "README-assets/frames/Jump (10).png" 202,0 37,56 15,7 12,0
+sprite "README-assets/frames/Run (2).png" 239,0 28,56 14,6 22,1
+sprite "README-assets/frames/RunShoot (1).png" 267,0 38,55 17,6 9,2
+sprite "README-assets/frames/Run (1).png" 305,0 28,55 17,6 19,2
+sprite "README-assets/frames/RunShoot (4).png" 333,0 44,54 11,6 9,3
+sprite "README-assets/frames/RunShoot (8).png" 377,0 40,54 15,6 9,3
+sprite "README-assets/frames/RunShoot (5).png" 0,64 40,54 15,6 9,3
+sprite "README-assets/frames/Jump (2).png" 40,64 36,54 15,7 13,2
+sprite "README-assets/frames/Run (4).png" 76,64 35,54 11,6 18,3
+sprite "README-assets/frames/Run (8).png" 111,64 35,54 15,6 14,3
+sprite "README-assets/frames/Run (5).png" 146,64 34,54 15,6 15,3
+sprite "README-assets/frames/Melee (5).png" 180,64 46,53 7,6 11,4
+sprite "README-assets/frames/RunShoot (7).png" 226,64 45,53 9,6 10,4
+sprite "README-assets/frames/Jump (7).png" 271,64 43,53 8,7 13,3
+sprite "README-assets/frames/Jump (8).png" 314,64 43,53 7,7 14,3
+sprite "README-assets/frames/Run (7).png" 357,64 41,53 9,6 14,4
+sprite "README-assets/frames/RunShoot (3).png" 0,118 41,53 13,6 10,4
+sprite "README-assets/frames/RunShoot (9).png" 41,118 39,53 14,6 11,4
+sprite "README-assets/frames/Melee (8).png" 80,118 38,53 13,6 13,4
+sprite "README-assets/frames/Shoot (1).png" 118,118 38,53 12,6 14,4
+sprite "README-assets/frames/Shoot (4).png" 156,118 38,53 14,6 12,4
+sprite "README-assets/frames/Shoot (2).png" 194,118 37,53 11,6 16,4
+sprite "README-assets/frames/Dead (2).png" 231,118 37,53 3,6 24,0
+sprite "README-assets/frames/Shoot (3).png" 268,118 37,53 13,6 14,4
+sprite "README-assets/frames/Run (3).png" 305,118 36,53 13,6 15,4
+sprite "README-assets/frames/Jump (1).png" 341,118 32,53 18,7 14,3
+sprite "README-assets/frames/Melee (1).png" 373,118 32,53 13,6 19,4
+sprite "README-assets/frames/Idle (9).png" 0,171 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (8).png" 31,171 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (3).png" 62,171 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (7).png" 93,171 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (1).png" 124,171 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (10).png" 155,171 31,53 14,6 19,4
+sprite "README-assets/frames/Idle (2).png" 186,171 31,53 14,6 19,4
+sprite "README-assets/frames/Bullet_001.png" 217,171 63,52 0,0 1,0
+sprite "README-assets/frames/Bullet_000.png" 280,171 63,52 0,0 1,0
+sprite "README-assets/frames/Bullet_002.png" 343,171 60,52 4,0 0,0
+sprite "README-assets/frames/Bullet_003.png" 0,224 60,52 4,0 0,0
+sprite "README-assets/frames/Melee (4).png" 60,224 53,52 10,7 1,4
+sprite "README-assets/frames/Melee (7).png" 113,224 36,52 8,7 20,4
+sprite "README-assets/frames/Dead (1).png" 149,224 32,52 3,4 29,3
+sprite "README-assets/frames/Idle (5).png" 181,224 31,52 14,7 19,4
+sprite "README-assets/frames/Idle (4).png" 212,224 31,52 14,7 19,4
+sprite "README-assets/frames/Idle (6).png" 243,224 31,52 14,7 19,4
+sprite "README-assets/frames/JumpMelee (4).png" 274,224 53,51 8,6 3,6
+sprite "README-assets/frames/Melee (3).png" 327,224 47,51 14,8 3,4
+sprite "README-assets/frames/Jump (3).png" 374,224 38,51 11,6 15,6
+sprite "README-assets/frames/JumpMelee (5).png" 0,276 49,50 8,6 7,7
+sprite "README-assets/frames/JumpMelee (6).png" 49,276 46,50 7,6 11,7
+sprite "README-assets/frames/JumpMelee (3).png" 95,276 46,50 11,7 7,6
+sprite "README-assets/frames/JumpMelee (8).png" 141,276 41,50 13,7 10,6
+sprite "README-assets/frames/JumpShoot (1).png" 182,276 41,50 12,7 11,6
+sprite "README-assets/frames/JumpShoot (5).png" 223,276 41,50 11,7 12,6
+sprite "README-assets/frames/JumpShoot (4).png" 264,276 40,50 10,7 14,6
+sprite "README-assets/frames/JumpMelee (2).png" 304,276 37,50 13,7 14,6
+sprite "README-assets/frames/Bullet_004.png" 341,276 59,49 5,2 0,1
+sprite "README-assets/frames/JumpMelee (7).png" 0,326 41,49 12,7 11,7
+sprite "README-assets/frames/JumpShoot (3).png" 41,326 41,49 9,7 14,7
+sprite "README-assets/frames/JumpShoot (2).png" 82,326 40,49 10,7 14,7
+sprite "README-assets/frames/Jump (4).png" 122,326 39,49 10,7 15,7
+sprite "README-assets/frames/JumpMelee (1).png" 161,326 35,49 14,8 15,6
+sprite "README-assets/frames/Jump (5).png" 196,326 40,48 9,7 15,8
+sprite "README-assets/frames/Melee (2).png" 236,326 40,48 14,11 10,4
+sprite "README-assets/frames/Muzzle_003.png" 276,326 5,47 0,8 0,9
+sprite "README-assets/frames/Jump (6).png" 281,326 42,46 9,7 13,10
+sprite "README-assets/frames/Dead (3).png" 323,326 42,45 3,10 19,4
+sprite "README-assets/frames/Dead (4).png" 365,326 48,40 2,15 14,4
+sprite "README-assets/frames/Slide (9).png" 0,375 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (8).png" 45,375 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (10).png" 90,375 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (3).png" 135,375 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (2).png" 180,375 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (1).png" 225,375 45,40 4,19 15,4
+sprite "README-assets/frames/Slide (5).png" 270,375 44,40 5,19 15,4
+sprite "README-assets/frames/Slide (4).png" 314,375 44,40 5,19 15,4
+sprite "README-assets/frames/Slide (7).png" 358,375 44,40 5,19 15,4
+sprite "README-assets/frames/Slide (6).png" 0,415 44,40 5,19 15,4
+sprite "README-assets/frames/Muzzle_002.png" 44,415 5,37 0,12 0,15
+sprite "README-assets/frames/Dead (5).png" 49,415 53,35 1,20 10,4
+sprite "README-assets/frames/Dead (6).png" 102,415 57,32 0,24 7,3
+sprite "README-assets/frames/Muzzle_001.png" 159,415 4,29 1,15 0,20
+sprite "README-assets/frames/Muzzle_000.png" 163,415 4,29 1,15 0,20
+sprite "README-assets/frames/Dead (7).png" 167,415 58,27 2,29 4,3
+sprite "README-assets/frames/Dead (9).png" 225,415 58,25 3,31 3,3
+sprite "README-assets/frames/Dead (10).png" 283,415 58,25 3,31 3,3
+sprite "README-assets/frames/Dead (8).png" 341,415 58,25 3,31 3,3
