@@ -519,6 +519,9 @@ bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
 }
 
 inline bool pixel_is_opaque(const unsigned char* rgba, int width, int x, int y) {
+    if (rgba == nullptr || width <= 0 || x < 0 || y < 0 || x >= width) {
+        return false;
+    }
     const size_t pixel_index = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
     const size_t alpha_index = pixel_index * static_cast<size_t>(4) + static_cast<size_t>(3);
     return rgba[alpha_index] != 0;
@@ -536,6 +539,11 @@ bool compute_trim_bounds(const unsigned char* rgba,
     max_x = -1;
     max_y = -1;
     if (w <= 0 || h <= 0 || rgba == nullptr) {
+        return false;
+    }
+
+    // Validate that the image dimensions are reasonable
+    if (w > 100000 || h > 100000) {
         return false;
     }
 
@@ -615,6 +623,9 @@ bool read_image_meta(const fs::path& path, ImageMeta& out) {
     if (ec) {
         return false;
     }
+    if (size > 1000000000) { // 1GB limit
+        return false;
+    }
     fs::file_time_type mtime = fs::last_write_time(path, ec);
     if (ec) {
         return false;
@@ -632,7 +643,7 @@ long long now_unix_seconds() {
 
 bool is_supported_image_extension(const fs::path& path) {
     std::string ext = path.extension().string();
-    if (ext.empty()) {
+    if (ext.empty() || ext.size() > 10) {
         return false;
     }
     std::transform(ext.begin(), ext.end(), ext.begin(),
@@ -646,6 +657,9 @@ bool is_supported_image_extension(const fs::path& path) {
 void prune_stale_cache_entries(std::unordered_map<std::string, ImageCacheEntry>& entries,
                                long long now_unix,
                                long long max_age_seconds) {
+    if (max_age_seconds < 0 || max_age_seconds > 31536000) { // 1 year limit
+        max_age_seconds = 86400; // default to 1 day
+    }
     for (auto it = entries.begin(); it != entries.end();) {
         const long long cached_at = it->second.cached_at_unix;
         if (cached_at <= 0 || cached_at > now_unix || (now_unix - cached_at) > max_age_seconds) {
@@ -695,7 +709,7 @@ bool load_image_cache(const fs::path& cache_path,
                 break;
             }
         }
-        if (entry.w <= 0 || entry.h <= 0) {
+        if (entry.w <= 0 || entry.h <= 0 || entry.w > 100000 || entry.h > 100000) {
             continue;
         }
         entry.trim_transparent = trim_flag != 0;
@@ -708,6 +722,10 @@ bool load_image_cache(const fs::path& cache_path,
 
 bool save_image_cache(const fs::path& cache_path,
                       const std::unordered_map<std::string, ImageCacheEntry>& entries) {
+    if (entries.size() > 10000) { // Limit cache size
+        return false;
+    }
+
     fs::path tmp = cache_path;
     tmp += ".tmp";
 
@@ -725,6 +743,9 @@ bool save_image_cache(const fs::path& cache_path,
             path = path.substr(0, path.size() - 2);
         }
         const ImageCacheEntry& e = kv.second;
+        if (e.w <= 0 || e.h <= 0 || e.w > 100000 || e.h > 100000) {
+            continue;
+        }
         out << std::quoted(path) << " "
             << (e.trim_transparent ? 1 : 0) << " "
             << e.file_size << " "
@@ -817,6 +838,9 @@ std::string to_hex_size_t(size_t value) {
 }
 
 bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds) {
+    if (max_age_seconds < 0 || max_age_seconds > 31536000) { // 1 year limit
+        return true;
+    }
     std::error_code ec;
     if (!fs::exists(path, ec) || ec) {
         return true;
