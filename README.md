@@ -1,31 +1,21 @@
 # sprat-cli
-Command-line sprite sheet generator.
+
+**The UNIX-way sprite sheet generator.**
 
 ![sprat-cli screenshot](README-assets/screenshot.png)
 
-## Motivation
+`sprat-cli` is a modular toolkit for generating sprite sheets (texture atlases) from the command line. Unlike monolithic GUI tools, it splits the packing process into discrete, pipeable commands. This makes it perfect for:
 
-This project started after using TexturePacker and looking for free, open-source CLI tools to support a sprite sheet generation pipeline.
+*   **CI/CD Pipelines**: Automate asset generation in your build process.
+*   **Shell Scripting**: Integrate naturally with `|`, `>`, and standard text tools.
+*   **Game Development**: Optimized packing algorithms for GPU memory.
+*   **Web & Apps**: Export to CSS, JSON, XML, or custom formats.
 
-## Principles
+---
 
-- Keep it simple.
-- Do one thing, and do it right.
-- Prioritize output-driven workflows.
-- Work naturally with `|` and `>`.
-- Keep dependencies minimal.
-- Automate setup during compilation when possible (for example, downloading dependencies).
-- Input flexibility: accept sprite frames of any size.
-- Prioritize generated image optimization for GPU usage over packing algorithm runtime.
-- Focus on usefulness.
-- No GUI: the CLI can later be used to build one.
-- Be usable in command lines, CI/CD, and Git-based pipelines.
-- Encourage AI-assisted workflows (for example, Codex) for faster iteration and maintenance.
-- Stay open source and free.
+## 🚀 Quick Start
 
-## Getting started
-
-Build:
+**Build and Install:**
 
 ```sh
 sh build.sh
@@ -55,10 +45,38 @@ Optional one-pipe run:
 ./spratlayout ./frames --trim-transparent --padding 2 | ./spratpack > spritesheet.png
 ```
 
+**New: Tar File Support**
+
+`spratlayout` now accepts tar archives as input. This is useful for bundling sprite assets or working with compressed archives.
+
+```sh
+# Regular tar file
+./spratlayout sprites.tar > layout.txt
+
+# Compressed tar files (gzip, bzip2, xz)
+./spratlayout sprites.tar.gz > layout.txt
+./spratlayout sprites.tar.bz2 > layout.txt
+./spratlayout sprites.tar.xz > layout.txt
+```
+
+The tool automatically extracts the archive to a temporary directory and processes all image files found within. Temporary directories are cleaned up automatically after processing.
+
 Convert layout to JSON/CSV/XML/CSS:
 
 ```sh
 ./spratconvert --transform json < layout.txt > layout.json
+```
+
+Detect sprite frames in spritesheets:
+
+```sh
+./spratframes --spratframes spritesheet.png > frames.spratframes
+```
+
+Extract sprites from spritesheets using frame coordinates:
+
+```sh
+./spratunpack spritesheet.png frames.spratframes output/
 ```
 
 Manual page:
@@ -452,7 +470,7 @@ High-impact contribution areas:
   - Release automation and artifact publication for multiple platforms.
 - GUI frontends:
   - Desktop/web/mobile wrappers around the CLI pipeline.
-  - Workflow-focused tools that call `spratlayout`, `spratpack`, and `spratconvert` under the hood.
+  - Workflow-focused tools that call the sprat-cli commands under the hood.
 - Engine/runtime integrations:
   - Importers/exporters and transform templates for specific game engines or frameworks.
   - Community-maintained presets and examples.

@@ -67,9 +67,18 @@ ensure_stb_header(stb_image_write.h)
 include_directories(${STB_DIR})
 
 # Binaries
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
+
 add_executable(spratlayout spratlayout.cpp)
+target_link_libraries(spratlayout ${LIBARCHIVE_LIBRARIES})
+target_include_directories(spratlayout PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 add_executable(spratpack spratpack.cpp)
 add_executable(spratconvert spratconvert.cpp)
+add_executable(spratframes spratframes.cpp)
+add_executable(spratunpack spratunpack.cpp)
+target_link_libraries(spratunpack ${LIBARCHIVE_LIBRARIES})
+target_include_directories(spratunpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(spratlayout PRIVATE
     SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")

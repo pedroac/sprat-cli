@@ -10,3 +10,4 @@ add_test(
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/convert_test.sh
             $<TARGET_FILE:spratconvert>
 )
+

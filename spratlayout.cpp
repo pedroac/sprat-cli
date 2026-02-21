@@ -26,6 +26,8 @@
 #include <unordered_set>
 #include <optional>
 #include <system_error>
+#include <archive.h>
+#include <archive_entry.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -652,6 +654,389 @@ bool is_supported_image_extension(const fs::path& path) {
            ext == ".tga" || ext == ".gif" || ext == ".psd" || ext == ".pic" ||
            ext == ".pnm" || ext == ".pgm" || ext == ".ppm" || ext == ".hdr" ||
            ext == ".webp";
+}
+
+enum class ContentType {
+    Directory,
+    ListFile,
+    TarFile,
+    CompressedTarFile,
+    Unknown
+};
+
+ContentType detect_content_type_from_fd(int fd) {
+    // Read first 512 bytes to detect content type
+    char buffer[512];
+    ssize_t bytes_read = read(fd, buffer, sizeof(buffer));
+    if (bytes_read < 257) {
+        return ContentType::Unknown;
+    }
+    
+    // Check for tar magic bytes at positions 257-262 (ustar signature)
+    if (bytes_read >= 263) {
+        const char* ustar_sig = buffer + 257;
+        if (strncmp(ustar_sig, "ustar", 5) == 0) {
+            return ContentType::TarFile;
+        }
+    }
+    
+    // Check for compression magic bytes at the beginning
+    if (bytes_read >= 2) {
+        // gzip magic: 0x1f 0x8b
+        if (static_cast<unsigned char>(buffer[0]) == 0x1f && 
+            static_cast<unsigned char>(buffer[1]) == 0x8b) {
+            return ContentType::CompressedTarFile;
+        }
+    }
+    
+    if (bytes_read >= 3) {
+        // bzip2 magic: "BZh"
+        if (buffer[0] == 'B' && buffer[1] == 'Z' && buffer[2] == 'h') {
+            return ContentType::CompressedTarFile;
+        }
+    }
+    
+    if (bytes_read >= 6) {
+        // xz magic: 0xfd 0x37 0x7a 0x58 0x5a 0x00
+        if (static_cast<unsigned char>(buffer[0]) == 0xfd &&
+            static_cast<unsigned char>(buffer[1]) == 0x37 &&
+            static_cast<unsigned char>(buffer[2]) == 0x7a &&
+            static_cast<unsigned char>(buffer[3]) == 0x58 &&
+            static_cast<unsigned char>(buffer[4]) == 0x5a &&
+            static_cast<unsigned char>(buffer[5]) == 0x00) {
+            return ContentType::CompressedTarFile;
+        }
+    }
+    
+    return ContentType::Unknown;
+}
+
+ContentType detect_content_type_from_path(const fs::path& path) {
+    const bool is_dir = fs::exists(path) && fs::is_directory(path);
+    const bool is_file = fs::exists(path) && fs::is_regular_file(path);
+    
+    if (is_dir) {
+        return ContentType::Directory;
+    }
+    if (!is_file) {
+        return ContentType::Unknown;
+    }
+    
+    // For files, check extension first for quick detection
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    
+    if (ext == ".tar") {
+        return ContentType::TarFile;
+    }
+    
+    std::string filename = path.filename().string();
+    std::transform(filename.begin(), filename.end(), filename.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    
+    // Check for compressed tar extensions
+    if (filename.find(".tar.gz") != std::string::npos ||
+        filename.find(".tar.bz2") != std::string::npos ||
+        filename.find(".tar.xz") != std::string::npos ||
+        filename.find(".tgz") != std::string::npos ||
+        filename.find(".tbz2") != std::string::npos ||
+        filename.find(".txz") != std::string::npos) {
+        return ContentType::CompressedTarFile;
+    }
+    
+    // For other files, assume list file
+    return ContentType::ListFile;
+}
+
+bool is_tar_file(const fs::path& path) {
+    return detect_content_type_from_path(path) == ContentType::TarFile;
+}
+
+bool is_compressed_tar_file(const fs::path& path) {
+    return detect_content_type_from_path(path) == ContentType::CompressedTarFile;
+}
+
+bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
+    struct archive* a = archive_read_new();
+    if (!a) {
+        std::cerr << "Error: Failed to create archive reader" << std::endl;
+        return false;
+    }
+    
+    // Enable all supported formats and compression
+    archive_read_support_format_all(a);
+    archive_read_support_filter_all(a);
+    
+    if (archive_read_open_filename(a, tar_path.string().c_str(), 10240) != ARCHIVE_OK) {
+        std::cerr << "Error: Failed to open tar file: " << archive_error_string(a) << std::endl;
+        archive_read_free(a);
+        return false;
+    }
+    
+    struct archive* ext = archive_write_disk_new();
+    if (!ext) {
+        std::cerr << "Error: Failed to create archive writer" << std::endl;
+        archive_read_free(a);
+        return false;
+    }
+    
+    archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
+    
+    int r;
+    struct archive_entry* entry;
+    
+    while (true) {
+        r = archive_read_next_header(a, &entry);
+        if (r == ARCHIVE_EOF) {
+            break;
+        }
+        if (r < ARCHIVE_OK) {
+            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << std::endl;
+            break;
+        }
+        
+        // Skip directories
+        if (archive_entry_filetype(entry) == AE_IFDIR) {
+            continue;
+        }
+        
+        // Get the filename
+        const char* filename = archive_entry_pathname(entry);
+        if (!filename) {
+            continue;
+        }
+        
+        // Extract to the correct path (preserving directory structure)
+        fs::path file_path(filename);
+        fs::path output_path = output_dir / file_path;
+        
+        // Create parent directory if needed
+        std::error_code ec;
+        fs::create_directories(output_path.parent_path(), ec);
+        
+        // Set the extraction path
+        archive_entry_set_pathname(entry, output_path.string().c_str());
+        
+        // Extract the file
+        r = archive_write_header(ext, entry);
+        if (r < ARCHIVE_OK) {
+            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << std::endl;
+        } else {
+            const void* buff;
+            size_t size;
+            la_int64_t offset;
+            
+            while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
+                r = archive_write_data_block(ext, buff, size, offset);
+                if (r < ARCHIVE_OK) {
+                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << std::endl;
+                    break;
+                }
+            }
+            
+            if (r < ARCHIVE_OK) {
+                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << std::endl;
+            }
+        }
+        
+        r = archive_write_finish_entry(ext);
+        if (r < ARCHIVE_OK) {
+            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << std::endl;
+        }
+    }
+    
+    archive_read_close(a);
+    archive_read_free(a);
+    archive_write_close(ext);
+    archive_write_free(ext);
+    
+    return true;
+}
+
+bool extract_tar_from_stdin(const fs::path& output_dir) {
+    struct archive* a = archive_read_new();
+    if (!a) {
+        std::cerr << "Error: Failed to create archive reader" << std::endl;
+        return false;
+    }
+    
+    // Enable all supported formats and compression
+    archive_read_support_format_all(a);
+    archive_read_support_filter_all(a);
+    
+    // Open from stdin
+    if (archive_read_open_fd(a, STDIN_FILENO, 10240) != ARCHIVE_OK) {
+        std::cerr << "Error: Failed to open stdin for tar extraction: " << archive_error_string(a) << std::endl;
+        archive_read_free(a);
+        return false;
+    }
+    
+    struct archive* ext = archive_write_disk_new();
+    if (!ext) {
+        std::cerr << "Error: Failed to create archive writer" << std::endl;
+        archive_read_free(a);
+        return false;
+    }
+    
+    archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
+    
+    int r;
+    struct archive_entry* entry;
+    
+    while (true) {
+        r = archive_read_next_header(a, &entry);
+        if (r == ARCHIVE_EOF) {
+            break;
+        }
+        if (r < ARCHIVE_OK) {
+            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << std::endl;
+            break;
+        }
+        
+        // Skip directories
+        if (archive_entry_filetype(entry) == AE_IFDIR) {
+            continue;
+        }
+        
+        // Get the filename
+        const char* filename = archive_entry_pathname(entry);
+        if (!filename) {
+            continue;
+        }
+        
+        // Extract to the correct path (preserving directory structure)
+        fs::path file_path(filename);
+        fs::path output_path = output_dir / file_path;
+        
+        // Create parent directory if needed
+        std::error_code ec;
+        fs::create_directories(output_path.parent_path(), ec);
+        
+        // Set the extraction path
+        archive_entry_set_pathname(entry, output_path.string().c_str());
+        
+        // Extract the file
+        r = archive_write_header(ext, entry);
+        if (r < ARCHIVE_OK) {
+            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << std::endl;
+        } else {
+            const void* buff;
+            size_t size;
+            la_int64_t offset;
+            
+            while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
+                r = archive_write_data_block(ext, buff, size, offset);
+                if (r < ARCHIVE_OK) {
+                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << std::endl;
+                    break;
+                }
+            }
+            
+            if (r < ARCHIVE_OK) {
+                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << std::endl;
+            }
+        }
+        
+        r = archive_write_finish_entry(ext);
+        if (r < ARCHIVE_OK) {
+            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << std::endl;
+        }
+    }
+    
+    archive_read_close(a);
+    archive_read_free(a);
+    archive_write_close(ext);
+    archive_write_free(ext);
+    
+    return true;
+}
+
+enum class InputType {
+    Directory,
+    ListFile,
+    TarFile,
+    StdinTar
+};
+
+struct InputContext {
+    InputType type;
+    fs::path working_folder;
+    std::vector<fs::path> temp_dirs_to_cleanup;
+};
+
+bool detect_and_extract_tar_content(const fs::path& input_path, InputContext& out_context) {
+    const bool is_dir = fs::exists(input_path) && fs::is_directory(input_path);
+    const bool is_file = fs::exists(input_path) && fs::is_regular_file(input_path);
+    const bool is_tar = is_file && is_tar_file(input_path);
+    const bool is_compressed_tar = is_file && is_compressed_tar_file(input_path);
+    
+    out_context.temp_dirs_to_cleanup.clear();
+    
+    if (is_tar || is_compressed_tar) {
+        // Create a temporary directory for extraction
+        fs::path temp_dir = fs::temp_directory_path() / "spratlayout_extract";
+        std::error_code ec;
+        fs::create_directories(temp_dir, ec);
+        if (ec) {
+            std::cerr << "Error: Failed to create temporary directory for tar extraction\n";
+            return false;
+        }
+        
+        out_context.temp_dirs_to_cleanup.push_back(temp_dir);
+        
+        // Extract the tar file
+        if (!extract_tar_file(input_path, temp_dir)) {
+            std::cerr << "Error: Failed to extract tar file: " << input_path << "\n";
+            // Cleanup on error
+            for (const auto& dir : out_context.temp_dirs_to_cleanup) {
+                fs::remove_all(dir, ec);
+            }
+            return false;
+        }
+        
+        out_context.type = InputType::TarFile;
+        out_context.working_folder = temp_dir;
+        return true;
+    } else if (is_dir) {
+        out_context.type = InputType::Directory;
+        out_context.working_folder = input_path;
+        return true;
+    } else if (is_file) {
+        out_context.type = InputType::ListFile;
+        out_context.working_folder = input_path;
+        return true;
+    }
+    
+    return false;
+}
+
+bool load_content_from_stdin(InputContext& out_context) {
+    // Create a temporary directory for extraction
+    fs::path temp_dir = fs::temp_directory_path() / "spratlayout_extract_stdin";
+    std::error_code ec;
+    fs::create_directories(temp_dir, ec);
+    if (ec) {
+        std::cerr << "Error: Failed to create temporary directory for stdin tar extraction\n";
+        return false;
+    }
+    
+    out_context.temp_dirs_to_cleanup.push_back(temp_dir);
+    
+    // Extract from stdin
+    if (!extract_tar_from_stdin(temp_dir)) {
+        std::cerr << "Error: Failed to extract tar from stdin\n";
+        // Cleanup on error
+        for (const auto& dir : out_context.temp_dirs_to_cleanup) {
+            fs::remove_all(dir, ec);
+        }
+        return false;
+    }
+    
+    out_context.type = InputType::StdinTar;
+    out_context.working_folder = temp_dir;
+    
+    return true;
 }
 
 void prune_stale_cache_entries(std::unordered_map<std::string, ImageCacheEntry>& entries,
@@ -2205,14 +2590,24 @@ int main(int argc, char** argv) {
         scale *= resolution_scale;
     }
 
-    const bool is_dir = fs::exists(folder) && fs::is_directory(folder);
-    const bool is_file = fs::exists(folder) && fs::is_regular_file(folder);
-    if (!is_dir && !is_file) {
-        std::cerr << "Error: invalid directory or list file\n";
-        return 1;
+    InputContext input_context;
+    bool loaded_from_stdin = false;
+    
+    // Check if we should read from stdin (when folder is "-")
+    if (folder == "-") {
+        if (!load_content_from_stdin(input_context)) {
+            std::cerr << "Error: Failed to load content from stdin\n";
+            return 1;
+        }
+        loaded_from_stdin = true;
+    } else {
+        if (!detect_and_extract_tar_content(folder, input_context)) {
+            std::cerr << "Error: Failed to load content from input\n";
+            return 1;
+        }
     }
 
-    const fs::path cache_path = build_cache_path(folder);
+    const fs::path cache_path = build_cache_path(input_context.working_folder);
     constexpr long long k_cache_max_age_seconds = 3600;
     constexpr size_t k_cache_max_layout_files = 16;
     constexpr size_t k_cache_max_seed_files = 8;
@@ -2246,8 +2641,28 @@ int main(int argc, char** argv) {
         return true;
     };
 
-    if (is_dir) {
-        for (const auto& entry : fs::directory_iterator(folder)) {
+    if (input_context.type == InputType::Directory) {
+        for (const auto& entry : fs::directory_iterator(input_context.working_folder)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            if (!add_source(entry.path(), false)) {
+                continue;
+            }
+        }
+    } else if (input_context.type == InputType::TarFile) {
+        // Tar files are already extracted to working_folder - search recursively
+        for (const auto& entry : fs::recursive_directory_iterator(input_context.working_folder)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            if (!add_source(entry.path(), false)) {
+                continue;
+            }
+        }
+    } else if (input_context.type == InputType::StdinTar) {
+        // Stdin tar files are already extracted to working_folder - search recursively
+        for (const auto& entry : fs::recursive_directory_iterator(input_context.working_folder)) {
             if (!entry.is_regular_file()) {
                 continue;
             }
@@ -2256,9 +2671,9 @@ int main(int argc, char** argv) {
             }
         }
     } else {
-        std::ifstream list_file(folder);
+        std::ifstream list_file(input_context.working_folder);
         if (!list_file) {
-            std::cerr << "Failed to open list file: " << folder << "\n";
+            std::cerr << "Failed to open list file: " << input_context.working_folder << "\n";
             return 1;
         }
         std::string line;
@@ -2271,7 +2686,7 @@ int main(int argc, char** argv) {
             }
             fs::path entry_path(trimmed);
             if (entry_path.is_relative()) {
-                entry_path = folder.parent_path() / entry_path;
+                entry_path = input_context.working_folder.parent_path() / entry_path;
             }
             if (!fs::exists(entry_path) || !fs::is_regular_file(entry_path)) {
                 std::cerr << "Invalid image path at line " << line_number << ": " << trimmed << "\n";
@@ -2288,6 +2703,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const bool is_file = (input_context.type == InputType::ListFile || input_context.type == InputType::StdinTar);
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         padding, max_combinations, scale, trim_transparent, is_file, sources);
@@ -3172,6 +3588,12 @@ int main(int argc, char** argv) {
     std::cout << output_text;
     save_output_cache(output_cache_path, layout_signature, output_text);
     prune_cache_family(cache_path, k_cache_max_age_seconds, k_cache_max_layout_files, k_cache_max_seed_files);
+
+    // Cleanup temporary directories for tar files
+    for (const auto& dir : input_context.temp_dirs_to_cleanup) {
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
 
     return 0;
 }

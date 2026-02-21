@@ -56,5 +56,8 @@ export
 spratlayout
 spratpack
 spratconvert
+spratunpack
+spratframes
 README-assets/*
 !README-assets/*.png
+test_background/
