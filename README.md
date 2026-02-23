@@ -70,7 +70,7 @@ Convert layout to JSON/CSV/XML/CSS:
 Detect sprite frames in spritesheets:
 
 ```sh
-./spratframes --spratframes spritesheet.png > frames.spratframes
+./spratframes spritesheet.png > frames.spratframes
 ```
 
 Extract sprites from spritesheets using frame coordinates:

@@ -84,9 +84,7 @@ struct FramesConfig {
     int min_sprite_size = k_default_min_sprite_size;
     int max_sprites = k_default_max_sprites;
     unsigned int threads = k_default_threads;
-    bool verbose = false;
     bool force = false;
-    std::string output_format = "json"; // json, csv, or plain
 };
 
 class SpriteFramesDetector {
@@ -136,10 +134,6 @@ public:
         image_data_.assign(data, data + total_pixels * 4);
         stbi_image_free(data);
         
-        if (config_.verbose) {
-            std::cout << "Loaded image: " << config_.input_path << " (" << width_ << "x" << height_ << ", " << channels_ << " channels)" << std::endl;
-        }
-        
         return true;
     }
     
@@ -182,13 +176,6 @@ private:
     bool detect_rectangles() {
         detected_rectangles_.clear();
         
-        if (config_.verbose) {
-            std::cout << "Detecting rectangles with color (" 
-                      << static_cast<int>(config_.rectangle_color.r) << ","
-                      << static_cast<int>(config_.rectangle_color.g) << ","
-                      << static_cast<int>(config_.rectangle_color.b) << ")" << std::endl;
-        }
-        
         std::vector<uint8_t> visited(width_ * height_, 0);
         
         for (int y = 0; y < height_; ++y) {
@@ -204,10 +191,6 @@ private:
         
         // Merge overlapping rectangles
         merge_rectangles(detected_rectangles_);
-        
-        if (config_.verbose) {
-            std::cout << "Detected " << detected_rectangles_.size() << " rectangles" << std::endl;
-        }
         
         return !detected_rectangles_.empty();
     }
@@ -370,10 +353,6 @@ private:
         // Merge overlapping components to ensure frames never overlap
         merge_rectangles(component_bounds_);
         
-        if (config_.verbose) {
-            std::cout << "Found " << component_bounds_.size() << " connected components" << std::endl;
-        }
-        
         // Return true if the algorithm completed successfully, even if no components were found
         // This allows the extraction to proceed with 0 sprites when all are filtered by min-size
         return true;
@@ -505,37 +484,8 @@ private:
     }
     
     bool output_frames(const std::vector<SpriteFrame>& frames) {
-        if (config_.verbose) {
-            std::cout << "Detected " << frames.size() << " frames" << std::endl;
-        }
-        
         // Default to spratframes format (minimalist)
         return output_spratframes(frames);
-    }
-    
-    bool output_json(const std::vector<SpriteFrame>& frames) {
-        std::cout << "{\n";
-        std::cout << "  \"width\": " << width_ << ",\n";
-        std::cout << "  \"height\": " << height_ << ",\n";
-        std::cout << "  \"frames\": [\n";
-        
-        for (size_t i = 0; i < frames.size(); ++i) {
-            const auto& frame = frames[i];
-            std::cout << "    {\n";
-            std::cout << "      \"index\": " << frame.index << ",\n";
-            std::cout << "      \"x\": " << frame.bounds.x << ",\n";
-            std::cout << "      \"y\": " << frame.bounds.y << ",\n";
-            std::cout << "      \"w\": " << frame.bounds.w << ",\n";
-            std::cout << "      \"h\": " << frame.bounds.h << "\n";
-            std::cout << "    }";
-            if (i < frames.size() - 1) std::cout << ",";
-            std::cout << "\n";
-        }
-        
-        std::cout << "  ]\n";
-        std::cout << "}\n";
-        
-        return true;
     }
     
     bool output_spratframes(const std::vector<SpriteFrame>& frames) {
@@ -559,28 +509,6 @@ private:
         return true;
     }
     
-    bool output_csv(const std::vector<SpriteFrame>& frames) {
-        std::cout << "index,x,y,w,h\n";
-        for (const auto& frame : frames) {
-            std::cout << frame.index << "," 
-                      << frame.bounds.x << "," 
-                      << frame.bounds.y << "," 
-                      << frame.bounds.w << "," 
-                      << frame.bounds.h << "\n";
-        }
-        return true;
-    }
-    
-    bool output_plain(const std::vector<SpriteFrame>& frames) {
-        for (const auto& frame : frames) {
-            std::cout << frame.bounds.x << " " 
-                      << frame.bounds.y << " " 
-                      << frame.bounds.w << " " 
-                      << frame.bounds.h << "\n";
-        }
-        return true;
-    }
-    
     bool preprocess_image() {
         if (width_ <= 0 || height_ <= 0) {
             return false;
@@ -589,19 +517,8 @@ private:
         // Check the first pixel (top-left corner)
         Color first_pixel{image_data_[0], image_data_[1], image_data_[2], image_data_[3]};
         
-        if (config_.verbose) {
-            std::cout << "Preprocessing image: checking first pixel color (" 
-                      << static_cast<int>(first_pixel.r) << ","
-                      << static_cast<int>(first_pixel.g) << ","
-                      << static_cast<int>(first_pixel.b) << ")" << std::endl;
-        }
-        
         // If the first pixel is not transparent, make all pixels of that color transparent
         if (!first_pixel.is_transparent()) {
-            if (config_.verbose) {
-                std::cout << "First pixel is not transparent, making all matching pixels transparent (tolerance: 15)" << std::endl;
-            }
-            
             // Make all pixels matching the first pixel color (within tolerance) transparent
             for (int i = 0; i < width_ * height_; ++i) {
                 size_t idx = i * 4;
@@ -610,10 +527,6 @@ private:
                     // Update the image data array as well
                     image_data_[i*4 + 3] = 0;
                 }
-            }
-        } else {
-            if (config_.verbose) {
-                std::cout << "First pixel is already transparent, no preprocessing needed" << std::endl;
             }
         }
         
@@ -740,11 +653,8 @@ bool parse_positive_int(const std::string& value, int& out) {
 void print_usage() {
     std::cout << "Usage: spratframes [OPTIONS] <input_image>\n\n"
               << "Detect sprite frame rectangles in spritesheets.\n\n"
-              << "Output formats:\n"
-              << "  --json (default)      JSON format with image dimensions and frame coordinates\n"
-              << "  --csv                 CSV format with header: index,x,y,w,h\n"
-              << "  --plain               Plain text format: x y w h (one per line)\n"
-              << "  --spratframes         SpratFrames format: path f, then sprite x,y w,h\n\n"
+              << "Output format:\n"
+              << "  SpratFrames format: path f, then sprite x,y w,h\n\n"
               << "Options:\n"
               << "  --has-rectangles          Spritesheet has rectangles surrounding sprites\n"
               << "  --rectangle-color COLOR   Color of rectangle borders (default: 255,0,255)\n"
@@ -753,23 +663,17 @@ void print_usage() {
               << "  --min-size N             Minimum sprite size in pixels (default: 4)\n"
               << "  --max-sprites N          Maximum number of sprites to extract (default: 10000)\n"
               << "  --threads N              Number of threads to use (default: 0 = auto)\n"
-              << "  --verbose, -v            Enable verbose output\n"
               << "  --help, -h               Show this help message\n\n"
               << "Examples:\n"
               << "  spratframes sheet.png\n"
               << "  spratframes --has-rectangles --rectangle-color=\"#FF00FF\" sheet.png\n"
               << "  spratframes --tolerance 2 --min-size 8 sheet.png\n"
-              << "  spratframes --csv sheet.png > frames.csv\n"
-              << "  spratframes --json sheet.png > frames.json\n"
-              << "  spratframes --spratframes sheet.png > frames.spratframes\n";
+              << "  spratframes sheet.png > frames.spratframes\n";
 }
 
 int main(int argc, char** argv) {
     FramesConfig config;
     bool show_help = false;
-    bool output_json = true;
-    bool output_csv = false;
-    bool output_plain = false;
     
     // Parse command line arguments
     for (int i = 1; i < argc; ++i) {
@@ -806,25 +710,6 @@ int main(int argc, char** argv) {
                 return 1;
             }
             config.threads = static_cast<unsigned int>(threads_int);
-        } else if (arg == "--json") {
-            output_json = true;
-            output_csv = false;
-            output_plain = false;
-        } else if (arg == "--csv") {
-            output_json = false;
-            output_csv = true;
-            output_plain = false;
-        } else if (arg == "--plain") {
-            output_json = false;
-            output_csv = false;
-            output_plain = true;
-        } else if (arg == "--spratframes") {
-            output_json = false;
-            output_csv = false;
-            output_plain = false;
-            config.output_format = "spratframes";
-        } else if (arg == "--verbose" || arg == "-v") {
-            config.verbose = true;
         } else if (arg.empty() || arg[0] == '-') {
             std::cerr << "Error: Unknown option: " << arg << std::endl;
             print_usage();
@@ -846,11 +731,6 @@ int main(int argc, char** argv) {
         return 0;
     }
     
-    // Determine output format
-    if (output_json) config.output_format = "json";
-    else if (output_csv) config.output_format = "csv";
-    else if (output_plain) config.output_format = "plain";
-    
     // Validate required arguments
     if (config.input_path.empty()) {
         std::cerr << "Error: Input image path is required" << std::endl;
@@ -869,33 +749,11 @@ int main(int argc, char** argv) {
         config.threads = std::max(1u, std::thread::hardware_concurrency());
     }
     
-    if (config.verbose) {
-        std::cout << "Configuration:\n";
-        std::cout << "  Input: " << config.input_path << "\n";
-        std::cout << "  Has rectangles: " << (config.has_rectangles ? "yes" : "no") << "\n";
-        if (config.has_rectangles) {
-            std::cout << "  Rectangle color: (" 
-                      << static_cast<int>(config.rectangle_color.r) << ","
-                      << static_cast<int>(config.rectangle_color.g) << ","
-                      << static_cast<int>(config.rectangle_color.b) << ")\n";
-        }
-        std::cout << "  Tolerance: " << config.tolerance << "\n";
-        std::cout << "  Min size: " << config.min_sprite_size << "\n";
-        std::cout << "  Max sprites: " << config.max_sprites << "\n";
-        std::cout << "  Threads: " << config.threads << "\n";
-        std::cout << "  Output format: " << config.output_format << "\n";
-        std::cout << "  Verbose: " << (config.verbose ? "yes" : "no") << "\n\n";
-    }
-    
     // Detect frames
     SpriteFramesDetector detector(config);
     if (!detector.detect_frames()) {
         std::cerr << "Error: Failed to detect frames" << std::endl;
         return 1;
-    }
-    
-    if (config.verbose) {
-        std::cout << "Frame detection completed successfully!" << std::endl;
     }
     
     return 0;
