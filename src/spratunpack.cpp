@@ -1,6 +1,6 @@
 // spratunpack.cpp
 // MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++17 -O2 spratunpack.cpp -o spratunpack
+// Compile: g++ -std=c++17 -O2 src/spratunpack.cpp -o spratunpack
 
 #include <iostream>
 #include <vector>

@@ -1,6 +1,6 @@
 // spratpack.cpp
 // MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++17 -O2 spratpack.cpp -o spratpack
+// Compile: g++ -std=c++17 -O2 src/spratpack.cpp -o spratpack
 
 #include <iostream>
 #include <vector>

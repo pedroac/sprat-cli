@@ -1,6 +1,6 @@
 // spratlayout.cpp
 // MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++17 -O2 spratlayout.cpp -o spratlayout
+// Compile: g++ -std=c++17 -O2 src/spratlayout.cpp -o spratlayout
 
 #include <iostream>
 #include <vector>

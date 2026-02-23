@@ -1,6 +1,6 @@
 // spratframes.cpp
 // MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++17 -O2 spratframes.cpp -o spratframes
+// Compile: g++ -std=c++17 -O2 src/spratframes.cpp -o spratframes
 
 #include <iostream>
 #include <vector>
