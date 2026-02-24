@@ -299,7 +299,7 @@ Use a built-in transform:
 Optional extra data files:
 
 ```sh
-./spratconvert --transform json --markers markers.json --animations animations.json < layout.txt > layout.json
+./spratconvert --transform json --markers markers.txt --animations animations.txt < layout.txt > layout.json
 ```
 
 Built-in transform files live in `transforms/`:
@@ -309,18 +309,17 @@ Built-in transform files live in `transforms/`:
 - `transforms/xml.transform`
 - `transforms/css.transform`
 
-Each transform is section-based:
+Each transform is section-based. You can use explicit open/close tags (e.g., `[meta]` ... `[/meta]`) or the modern line-based DSL (e.g., `meta`, `header`, `sprites`, `- sprite`).
 
-- Use explicit open/close tags for sections, for example `[meta]` ... `[/meta]`.
-- `[meta]` for metadata like `name`, `description`, `extension`
-- `[header]` printed once before sprites
+- `[meta]` / `meta`: metadata like `name`, `description`, `extension`
+- `[header]` / `header`: printed once before sprites
 - `[if_markers]` / `[if_no_markers]` conditional blocks based on marker items
 - `[markers_header]`, `[markers]`, `[marker]`, `[markers_separator]`, `[markers_footer]` marker loop sections
-- `[sprites]` container with `[sprite]` item template repeated for each sprite (required)
-- `[separator]` inserted between sprite entries
+- `[sprites]` / `sprites`: container with `[sprite]` / `- sprite` item template repeated for each sprite (required)
+- `[separator]` / `separator`: inserted between sprite entries
 - `[if_animations]` / `[if_no_animations]` conditional blocks based on animation items
 - `[animations_header]`, `[animations]`, `[animation]`, `[animations_separator]`, `[animations_footer]` animation loop sections
-- `[footer]` printed once after sprites
+- `[footer]` / `footer`: printed once after sprites
 
 Common placeholders:
 
@@ -346,14 +345,33 @@ Common placeholders:
 
 Sprite names default to the source file basename without extension (for example `./frames/run_01.png` becomes `run_01`).
 
-`--markers` expects JSON with sprite associations. `markers` must be an array of objects with at least `name` and `type`.
+`--markers` expects a plaintext file using the `path` and `- marker` DSL.
 Supported marker types:
-- `point`: `x`, `y`
-- `circle`: `x`, `y`, `radius`
-- `rectangle`: `x`, `y`, `w`, `h`
-- `polygon`: `vertices` (ordered list of `{x,y}` objects)
-Example: `{"sprites":{"./frames/a.png":{"markers":[{"name":"hit","type":"point","x":3,"y":5}]}}}`.
-`--animations` expects JSON timelines (for example `{"timelines":[{"name":"run","frames":["./frames/a.png","b"]}]}`), and frame entries are resolved to sprite indexes by path or sprite name.
+- `point`: `x,y`
+- `circle`: `x,y radius`
+- `rectangle`: `x,y w,h`
+- `polygon`: `x,y x,y ...` (list of vertices)
+
+Example `markers.txt`:
+```txt
+path "./frames/a.png"
+- marker "hit" point 3,5
+- marker "hurt" circle 6,7 4
+path "b"
+- marker "foot" rectangle 1,2 3,4
+```
+
+`--animations` expects a plaintext file using the `animation` and `- frame` DSL. Frame entries are resolved to sprite indexes by path, name, or index.
+
+Example `animations.txt`:
+```txt
+fps 12
+animation "run" 8
+- frame "./frames/a.png"
+- frame "b"
+animation "idle"
+- frame 1
+```
 
 Custom transform example:
 

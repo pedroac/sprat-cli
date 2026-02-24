@@ -72,24 +72,22 @@ CUSTOM
 grep -q '^BEGIN 64x32 count=2' "$tmp_dir/out.custom"
 grep -q '1|./frames/b.png|16,0 8x8' "$tmp_dir/out.custom"
 
-markers_file="$tmp_dir/markers.json"
+markers_file="$tmp_dir/markers.txt"
 cat > "$markers_file" <<'MARKERS'
-{
-  "sprites": {
-    "./frames/a.png": {"markers": [{"name": "hit", "type": "point", "x": 3, "y": 5}, {"name": "hurt", "type": "circle", "x": 6, "y": 7, "radius": 4}]},
-    "b": {"markers": [{"name": "foot", "type": "rectangle", "x": 1, "y": 2, "w": 3, "h": 4}]}
-  }
-}
+path "./frames/a.png"
+- marker "hit" point 3,5
+- marker "hurt" circle 6,7 4
+path "b"
+- marker "foot" rectangle 1,2 3,4
 MARKERS
 
-animations_file="$tmp_dir/animations.json"
+animations_file="$tmp_dir/animations.txt"
 cat > "$animations_file" <<'ANIMS'
-{
-  "timelines": [
-    {"name": "run", "frames": ["./frames/a.png", "b"]},
-    {"name": "idle", "sprite_indexes": [1]}
-  ]
-}
+animation "run"
+- frame "./frames/a.png"
+- frame "b"
+animation "idle"
+- frame 1
 ANIMS
 
 extras_transform="$tmp_dir/extras.transform"

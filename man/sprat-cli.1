@@ -87,8 +87,8 @@ Reads layout text from stdin and writes transformed text to stdout.
 .PP
 Transforms can be selected by name from \fBtransforms/\fR (for example \fBjson\fR, \fBcsv\fR, \fBxml\fR, \fBcss\fR) or by path to a custom \fB.transform\fR file.
 Optional \fB\-\-markers\fR and \fB\-\-animations\fR files can be loaded and referenced by transform placeholders.
-Transform sections use explicit open/close tags (for example \fB[meta]\fR ... \fB[/meta]\fR).
-Sprite iteration is defined as \fB[sprites]\fR containing \fB[sprite]\fR; animation iteration as \fB[animations]\fR containing \fB[animation]\fR; marker iteration as \fB[markers]\fR containing \fB[marker]\fR.
+Transform sections use explicit open/close tags (for example \fB[meta]\fR ... \fB[/meta]\fR) or the modern line-based DSL (for example \fBmeta\fR, \fBheader\fR, \fBsprites\fR, \fB- sprite\fR).
+Sprite iteration is defined as \fB[sprites]\fR containing \fB[sprite]\fR (or \fBsprites\fR containing \fB- sprite\fR); animation iteration as \fB[animations]\fR containing \fB[animation]\fR (or \fBanimations\fR containing \fB- animation\fR); marker iteration as \fB[markers]\fR containing \fB[marker]\fR (or \fBmarkers\fR containing \fB- marker\fR).
 Templates support marker/animation conditional sections (\fB[if_markers]\fR, \fB[if_no_markers]\fR, \fB[if_animations]\fR, \fB[if_no_animations]\fR) and optional separator/header/footer sections.
 Sprite placeholders include \fB{{name}}\fR (basename without extension), and marker loop placeholders include \fB{{marker_name}}\fR plus sprite association fields (\fB{{marker_sprite_index}}\fR, \fB{{marker_sprite_name}}\fR).
 Animation loop placeholders include \fB{{animation_name}}\fR and \fB{{animation_sprite_indexes_json}}\fR.
@@ -174,12 +174,11 @@ Transform name from \fBtransforms/\fR or path to a custom transform file. Defaul
 Print available transforms and exit.
 .TP
 \fB\-\-markers\fR \fIPATH\fR
-Load external markers text and expose it to transform placeholders.
-Markers JSON expects \fB{"sprites":{...}}\fR with per-sprite \fBmarkers\fR arrays of objects (not strings), each with at least \fBname\fR and \fBtype\fR.
-Supported marker types: \fBpoint\fR (\fBx\fR,\fBy\fR), \fBcircle\fR (\fBx\fR,\fBy\fR,\fBradius\fR), \fBrectangle\fR (\fBx\fR,\fBy\fR,\fBw\fR,\fBh\fR), \fBpolygon\fR (\fBvertices\fR list of \fB{x,y}\fR).
+Load external markers plaintext file using the \fBpath\fR and \fB- marker\fR DSL.
+Supported marker types: \fBpoint\fR (\fBx,y\fR), \fBcircle\fR (\fBx,y radius\fR), \fBrectangle\fR (\fBx,y w,h\fR), \fBpolygon\fR (\fBx,y x,y ...\fR).
 .TP
 \fB\-\-animations\fR \fIPATH\fR
-Load external animations text and expose it to transform placeholders.
+Load external animations plaintext file using the \fBanimation\fR and \fB- frame\fR DSL.
 .SH EXAMPLES
 .TP
 Generate layout text:
@@ -195,7 +194,7 @@ Transform layout with custom template:
 .B spratconvert --transform ./my.transform < layout.txt > layout.custom.txt
 .TP
 Transform layout with extra files:
-.B spratconvert --transform json --markers markers.json --animations animations.json < layout.txt > layout.json
+.B spratconvert --transform json --markers markers.txt --animations animations.txt < layout.txt > layout.json
 .TP
 Run as one pipeline:
 .B spratlayout ./frames --trim-transparent --padding 2 | spratpack > spritesheet.png
