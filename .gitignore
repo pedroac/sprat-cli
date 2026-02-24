@@ -61,3 +61,5 @@ spratframes
 README-assets/*
 !README-assets/*.png
 test_background/
+compile_commands.json
+fixes.json

@@ -2,6 +2,7 @@
 // MIT License (c) 2026 Pedro
 // Compile: g++ -std=c++17 -O2 src/spratpack.cpp -o spratpack
 
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -11,15 +12,24 @@
 #include <cctype>
 #include <limits>
 #include <array>
-#include <algorithm>
 #include <cmath>
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <utility>
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include <stb_image.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+#include <stb_image_write.h>
+
+namespace {
+
+constexpr size_t NUM_CHANNELS = 4;
+constexpr size_t CHANNEL_R = 0;
+constexpr size_t CHANNEL_G = 1;
+constexpr size_t CHANNEL_B = 2;
+constexpr size_t CHANNEL_A = 3;
+constexpr int MAX_CHANNEL_VALUE = 255;
 
 struct Sprite {
     std::string path;
@@ -134,7 +144,7 @@ bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::st
 
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error) {
     constexpr std::string_view prefix = "sprite";
-    if (line.rfind(prefix, 0) != 0) {
+    if (!line.starts_with(prefix)) {
         error = "line does not start with sprite";
         return false;
     }
@@ -174,20 +184,22 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
 
     if (tokens[0].find(',') != std::string::npos) {
         // New format: x,y w,h [left,top right,bottom]
-        if (tokens.size() != 2 && tokens.size() != 4) {
+        constexpr size_t MODERN_SPRITE_TOKENS_MIN = 2;
+        constexpr size_t MODERN_SPRITE_TOKENS_MAX = 4;
+        if (tokens.size() != MODERN_SPRITE_TOKENS_MIN && tokens.size() != MODERN_SPRITE_TOKENS_MAX) {
             error = "sprite line must contain position/size and optional trim offsets";
             return false;
         }
 
-        if (!parse_pair(tokens[0], parsed.x, parsed.y) ||
-            !parse_pair(tokens[1], parsed.w, parsed.h)) {
+        if (!parse_pair(tokens[0], parsed.x, parsed.y)
+            || !parse_pair(tokens[1], parsed.w, parsed.h)) {
             error = "invalid position or size pair";
             return false;
         }
 
-        if (tokens.size() == 4) {
-            if (!parse_pair(tokens[2], parsed.src_x, parsed.src_y) ||
-                !parse_pair(tokens[3], parsed.trim_right, parsed.trim_bottom)) {
+        if (tokens.size() == MODERN_SPRITE_TOKENS_MAX) {
+            if (!parse_pair(tokens[2], parsed.src_x, parsed.src_y)
+                || !parse_pair(tokens[3], parsed.trim_right, parsed.trim_bottom)) {
                 error = "invalid trim offset pair";
                 return false;
             }
@@ -195,20 +207,22 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         }
     } else {
         // Legacy format: x y w h [src_x src_y]
-        if (tokens.size() != 4 && tokens.size() != 6) {
+        constexpr size_t LEGACY_SPRITE_TOKENS_MIN = 4;
+        constexpr size_t LEGACY_SPRITE_TOKENS_MAX = 6;
+        if (tokens.size() != LEGACY_SPRITE_TOKENS_MIN && tokens.size() != LEGACY_SPRITE_TOKENS_MAX) {
             error = "legacy sprite line has invalid field count";
             return false;
         }
-        if (!parse_int(tokens[0], parsed.x) ||
-            !parse_int(tokens[1], parsed.y) ||
-            !parse_int(tokens[2], parsed.w) ||
-            !parse_int(tokens[3], parsed.h)) {
+        if (!parse_int(tokens[0], parsed.x)
+            || !parse_int(tokens[1], parsed.y)
+            || !parse_int(tokens[2], parsed.w)
+            || !parse_int(tokens[3], parsed.h)) {
             error = "legacy sprite line has invalid numeric fields";
             return false;
         }
-        if (tokens.size() == 6) {
-            if (!parse_int(tokens[4], parsed.src_x) ||
-                !parse_int(tokens[5], parsed.src_y)) {
+        if (tokens.size() == LEGACY_SPRITE_TOKENS_MAX) {
+            if (!parse_int(tokens[4], parsed.src_x)
+                || !parse_int(tokens[5], parsed.src_y)) {
                 error = "legacy sprite line has invalid crop offsets";
                 return false;
             }
@@ -267,19 +281,20 @@ bool parse_scale_line(const std::string& line, double& scale) {
 }
 
 bool parse_line_color(const std::string& value, std::array<unsigned char, 4>& out) {
-    std::array<int, 4> parts = {0, 0, 0, 255};
+    constexpr int MAX_CHANNELS = 4;
+    std::array<int, MAX_CHANNELS> parts = {0, 0, 0, MAX_CHANNEL_VALUE};
     int part_count = 0;
     size_t start = 0;
     while (start <= value.size()) {
         size_t comma = value.find(',', start);
         size_t end = (comma == std::string::npos) ? value.size() : comma;
-        if (end == start || part_count >= 4) {
+        if (end == start || part_count >= MAX_CHANNELS) {
             return false;
         }
 
         std::string token = value.substr(start, end - start);
         int channel = 0;
-        if (!parse_int(token, channel) || channel < 0 || channel > 255) {
+        if (!parse_int(token, channel) || channel < 0 || channel > MAX_CHANNEL_VALUE) {
             return false;
         }
         parts[part_count++] = channel;
@@ -290,7 +305,8 @@ bool parse_line_color(const std::string& value, std::array<unsigned char, 4>& ou
         start = comma + 1;
     }
 
-    if (part_count != 3 && part_count != 4) {
+    constexpr int MIN_REQUIRED_CHANNELS = 3;
+    if (part_count != MIN_REQUIRED_CHANNELS && part_count != MAX_CHANNELS) {
         return false;
     }
 
@@ -317,15 +333,15 @@ void draw_sprite_outline(
         if (px < 0 || py < 0 || px >= atlas_width || py >= atlas_height) {
             return;
         }
-        size_t pixel_index = static_cast<size_t>(py) * static_cast<size_t>(atlas_width) + static_cast<size_t>(px);
-        size_t offset = pixel_index * static_cast<size_t>(4);
-        atlas[offset + 0] = color[0];
-        atlas[offset + 1] = color[1];
-        atlas[offset + 2] = color[2];
-        atlas[offset + 3] = color[3];
+        size_t pixel_index = (static_cast<size_t>(py) * static_cast<size_t>(atlas_width)) + static_cast<size_t>(px);
+        size_t offset = pixel_index * NUM_CHANNELS;
+        atlas[offset + CHANNEL_R] = color[0];
+        atlas[offset + CHANNEL_G] = color[1];
+        atlas[offset + CHANNEL_B] = color[2];
+        atlas[offset + CHANNEL_A] = color[3];
     };
 
-    int max_t = std::min(line_width, std::min(s.w, s.h));
+    int max_t = std::min({line_width, s.w, s.h});
     for (int t = 0; t < max_t; ++t) {
         int left = s.x + t;
         int right = s.x + s.w - 1 - t;
@@ -348,7 +364,7 @@ bool rectangles_overlap(const Sprite& a, const Sprite& b) {
     const int a_bottom = a.y + a.h;
     const int b_right = b.x + b.w;
     const int b_bottom = b.y + b.h;
-    return !(a_right <= b.x || b_right <= a.x || a_bottom <= b.y || b_bottom <= a.y);
+    return a_right > b.x && b_right > a.x && a_bottom > b.y && b_bottom > a.y;
 }
 
 bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
@@ -359,8 +375,10 @@ bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
     for (size_t i = 0; i < sprites.size(); ++i) {
         order[i] = i;
     }
-    std::sort(order.begin(), order.end(), [&](size_t lhs, size_t rhs) {
-        if (sprites[lhs].x != sprites[rhs].x) return sprites[lhs].x < sprites[rhs].x;
+    std::ranges::sort(order, [&](size_t lhs, size_t rhs) {
+        if (sprites[lhs].x != sprites[rhs].x) {
+            return sprites[lhs].x < sprites[rhs].x;
+        }
         return sprites[lhs].y < sprites[rhs].y;
     });
 
@@ -380,10 +398,14 @@ bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
     return false;
 }
 
+} // namespace
+
 int main(int argc, char** argv) {
     bool draw_frame_lines = false;
     int line_width = 1;
-    std::array<unsigned char, 4> line_color = {255, 0, 0, 255};
+    constexpr unsigned char DEFAULT_COLOR_RED = 255;
+    constexpr unsigned char DEFAULT_COLOR_ALPHA = 255;
+    std::array<unsigned char, 4> line_color = {DEFAULT_COLOR_RED, 0, 0, DEFAULT_COLOR_ALPHA};
     unsigned int thread_limit = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -400,7 +422,7 @@ int main(int argc, char** argv) {
             std::string value = argv[++i];
             if (!parse_line_color(value, line_color)) {
                 std::cerr << "Invalid line color: " << value << "\n";
-                std::cerr << "Expected format: R,G,B or R,G,B,A with 0-255 channels\n";
+                std::cerr << "Expected format: R,G,B or R,G,B,A with 0-" << MAX_CHANNEL_VALUE << " channels\n";
                 return 1;
             }
         } else if (arg == "--threads" && i + 1 < argc) {
@@ -428,12 +450,12 @@ int main(int argc, char** argv) {
         if (line.empty()) {
             continue;
         }
-        if (line.rfind("atlas", 0) == 0) {
+        if (line.starts_with("atlas")) {
             if (!parse_atlas_line(line, atlas_width, atlas_height)) {
                 std::cerr << "Invalid atlas line: " << line << "\n";
                 return 1;
             }
-        } else if (line.rfind("scale", 0) == 0) {
+        } else if (line.starts_with("scale")) {
             if (has_scale) {
                 std::cerr << "Duplicate scale line\n";
                 return 1;
@@ -443,7 +465,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
             has_scale = true;
-        } else if (line.rfind("sprite", 0) == 0) {
+        } else if (line.starts_with("sprite")) {
             Sprite s;
             std::string error;
             if (!parse_sprite_line(line, s, error)) {
@@ -464,8 +486,8 @@ int main(int argc, char** argv) {
 
     size_t pixel_count = 0;
     size_t byte_count = 0;
-    if (!checked_mul_size_t(static_cast<size_t>(atlas_width), static_cast<size_t>(atlas_height), pixel_count) ||
-        !checked_mul_size_t(pixel_count, static_cast<size_t>(4), byte_count)) {
+    if (!checked_mul_size_t(static_cast<size_t>(atlas_width), static_cast<size_t>(atlas_height), pixel_count)
+        || !checked_mul_size_t(pixel_count, NUM_CHANNELS, byte_count)) {
         std::cerr << "Atlas size is too large\n";
         return 1;
     }
@@ -473,13 +495,13 @@ int main(int argc, char** argv) {
     std::vector<unsigned char> atlas(byte_count, 0);
 
     for (const auto& s : sprites) {
-        if (s.x < 0 || s.y < 0 || s.w <= 0 || s.h <= 0 || s.src_x < 0 || s.src_y < 0 ||
-            s.trim_right < 0 || s.trim_bottom < 0) {
+        if (s.x < 0 || s.y < 0 || s.w <= 0 || s.h <= 0 || s.src_x < 0 || s.src_y < 0
+            || s.trim_right < 0 || s.trim_bottom < 0) {
             std::cerr << "Invalid sprite bounds: " << s.path << "\n";
             return 1;
         }
-        if (s.w > atlas_width || s.h > atlas_height ||
-            s.x > atlas_width - s.w || s.y > atlas_height - s.h) {
+        if (s.w > atlas_width || s.h > atlas_height
+            || s.x > atlas_width - s.w || s.y > atlas_height - s.h) {
             std::cerr << "Sprite out of atlas bounds: " << s.path << "\n";
             return 1;
         }
@@ -489,7 +511,7 @@ int main(int argc, char** argv) {
         int w = 0;
         int h = 0;
         int channels = 0;
-        unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, 4);
+        unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
         if (!data) {
             error_out = "Failed to load: " + s.path;
             return false;
@@ -510,8 +532,8 @@ int main(int argc, char** argv) {
             return false;
         }
 
-        size_t scaled_source_w = static_cast<size_t>(s.w);
-        size_t scaled_source_h = static_cast<size_t>(s.h);
+        auto scaled_source_w = static_cast<size_t>(s.w);
+        auto scaled_source_h = static_cast<size_t>(s.h);
         if (layout_scale > 0.0 && layout_scale != 1.0) {
             // Validate that scaled destination dimensions are plausible for the
             // declared source crop rectangle to guard malformed inputs.
@@ -530,8 +552,8 @@ int main(int argc, char** argv) {
 
         size_t source_pixels = 0;
         size_t source_bytes = 0;
-        if (!checked_mul_size_t(static_cast<size_t>(w), static_cast<size_t>(h), source_pixels) ||
-            !checked_mul_size_t(source_pixels, static_cast<size_t>(4), source_bytes)) {
+        if (!checked_mul_size_t(static_cast<size_t>(w), static_cast<size_t>(h), source_pixels)
+            || !checked_mul_size_t(source_pixels, NUM_CHANNELS, source_bytes)) {
             error_out = "Source image is too large: " + s.path;
             stbi_image_free(data);
             return false;
@@ -539,15 +561,15 @@ int main(int argc, char** argv) {
 
         const bool copy_rows_direct = (source_w == s.w && source_h == s.h);
         if (copy_rows_direct) {
-            const size_t row_bytes = static_cast<size_t>(s.w) * static_cast<size_t>(4);
+            const size_t row_bytes = static_cast<size_t>(s.w) * NUM_CHANNELS;
             for (int row = 0; row < s.h; ++row) {
                 size_t dest_pixels = 0;
                 size_t dest_offset = 0;
-                if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels) ||
-                    !checked_add_size_t(dest_pixels, static_cast<size_t>(s.x), dest_pixels) ||
-                    !checked_mul_size_t(dest_pixels, static_cast<size_t>(4), dest_offset) ||
-                    dest_offset > atlas.size() ||
-                    row_bytes > atlas.size() - dest_offset) {
+                if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels)
+                    || !checked_add_size_t(dest_pixels, static_cast<size_t>(s.x), dest_pixels)
+                    || !checked_mul_size_t(dest_pixels, NUM_CHANNELS, dest_offset)
+                    || dest_offset > atlas.size()
+                    || row_bytes > atlas.size() - dest_offset) {
                     error_out = "Atlas indexing out of bounds: " + s.path;
                     stbi_image_free(data);
                     return false;
@@ -555,11 +577,11 @@ int main(int argc, char** argv) {
 
                 size_t src_pixels = 0;
                 size_t src_offset = 0;
-                if (!checked_mul_size_t(static_cast<size_t>(source_y + row), static_cast<size_t>(w), src_pixels) ||
-                    !checked_add_size_t(src_pixels, static_cast<size_t>(source_x), src_pixels) ||
-                    !checked_mul_size_t(src_pixels, static_cast<size_t>(4), src_offset) ||
-                    src_offset > source_bytes ||
-                    row_bytes > source_bytes - src_offset) {
+                if (!checked_mul_size_t(static_cast<size_t>(source_y + row), static_cast<size_t>(w), src_pixels)
+                    || !checked_add_size_t(src_pixels, static_cast<size_t>(source_x), src_pixels)
+                    || !checked_mul_size_t(src_pixels, NUM_CHANNELS, src_offset)
+                    || src_offset > source_bytes
+                    || row_bytes > source_bytes - src_offset) {
                     error_out = "Source indexing overflow: " + s.path;
                     stbi_image_free(data);
                     return false;
@@ -568,9 +590,9 @@ int main(int argc, char** argv) {
             }
         } else {
             for (int row = 0; row < s.h; ++row) {
-                int sample_y = source_y + (row * source_h) / s.h;
+                int sample_y = source_y + ((row * source_h) / s.h);
                 for (int col = 0; col < s.w; ++col) {
-                    int sample_x = source_x + (col * source_w) / s.w;
+                    int sample_x = source_x + ((col * source_w) / s.w);
 
                     size_t dest_pixels = 0;
                     size_t dest_offset = 0;
@@ -580,9 +602,9 @@ int main(int argc, char** argv) {
                         return false;
                     }
                     dest_pixels += static_cast<size_t>(s.x + col);
-                    if (!checked_mul_size_t(dest_pixels, static_cast<size_t>(4), dest_offset) ||
-                        dest_offset > atlas.size() ||
-                        static_cast<size_t>(4) > atlas.size() - dest_offset) {
+                    if (!checked_mul_size_t(dest_pixels, NUM_CHANNELS, dest_offset)
+                        || dest_offset > atlas.size()
+                        || NUM_CHANNELS > atlas.size() - dest_offset) {
                         error_out = "Atlas indexing out of bounds: " + s.path;
                         stbi_image_free(data);
                         return false;
@@ -590,20 +612,20 @@ int main(int argc, char** argv) {
 
                     size_t src_pixels = 0;
                     size_t src_offset = 0;
-                    if (!checked_mul_size_t(static_cast<size_t>(sample_y), static_cast<size_t>(w), src_pixels) ||
-                        !checked_add_size_t(src_pixels, static_cast<size_t>(sample_x), src_pixels) ||
-                        !checked_mul_size_t(src_pixels, static_cast<size_t>(4), src_offset) ||
-                        src_offset > source_bytes ||
-                        static_cast<size_t>(4) > source_bytes - src_offset) {
+                    if (!checked_mul_size_t(static_cast<size_t>(sample_y), static_cast<size_t>(w), src_pixels)
+                        || !checked_add_size_t(src_pixels, static_cast<size_t>(sample_x), src_pixels)
+                        || !checked_mul_size_t(src_pixels, NUM_CHANNELS, src_offset)
+                        || src_offset > source_bytes
+                        || NUM_CHANNELS > source_bytes - src_offset) {
                         error_out = "Source indexing overflow: " + s.path;
                         stbi_image_free(data);
                         return false;
                     }
 
-                    atlas[dest_offset + 0] = data[src_offset + 0];
-                    atlas[dest_offset + 1] = data[src_offset + 1];
-                    atlas[dest_offset + 2] = data[src_offset + 2];
-                    atlas[dest_offset + 3] = data[src_offset + 3];
+                    atlas[dest_offset + CHANNEL_R] = data[src_offset + CHANNEL_R];
+                    atlas[dest_offset + CHANNEL_G] = data[src_offset + CHANNEL_G];
+                    atlas[dest_offset + CHANNEL_B] = data[src_offset + CHANNEL_B];
+                    atlas[dest_offset + CHANNEL_A] = data[src_offset + CHANNEL_A];
                 }
             }
         }
@@ -644,7 +666,7 @@ int main(int argc, char** argv) {
                     std::string error;
                     if (!blit_sprite(sprites[idx], error)) {
                         {
-                            std::lock_guard<std::mutex> lock(error_mutex);
+                            std::scoped_lock lock(error_mutex);
                             if (first_error.empty()) {
                                 first_error = std::move(error);
                             }
@@ -671,13 +693,13 @@ int main(int argc, char** argv) {
     }
 
     auto write_callback = [](void* context, void* data, int size) {
-        std::ostream* out = static_cast<std::ostream*>(context);
+        auto* out = static_cast<std::ostream*>(context);
         out->write(static_cast<char*>(data), size);
     };
 
-    if (!stbi_write_png_to_func(write_callback, &std::cout,
-                                atlas_width, atlas_height, 4,
-                                atlas.data(), atlas_width * 4)) {
+    if (stbi_write_png_to_func(write_callback, &std::cout,
+                                atlas_width, atlas_height, static_cast<int>(NUM_CHANNELS),
+                                atlas.data(), atlas_width * static_cast<int>(NUM_CHANNELS)) == 0) {
         std::cerr << "Failed to write PNG\n";
         return 1;
     }

@@ -1,0 +1,31 @@
+# sprat-cli clang-tidy configuration
+# https://clang.llvm.org/extra/clang-tidy/
+
+# Enable a balanced set of checks for a modern C++20 project
+Checks: >
+  -*,
+  bugprone-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  google-readability-*,
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-type-vararg,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-math-missing-parentheses
+  -c-cpp-flylint,
+  -tidycppcoreguidelines-init-variables
+
+# Only show warnings for files in the src directory (ignores stb)
+HeaderFilterRegex: 'src/.*'
+
+# Project-specific options
+CheckOptions:
+  modernize-use-using.IgnoreMacros: 'true'
+  readability-function-cognitive-complexity.Threshold: '30'

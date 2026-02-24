@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
+namespace fs = std::filesystem;
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -11,8 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace fs = std::filesystem;
-
+namespace {
 struct Sprite {
     std::string path;
     int x = 0;
@@ -70,21 +71,30 @@ struct MarkerItem {
     std::vector<std::pair<int, int>> vertices;
 };
 
+constexpr int DEFAULT_ANIMATION_FPS = 8;
+constexpr int k_default_precision = 8;
+constexpr size_t k_string_growth_padding = 8;
+constexpr unsigned char k_json_control_char_limit = 0x20;
+constexpr size_t k_token_replacement_reserve_extra = 64;
+constexpr std::uint8_t HEX_NIBBLE_MASK = 0x0f;
+constexpr int BITS_PER_NIBBLE = 4;
+constexpr const char* HEX_DIGITS = "0123456789abcdef";
+
 struct AnimationItem {
     size_t index = 0;
     std::string name;
     std::vector<int> sprite_indexes;
-    int fps = 8;
+    int fps = DEFAULT_ANIMATION_FPS;
 };
 
 std::string trim_copy(const std::string& s) {
     size_t start = 0;
-    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])) != 0) {
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s.at(start))) != 0) {
         ++start;
     }
 
     size_t end = s.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])) != 0) {
+    while (end > start && std::isspace(static_cast<unsigned char>(s.at(end - 1))) != 0) {
         --end;
     }
 
@@ -137,7 +147,7 @@ bool parse_pair(const std::string& token, int& a, int& b) {
 }
 
 bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::string& error) {
-    if (pos >= input.size() || input[pos] != '"') {
+    if (pos >= input.size() || input.at(pos) != '"') {
         error = "expected opening quote for sprite path";
         return false;
     }
@@ -146,13 +156,13 @@ bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::st
     out.clear();
 
     while (pos < input.size()) {
-        char c = input[pos++];
+        char c = input.at(pos++);
         if (c == '\\') {
             if (pos >= input.size()) {
                 error = "unterminated escape sequence in sprite path";
                 return false;
             }
-            char escaped = input[pos++];
+            char escaped = input.at(pos++);
             if (escaped == '"' || escaped == '\\') {
                 out.push_back(escaped);
             } else {
@@ -172,27 +182,27 @@ bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::st
 
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error) {
     constexpr std::string_view prefix = "sprite";
-    if (line.rfind(prefix, 0) != 0) {
+    if (!line.starts_with(prefix)) {
         error = "line does not start with sprite";
         return false;
     }
 
     size_t pos = prefix.size();
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
+    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line.at(pos))) != 0) {
         ++pos;
     }
 
     std::string path;
-    if (pos < line.size() && line[pos] == '"') {
-        if (!parse_quoted(line, pos, path, error)) {
-            return false;
-        }
-    } else {
+    if (pos >= line.size() || line.at(pos) != '"') {
         error = "sprite path must be quoted";
         return false;
     }
+    
+    if (!parse_quoted(line, pos, path, error)) {
+        return false;
+    }
 
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
+    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line.at(pos))) != 0) {
         ++pos;
     }
 
@@ -210,40 +220,46 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         return false;
     }
 
-    if (tokens[0].find(',') != std::string::npos) {
-        if (tokens.size() != 2 && tokens.size() != 4) {
+    if (tokens.at(0).find(',') != std::string::npos) {
+        constexpr size_t MODERN_SPRITE_TOKENS_MIN = 2;
+        constexpr size_t MODERN_SPRITE_TOKENS_MAX = 4;
+        if (tokens.size() != MODERN_SPRITE_TOKENS_MIN && tokens.size() != MODERN_SPRITE_TOKENS_MAX) {
             error = "sprite line must contain position/size and optional trim offsets";
             return false;
         }
 
-        if (!parse_pair(tokens[0], parsed.x, parsed.y) ||
-            !parse_pair(tokens[1], parsed.w, parsed.h)) {
+        if (!parse_pair(tokens.at(0), parsed.x, parsed.y)
+            || !parse_pair(tokens.at(1), parsed.w, parsed.h)) {
             error = "invalid position or size pair";
             return false;
         }
 
-        if (tokens.size() == 4) {
-            if (!parse_pair(tokens[2], parsed.src_x, parsed.src_y) ||
-                !parse_pair(tokens[3], parsed.trim_right, parsed.trim_bottom)) {
+        if (tokens.size() == MODERN_SPRITE_TOKENS_MAX) {
+            if (!parse_pair(tokens.at(2), parsed.src_x, parsed.src_y)
+                || !parse_pair(tokens.at(3), parsed.trim_right, parsed.trim_bottom)) {
                 error = "invalid trim offset pair";
                 return false;
             }
         }
     } else {
-        if (tokens.size() != 4 && tokens.size() != 6) {
+        constexpr size_t LEGACY_SPRITE_TOKENS_MIN = 4;
+        constexpr size_t LEGACY_SPRITE_TOKENS_MAX = 6;
+        if (tokens.size() != LEGACY_SPRITE_TOKENS_MIN
+            && tokens.size() != LEGACY_SPRITE_TOKENS_MAX
+        ) {
             error = "legacy sprite line has invalid field count";
             return false;
         }
-        if (!parse_int(tokens[0], parsed.x) ||
-            !parse_int(tokens[1], parsed.y) ||
-            !parse_int(tokens[2], parsed.w) ||
-            !parse_int(tokens[3], parsed.h)) {
+        if (!parse_int(tokens.at(0), parsed.x)
+            || !parse_int(tokens.at(1), parsed.y)
+            || !parse_int(tokens.at(2), parsed.w)
+            || !parse_int(tokens.at(3), parsed.h)) {
             error = "legacy sprite line has invalid numeric fields";
             return false;
         }
-        if (tokens.size() == 6) {
-            if (!parse_int(tokens[4], parsed.src_x) ||
-                !parse_int(tokens[5], parsed.src_y)) {
+        if (tokens.size() == LEGACY_SPRITE_TOKENS_MAX) {
+            if (!parse_int(tokens.at(4), parsed.src_x)
+                || !parse_int(tokens.at(5), parsed.src_y)) {
                 error = "legacy sprite line has invalid crop offsets";
                 return false;
             }
@@ -308,12 +324,12 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             continue;
         }
 
-        if (line.rfind("atlas", 0) == 0) {
+        if (line.starts_with("atlas")) {
             if (!parse_atlas_line(line, parsed.atlas_width, parsed.atlas_height)) {
                 error = "Invalid atlas line: " + line;
                 return false;
             }
-        } else if (line.rfind("scale", 0) == 0) {
+        } else if (line.starts_with("scale")) {
             if (parsed.has_scale) {
                 error = "Duplicate scale line";
                 return false;
@@ -323,7 +339,7 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             parsed.has_scale = true;
-        } else if (line.rfind("sprite", 0) == 0) {
+        } else if (line.starts_with("sprite")) {
             Sprite s;
             std::string sprite_error;
             if (!parse_sprite_line(line, s, sprite_error)) {
@@ -368,7 +384,7 @@ bool read_text_file(const fs::path& path, std::string& out, std::string& error) 
 
 std::string escape_json(const std::string& s) {
     std::string out;
-    out.reserve(s.size() + 8);
+    out.reserve(s.size() + k_string_growth_padding);
     for (char c : s) {
         switch (c) {
             case '"': out += "\\\""; break;
@@ -379,12 +395,11 @@ std::string escape_json(const std::string& s) {
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
             default:
-                if (static_cast<unsigned char>(c) < 0x20) {
+                if (static_cast<unsigned char>(c) < k_json_control_char_limit) {
                     std::ostringstream hex;
                     hex << "\\u";
-                    const char* digits = "0123456789abcdef";
-                    unsigned char uc = static_cast<unsigned char>(c);
-                    hex << '0' << '0' << digits[(uc >> 4) & 0x0f] << digits[uc & 0x0f];
+                    auto uc = static_cast<unsigned char>(c);
+                    hex << '0' << '0' << HEX_DIGITS[(uc >> BITS_PER_NIBBLE) & HEX_NIBBLE_MASK] << HEX_DIGITS[uc & HEX_NIBBLE_MASK];
                     out += hex.str();
                 } else {
                     out.push_back(c);
@@ -397,7 +412,7 @@ std::string escape_json(const std::string& s) {
 
 std::string escape_xml(const std::string& s) {
     std::string out;
-    out.reserve(s.size() + 8);
+    out.reserve(s.size() + k_string_growth_padding);
     for (char c : s) {
         switch (c) {
             case '&': out += "&amp;"; break;
@@ -437,7 +452,7 @@ std::string escape_csv(const std::string& s) {
 
 std::string escape_css_string(const std::string& s) {
     std::string out;
-    out.reserve(s.size() + 8);
+    out.reserve(s.size() + k_string_growth_padding);
     for (char c : s) {
         if (c == '\\' || c == '"') {
             out.push_back('\\');
@@ -453,7 +468,7 @@ std::string escape_css_string(const std::string& s) {
 
 std::string replace_tokens(const std::string& input, const std::map<std::string, std::string>& vars) {
     std::string out;
-    out.reserve(input.size() + 64);
+    out.reserve(input.size() + k_token_replacement_reserve_extra);
 
     size_t i = 0;
     while (i < input.size()) {
@@ -482,23 +497,23 @@ std::string replace_tokens(const std::string& input, const std::map<std::string,
 }
 
 size_t skip_json_ws(const std::string& s, size_t pos) {
-    while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos])) != 0) {
+    while (pos < s.size() && std::isspace(static_cast<unsigned char>(s.at(pos))) != 0) {
         ++pos;
     }
     return pos;
 }
 
 size_t scan_json_string(const std::string& s, size_t pos) {
-    if (pos >= s.size() || s[pos] != '"') {
+    if (pos >= s.size() || s.at(pos) != '"') {
         return std::string::npos;
     }
     ++pos;
     while (pos < s.size()) {
-        if (s[pos] == '\\') {
+        if (s.at(pos) == '\\') {
             pos += 2;
             continue;
         }
-        if (s[pos] == '"') {
+        if (s.at(pos) == '"') {
             return pos + 1;
         }
         ++pos;
@@ -507,13 +522,13 @@ size_t scan_json_string(const std::string& s, size_t pos) {
 }
 
 size_t find_matching_json_bracket(const std::string& s, size_t open_pos, char open_ch, char close_ch) {
-    if (open_pos >= s.size() || s[open_pos] != open_ch) {
+    if (open_pos >= s.size() || s.at(open_pos) != open_ch) {
         return std::string::npos;
     }
     int depth = 0;
     size_t pos = open_pos;
     while (pos < s.size()) {
-        char c = s[pos];
+        char c = s.at(pos);
         if (c == '"') {
             size_t end = scan_json_string(s, pos);
             if (end == std::string::npos) {
@@ -538,7 +553,7 @@ size_t find_matching_json_bracket(const std::string& s, size_t open_pos, char op
 bool parse_json_array_items(const std::string& text, std::vector<std::string>& out_items) {
     out_items.clear();
     size_t start = skip_json_ws(text, 0);
-    if (start >= text.size() || text[start] != '[') {
+    if (start >= text.size() || text.at(start) != '[') {
         return false;
     }
 
@@ -555,7 +570,7 @@ bool parse_json_array_items(const std::string& text, std::vector<std::string>& o
     int array_depth = 0;
     size_t pos = item_start;
     while (pos < end) {
-        char c = text[pos];
+        char c = text.at(pos);
         if (c == '"') {
             size_t str_end = scan_json_string(text, pos);
             if (str_end == std::string::npos) {
@@ -595,62 +610,14 @@ bool parse_json_array_items(const std::string& text, std::vector<std::string>& o
     return true;
 }
 
-bool extract_first_object_array(const std::string& text, std::string& out_array_text) {
-    size_t start = skip_json_ws(text, 0);
-    if (start >= text.size() || text[start] != '{') {
-        return false;
-    }
-    size_t end = find_matching_json_bracket(text, start, '{', '}');
-    if (end == std::string::npos) {
-        return false;
-    }
-    if (skip_json_ws(text, end + 1) != text.size()) {
-        return false;
-    }
-
-    int object_depth = 0;
-    int array_depth = 0;
-    size_t pos = start;
-    while (pos <= end) {
-        char c = text[pos];
-        if (c == '"') {
-            size_t str_end = scan_json_string(text, pos);
-            if (str_end == std::string::npos) {
-                return false;
-            }
-            pos = str_end;
-            continue;
-        }
-        if (c == '{') {
-            ++object_depth;
-        } else if (c == '}') {
-            --object_depth;
-        } else if (c == '[') {
-            if (object_depth == 1 && array_depth == 0) {
-                size_t arr_end = find_matching_json_bracket(text, pos, '[', ']');
-                if (arr_end == std::string::npos || arr_end > end) {
-                    return false;
-                }
-                out_array_text = text.substr(pos, arr_end - pos + 1);
-                return true;
-            }
-            ++array_depth;
-        } else if (c == ']') {
-            --array_depth;
-        }
-        ++pos;
-    }
-    return false;
-}
-
 bool parse_json_string_literal(const std::string& token, std::string& out) {
-    if (token.size() < 2 || token.front() != '"' || token.back() != '"') {
+    if (token.size() < 2 || token.at(0) != '"' || token.at(token.size() - 1) != '"') {
         return false;
     }
     out.clear();
     out.reserve(token.size() - 2);
     for (size_t i = 1; i + 1 < token.size(); ++i) {
-        char c = token[i];
+        char c = token.at(i);
         if (c != '\\') {
             out.push_back(c);
             continue;
@@ -658,7 +625,7 @@ bool parse_json_string_literal(const std::string& token, std::string& out) {
         if (i + 1 >= token.size() - 1) {
             return false;
         }
-        char e = token[++i];
+        char e = token.at(++i);
         switch (e) {
             case '"': out.push_back('"'); break;
             case '\\': out.push_back('\\'); break;
@@ -674,10 +641,10 @@ bool parse_json_string_literal(const std::string& token, std::string& out) {
                 if (i + 4 >= token.size() - 1) {
                     return false;
                 }
-                out.push_back(token[++i]);
-                out.push_back(token[++i]);
-                out.push_back(token[++i]);
-                out.push_back(token[++i]);
+                out.push_back(token.at(++i));
+                out.push_back(token.at(++i));
+                out.push_back(token.at(++i));
+                out.push_back(token.at(++i));
                 break;
             default:
                 out.push_back(e);
@@ -690,7 +657,7 @@ bool parse_json_string_literal(const std::string& token, std::string& out) {
 bool parse_json_object_entries(const std::string& text, std::vector<std::pair<std::string, std::string>>& entries) {
     entries.clear();
     size_t start = skip_json_ws(text, 0);
-    if (start >= text.size() || text[start] != '{') {
+    if (start >= text.size() || text.at(start) != '{') {
         return false;
     }
     size_t end = find_matching_json_bracket(text, start, '{', '}');
@@ -703,7 +670,7 @@ bool parse_json_object_entries(const std::string& text, std::vector<std::pair<st
 
     size_t pos = skip_json_ws(text, start + 1);
     while (pos < end) {
-        if (text[pos] != '"') {
+        if (text.at(pos) != '"') {
             return false;
         }
         size_t key_end = scan_json_string(text, pos);
@@ -717,7 +684,7 @@ bool parse_json_object_entries(const std::string& text, std::vector<std::pair<st
             return false;
         }
         pos = skip_json_ws(text, key_end);
-        if (pos >= end || text[pos] != ':') {
+        if (pos >= end || text.at(pos) != ':') {
             return false;
         }
         ++pos;
@@ -727,34 +694,34 @@ bool parse_json_object_entries(const std::string& text, std::vector<std::pair<st
         }
 
         size_t value_start = pos;
-        if (text[pos] == '"') {
+        if (text.at(pos) == '"') {
             size_t value_end = scan_json_string(text, pos);
             if (value_end == std::string::npos) {
                 return false;
             }
             pos = value_end;
-        } else if (text[pos] == '{') {
+        } else if (text.at(pos) == '{') {
             size_t value_end = find_matching_json_bracket(text, pos, '{', '}');
             if (value_end == std::string::npos) {
                 return false;
             }
             pos = value_end + 1;
-        } else if (text[pos] == '[') {
+        } else if (text.at(pos) == '[') {
             size_t value_end = find_matching_json_bracket(text, pos, '[', ']');
             if (value_end == std::string::npos) {
                 return false;
             }
             pos = value_end + 1;
         } else {
-            while (pos < end && text[pos] != ',' && text[pos] != '}') {
+            while (pos < end && text.at(pos) != ',' && text.at(pos) != '}') {
                 ++pos;
             }
         }
         std::string value = trim_copy(text.substr(value_start, pos - value_start));
-        entries.push_back({key, value});
+        entries.emplace_back(key, value);
 
         pos = skip_json_ws(text, pos);
-        if (pos < end && text[pos] == ',') {
+        if (pos < end && text.at(pos) == ',') {
             ++pos;
             pos = skip_json_ws(text, pos);
         }
@@ -781,11 +748,13 @@ bool parse_json_int_literal(const std::string& token, int& out) {
 
 std::string join_ints_csv(const std::vector<int>& values, const std::string& sep) {
     std::ostringstream oss;
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
+    bool first = true;
+    for (int v : values) {
+        if (!first) {
             oss << sep;
         }
-        oss << values[i];
+        oss << v;
+        first = false;
     }
     return oss.str();
 }
@@ -793,24 +762,13 @@ std::string join_ints_csv(const std::vector<int>& values, const std::string& sep
 std::string ints_to_json_array(const std::vector<int>& values) {
     std::ostringstream oss;
     oss << "[";
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
+    bool first = true;
+    for (int v : values) {
+        if (!first) {
             oss << ",";
         }
-        oss << values[i];
-    }
-    oss << "]";
-    return oss.str();
-}
-
-std::string strings_to_json_array(const std::vector<std::string>& values) {
-    std::ostringstream oss;
-    oss << "[";
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i > 0) {
-            oss << ",";
-        }
-        oss << "\"" << escape_json(values[i]) << "\"";
+        oss << v;
+        first = false;
     }
     oss << "]";
     return oss.str();
@@ -819,12 +777,12 @@ std::string strings_to_json_array(const std::vector<std::string>& values) {
 std::string markers_to_json_array(const std::vector<MarkerItem>& markers) {
     std::ostringstream oss;
     oss << "[";
-    for (size_t i = 0; i < markers.size(); ++i) {
-        if (i > 0) {
+    bool first_marker = true;
+    for (const auto& marker : markers) {
+        if (!first_marker) {
             oss << ",";
         }
-        const MarkerItem& marker = markers[i];
-        oss << "{\"name\":\"" << escape_json(marker.name) << "\",\"type\":\"" << escape_json(marker.type) << "\"";
+        oss << R"({"name":")" << escape_json(marker.name) << R"(","type":")" << escape_json(marker.type) << "\"";
         if (marker.type == "point") {
             oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y;
         } else if (marker.type == "circle") {
@@ -833,15 +791,18 @@ std::string markers_to_json_array(const std::vector<MarkerItem>& markers) {
             oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y << ",\"w\":" << marker.w << ",\"h\":" << marker.h;
         } else if (marker.type == "polygon") {
             oss << ",\"vertices\":[";
-            for (size_t j = 0; j < marker.vertices.size(); ++j) {
-                if (j > 0) {
+            bool first_vertex = true;
+            for (const auto& vertex : marker.vertices) {
+                if (!first_vertex) {
                     oss << ",";
                 }
-                oss << "{\"x\":" << marker.vertices[j].first << ",\"y\":" << marker.vertices[j].second << "}";
+                oss << "{\"x\":" << vertex.first << ",\"y\":" << vertex.second << "}";
+                first_vertex = false;
             }
             oss << "]";
         }
         oss << "}";
+        first_marker = false;
     }
     oss << "]";
     return oss.str();
@@ -850,11 +811,13 @@ std::string markers_to_json_array(const std::vector<MarkerItem>& markers) {
 std::string marker_vertices_to_json_array(const std::vector<std::pair<int, int>>& vertices) {
     std::ostringstream oss;
     oss << "[";
-    for (size_t i = 0; i < vertices.size(); ++i) {
-        if (i > 0) {
+    bool first = true;
+    for (const auto& vertex : vertices) {
+        if (!first) {
             oss << ",";
         }
-        oss << "{\"x\":" << vertices[i].first << ",\"y\":" << vertices[i].second << "}";
+        oss << "{\"x\":" << vertex.first << ",\"y\":" << vertex.second << "}";
+        first = false;
     }
     oss << "]";
     return oss.str();
@@ -862,11 +825,13 @@ std::string marker_vertices_to_json_array(const std::vector<std::pair<int, int>>
 
 std::string marker_vertices_to_string(const std::vector<std::pair<int, int>>& vertices) {
     std::ostringstream oss;
-    for (size_t i = 0; i < vertices.size(); ++i) {
-        if (i > 0) {
+    bool first = true;
+    for (const auto& vertex : vertices) {
+        if (!first) {
             oss << "|";
         }
-        oss << vertices[i].first << "," << vertices[i].second;
+        oss << vertex.first << "," << vertex.second;
+        first = false;
     }
     return oss.str();
 }
@@ -892,15 +857,15 @@ void collect_sprite_name_indexes(const Layout& layout,
     by_name.clear();
     sprite_names.clear();
     sprite_names.reserve(layout.sprites.size());
-    for (size_t i = 0; i < layout.sprites.size(); ++i) {
-        const Sprite& s = layout.sprites[i];
-        const int idx = static_cast<int>(i);
+    int idx = 0;
+    for (const auto& s : layout.sprites) {
         by_path[s.path] = idx;
         fs::path p(s.path);
         by_path[p.filename().string()] = idx;
         std::string name = sprite_name_from_path(s.path);
         sprite_names.push_back(name);
         by_name[name] = idx;
+        ++idx;
     }
 }
 
@@ -936,7 +901,7 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
         return markers;
     }
 
-    std::string sprites_obj = "";
+    std::string sprites_obj;
     std::string spritemarkers_obj;
     if (json_entry_value(root_entries, "spritemarkers", spritemarkers_obj)) {
         std::vector<std::pair<std::string, std::string>> sm_entries;
@@ -1075,7 +1040,7 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
                         item.vertices.clear();
                         break;
                     }
-                    item.vertices.push_back({vx, vy});
+                    item.vertices.emplace_back(vx, vy);
                 }
                 if (item.vertices.empty()) {
                     continue;
@@ -1092,10 +1057,12 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
     return markers;
 }
 
-std::vector<AnimationItem> parse_animations_data(const std::string& animations_text,
-                                                 const std::unordered_map<std::string, int>& by_path,
-                                                 const std::unordered_map<std::string, int>& by_name,
-                                                 int& animation_fps_out) {
+std::vector<AnimationItem> parse_animations_data(
+    const std::string& animations_text,
+    const std::unordered_map<std::string, int>& by_path,
+    const std::unordered_map<std::string, int>& by_name,
+    int& animation_fps_out
+) {
     std::vector<AnimationItem> animations;
     animation_fps_out = -1;
     const std::string trimmed = trim_copy(animations_text);
@@ -1146,7 +1113,7 @@ std::vector<AnimationItem> parse_animations_data(const std::string& animations_t
             parse_json_int_literal(fps_token, fps);
         }
         if (fps <= 0) {
-            fps = 8;
+            fps = DEFAULT_ANIMATION_FPS;
         }
 
         std::vector<int> indexes;
@@ -1218,26 +1185,26 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
     };
 
     auto is_known_section = [](const std::string& s) {
-        return s == "meta" ||
-               s == "header" ||
-               s == "if_markers" ||
-               s == "if_no_markers" ||
-               s == "markers_header" ||
-               s == "markers" ||
-               s == "marker" ||
-               s == "markers_separator" ||
-               s == "markers_footer" ||
-               s == "sprites" ||
-               s == "sprite" ||
-               s == "separator" ||
-               s == "if_animations" ||
-               s == "if_no_animations" ||
-               s == "animations_header" ||
-               s == "animations" ||
-               s == "animation" ||
-               s == "animations_separator" ||
-               s == "animations_footer" ||
-               s == "footer";
+        return s == "meta"
+            || s == "header"
+            || s == "if_markers"
+            || s == "if_no_markers"
+            || s == "markers_header"
+            || s == "markers"
+            || s == "marker"
+            || s == "markers_separator"
+            || s == "markers_footer"
+            || s == "sprites"
+            || s == "sprite"
+            || s == "separator"
+            || s == "if_animations"
+            || s == "if_no_animations"
+            || s == "animations_header"
+            || s == "animations"
+            || s == "animation"
+            || s == "animations_separator"
+            || s == "animations_footer"
+            || s == "footer";
     };
 
     while (std::getline(in, line)) {
@@ -1386,26 +1353,18 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
 
 std::string format_double(double value) {
     std::ostringstream oss;
-    oss.setf(std::ios::fmtflags(0), std::ios::floatfield);
-    oss.precision(8);
+    oss.unsetf(std::ios::floatfield);
+    oss.precision(k_default_precision);
     oss << value;
     return oss.str();
 }
 
-fs::path find_transforms_dir(const std::string& argv0) {
+fs::path find_transforms_dir() {
     std::vector<fs::path> candidates;
-    candidates.push_back(fs::path("transforms"));
+    candidates.emplace_back("transforms");
 #ifdef SPRAT_SOURCE_DIR
     candidates.push_back(fs::path(SPRAT_SOURCE_DIR) / "transforms");
 #endif
-    if (!argv0.empty()) {
-        fs::path exe_dir = fs::path(argv0).parent_path();
-        if (!exe_dir.empty()) {
-            candidates.push_back(exe_dir / "transforms");
-            candidates.push_back(exe_dir / ".." / "transforms");
-            candidates.push_back(exe_dir / ".." / ".." / "transforms");
-        }
-    }
 
     for (const auto& candidate : candidates) {
         if (fs::exists(candidate) && fs::is_directory(candidate)) {
@@ -1416,21 +1375,21 @@ fs::path find_transforms_dir(const std::string& argv0) {
     return fs::path("transforms");
 }
 
-fs::path resolve_transform_path(const std::string& transform_arg, const std::string& argv0) {
+fs::path resolve_transform_path(const std::string& transform_arg) {
     fs::path candidate(transform_arg);
     if (candidate.has_parent_path() || candidate.extension() == ".transform") {
         return candidate;
     }
-    return find_transforms_dir(argv0) / (transform_arg + ".transform");
+    return find_transforms_dir() / (transform_arg + ".transform");
 }
 
-bool load_transform_by_name(const std::string& transform_arg, const std::string& argv0, Transform& out, std::string& error) {
-    fs::path transform_path = resolve_transform_path(transform_arg, argv0);
+bool load_transform_by_name(const std::string& transform_arg, Transform& out, std::string& error) {
+    fs::path transform_path = resolve_transform_path(transform_arg);
     return parse_transform_file(transform_path, out, error);
 }
 
-void list_transforms(const std::string& argv0) {
-    const fs::path dir = find_transforms_dir(argv0);
+void list_transforms() {
+    const fs::path dir = find_transforms_dir();
     if (!fs::exists(dir) || !fs::is_directory(dir)) {
         return;
     }
@@ -1444,7 +1403,7 @@ void list_transforms(const std::string& argv0) {
             paths.push_back(entry.path());
         }
     }
-    std::sort(paths.begin(), paths.end());
+    std::ranges::sort(paths);
 
     for (const auto& path : paths) {
         Transform t;
@@ -1464,6 +1423,7 @@ void list_transforms(const std::string& argv0) {
 void print_usage() {
     std::cerr << "Usage: spratconvert [--transform NAME|PATH] [--markers FILE] [--animations FILE] [--list-transforms]\n";
 }
+} // namespace
 
 int main(int argc, char** argv) {
     std::string transform_arg = "json";
@@ -1491,13 +1451,13 @@ int main(int argc, char** argv) {
     }
 
     if (list_only) {
-        list_transforms(argv[0] ? argv[0] : "");
+        list_transforms();
         return 0;
     }
 
     Transform transform;
     std::string transform_error;
-    if (!load_transform_by_name(transform_arg, argv[0] ? argv[0] : "", transform, transform_error)) {
+    if (!load_transform_by_name(transform_arg, transform, transform_error)) {
         std::cerr << transform_error << "\n";
         return 1;
     }
@@ -1556,7 +1516,7 @@ int main(int argc, char** argv) {
     global_vars["sprite_count"] = std::to_string(layout.sprites.size());
     global_vars["marker_count"] = std::to_string(marker_items.size());
     global_vars["animation_count"] = std::to_string(normalized_animation_items.size());
-    global_vars["fps"] = std::to_string(animation_fps > 0 ? animation_fps : 8);
+    global_vars["fps"] = std::to_string(animation_fps > 0 ? animation_fps : DEFAULT_ANIMATION_FPS);
     global_vars["animation_fps"] = global_vars["fps"];
     global_vars["markers_path"] = markers_path_arg;
     global_vars["animations_path"] = animations_path_arg;

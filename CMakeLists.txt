@@ -2,9 +2,14 @@ cmake_minimum_required(VERSION 3.15)
 project(sprat LANGUAGES CXX)
 include(GNUInstallDirs)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-fpermissive)
+endif()
 
 # External headers
 set(STB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stb)
@@ -64,8 +69,6 @@ endfunction()
 ensure_stb_header(stb_image.h)
 ensure_stb_header(stb_image_write.h)
 
-include_directories(${STB_DIR})
-
 # Binaries
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
@@ -73,12 +76,21 @@ pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
 add_executable(spratlayout src/spratlayout.cpp)
 target_link_libraries(spratlayout ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratlayout PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
+target_include_directories(spratlayout SYSTEM PRIVATE ${STB_DIR})
+
 add_executable(spratpack src/spratpack.cpp)
+target_include_directories(spratpack SYSTEM PRIVATE ${STB_DIR})
+
 add_executable(spratconvert src/spratconvert.cpp)
+target_include_directories(spratconvert SYSTEM PRIVATE ${STB_DIR})
+
 add_executable(spratframes src/spratframes.cpp)
+target_include_directories(spratframes SYSTEM PRIVATE ${STB_DIR})
+
 add_executable(spratunpack src/spratunpack.cpp)
 target_link_libraries(spratunpack ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratunpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
+target_include_directories(spratunpack SYSTEM PRIVATE ${STB_DIR})
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(spratlayout PRIVATE
     SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")

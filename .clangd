@@ -1,0 +1,18 @@
+# sprat-cli clangd configuration
+# https://clangd.llvm.org/config/
+
+CompileFlags:
+  CompilationDatabase: "."
+  Add: 
+    - -std=c++20
+    - -Wall
+    - -Wextra
+    - -Wno-unused-parameter
+  QueryDriver:
+    - "c++*"
+    - "g++*"
+    - "clang++*"
+    - "*cl.exe"
+
+Index:
+  Background: Build

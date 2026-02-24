@@ -2,18 +2,20 @@
 // MIT License (c) 2026 Pedro
 // Compile: g++ -std=c++17 -O2 src/spratlayout.cpp -o spratlayout
 
+#include <algorithm>
 #include <iostream>
+#include <utility>
 #include <vector>
 #include <string>
 #include <filesystem>
-#include <algorithm>
+namespace fs = std::filesystem;
+#include <cstdint>
 #include <cstdlib>
 #include <cctype>
 #include <functional>
 #include <memory>
 #include <limits>
 #include <cmath>
-#include <utility>
 #include <array>
 #include <cstddef>
 #include <chrono>
@@ -30,30 +32,31 @@
 #include <archive_entry.h>
 
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include <stb_image.h>
 
-namespace fs = std::filesystem;
 constexpr int k_output_cache_format_version = 2;
 constexpr int k_seed_cache_format_version = 2;
 #ifndef SPRAT_GLOBAL_PROFILE_CONFIG
 #define SPRAT_GLOBAL_PROFILE_CONFIG "/usr/local/share/sprat/spratprofiles.cfg"
 #endif
 
+namespace {
+
 std::string trim_copy(const std::string& s) {
     size_t start = 0;
-    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) {
+    while (start < s.size() && (std::isspace(static_cast<unsigned char>(s[start])) != 0)) {
         ++start;
     }
     size_t end = s.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+    while (end > start && (std::isspace(static_cast<unsigned char>(s[end - 1])) != 0)) {
         --end;
     }
     return s.substr(start, end - start);
 }
 
-enum class Mode { POT, COMPACT, FAST };
-enum class OptimizeTarget { GPU, SPACE };
-enum class ResolutionReference { Largest, Smallest };
+enum class Mode : std::uint8_t { POT, COMPACT, FAST };
+enum class OptimizeTarget : std::uint8_t { GPU, SPACE };
+enum class ResolutionReference : std::uint8_t { Largest, Smallest };
 
 struct ProfileDefinition {
     std::string name;
@@ -88,8 +91,58 @@ constexpr std::array<const char*, 3> k_compact_prewarm_profiles = {
     "space",
 };
 
+constexpr int k_max_image_dimension = 100000;
+constexpr int k_output_precision = 8;
+constexpr int k_max_cache_entries = 10000;
+constexpr long long k_max_cache_age_seconds_limit = 31536000; // 1 year
+constexpr long long k_default_cache_age_seconds = 86400; // 1 day
+constexpr uintmax_t k_max_file_size = 1000000000; // 1GB
+constexpr size_t k_tar_read_buffer_size = 10240;
+constexpr size_t k_max_extension_len = 10;
+constexpr size_t k_content_detection_buffer_size = 512;
+constexpr size_t k_tar_magic_offset = 257;
+constexpr size_t k_tar_magic_len = 5;
+constexpr size_t k_min_tar_read_len = k_tar_magic_offset;
+constexpr size_t k_ustar_sig_required_len = k_tar_magic_offset + 6;
+constexpr int k_floating_point_precision = 17;
+constexpr int k_search_step_divisor = 24;
+constexpr int k_search_step_min = 8;
+constexpr size_t k_guided_offsets_count = 11;
+constexpr std::array<int, k_guided_offsets_count> k_guided_search_offsets = {
+    0, -1, 1, -2, 2, -4, 4, -8, 8, -12, 12
+};
+constexpr size_t k_sort_mode_count = 5;
+constexpr size_t k_sort_mode_index_area = 0;
+constexpr size_t k_sort_mode_index_maxside = 1;
+constexpr size_t k_sort_mode_index_height = 2;
+constexpr size_t k_sort_mode_index_width = 3;
+constexpr size_t k_sort_mode_index_perimeter = 4;
+
+enum class RectHeuristic : std::uint8_t {
+    BestShortSideFit,
+    BestAreaFit,
+    BottomLeft
+};
+
+constexpr size_t k_rect_heuristic_count = 3;
+constexpr size_t k_guided_anchor_count = 3;
+constexpr size_t k_guided_sort_mode_count = 3;
+constexpr std::array<size_t, k_guided_sort_mode_count> k_guided_sort_indices = {
+    k_sort_mode_index_height,
+    k_sort_mode_index_area,
+    k_sort_mode_index_maxside
+};
+constexpr size_t k_guided_heuristic_count = 2;
+constexpr std::array<RectHeuristic, k_guided_heuristic_count> k_guided_heuristics = {
+    RectHeuristic::BestShortSideFit,
+    RectHeuristic::BestAreaFit
+};
+constexpr long long k_cache_max_age_seconds = 3600;
+constexpr size_t k_cache_max_layout_files = 16;
+constexpr size_t k_cache_max_seed_files = 8;
+
 std::string to_lower_copy(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
+    std::ranges::transform(value, value.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return value;
 }
@@ -146,8 +199,9 @@ bool parse_positive_int(const std::string& value, int& out) {
     try {
         size_t idx = 0;
         long long parsed = std::stoll(value, &idx);
-        if (idx != value.size() || parsed <= 0 ||
-            parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
+        if (idx != value.size()
+            || parsed <= 0
+            || parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
             return false;
         }
         out = static_cast<int>(parsed);
@@ -161,8 +215,9 @@ bool parse_non_negative_int(const std::string& value, int& out) {
     try {
         size_t idx = 0;
         long long parsed = std::stoll(value, &idx);
-        if (idx != value.size() || parsed < 0 ||
-            parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
+        if (idx != value.size()
+            || parsed < 0
+            || parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
             return false;
         }
         out = static_cast<int>(parsed);
@@ -209,10 +264,7 @@ bool parse_resolution(const std::string& value, int& out_width, int& out_height)
 
     const std::string width_str = value.substr(0, sep);
     const std::string height_str = value.substr(sep + 1);
-    if (!parse_positive_int(width_str, out_width) || !parse_positive_int(height_str, out_height)) {
-        return false;
-    }
-    return true;
+    return !(!parse_positive_int(width_str, out_width) || !parse_positive_int(height_str, out_height));
 }
 
 bool parse_bool_value(const std::string& value, bool& out) {
@@ -271,7 +323,7 @@ bool parse_profiles_config(std::istream& input,
                         std::to_string(line_number);
                 return false;
             }
-            if (seen_names.find(name) != seen_names.end()) {
+            if (seen_names.contains(name)) {
                 error = "duplicate profile '" + name + "' at line " + std::to_string(line_number);
                 return false;
             }
@@ -372,7 +424,8 @@ bool parse_profiles_config(std::istream& input,
             }
             current->threads = parsed_threads;
         } else if (lower_key == "source_resolution") {
-            int w = 0, h = 0;
+            int w = 0;
+            int h = 0;
             if (!parse_resolution(value, w, h)) {
                 error = "invalid source_resolution '" + value + "' at line " + std::to_string(line_number);
                 return false;
@@ -382,7 +435,8 @@ bool parse_profiles_config(std::istream& input,
             if (to_lower_copy(value) == "source") {
                 current->target_resolution = std::make_pair(-1, -1);
             } else {
-                int w = 0, h = 0;
+                int w = 0;
+                int h = 0;
                 if (!parse_resolution(value, w, h)) {
                     error = "invalid target_resolution '" + value + "' at line " + std::to_string(line_number);
                     return false;
@@ -434,7 +488,7 @@ std::optional<fs::path> resolve_user_profiles_config_path() {
 
 struct Sprite {
     std::string path;
-    int w, h;
+    int w{}, h{};
     int x = 0, y = 0;
     int trim_left = 0, trim_top = 0;
     int trim_right = 0, trim_bottom = 0;
@@ -524,8 +578,8 @@ inline bool pixel_is_opaque(const unsigned char* rgba, int width, int x, int y) 
     if (rgba == nullptr || width <= 0 || x < 0 || y < 0 || x >= width) {
         return false;
     }
-    const size_t pixel_index = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
-    const size_t alpha_index = pixel_index * static_cast<size_t>(4) + static_cast<size_t>(3);
+    const size_t pixel_index = (static_cast<size_t>(y) * static_cast<size_t>(width)) + static_cast<size_t>(x);
+    const size_t alpha_index = (pixel_index * static_cast<size_t>(4)) + static_cast<size_t>(3);
     return rgba[alpha_index] != 0;
 }
 
@@ -545,7 +599,7 @@ bool compute_trim_bounds(const unsigned char* rgba,
     }
 
     // Validate that the image dimensions are reasonable
-    if (w > 100000 || h > 100000) {
+    if (w > k_max_image_dimension || h > k_max_image_dimension) {
         return false;
     }
 
@@ -625,7 +679,7 @@ bool read_image_meta(const fs::path& path, ImageMeta& out) {
     if (ec) {
         return false;
     }
-    if (size > 1000000000) { // 1GB limit
+    if (size > k_max_file_size) { // 1GB limit
         return false;
     }
     fs::file_time_type mtime = fs::last_write_time(path, ec);
@@ -645,71 +699,24 @@ long long now_unix_seconds() {
 
 bool is_supported_image_extension(const fs::path& path) {
     std::string ext = path.extension().string();
-    if (ext.empty() || ext.size() > 10) {
+    if (ext.empty() || ext.size() > k_max_extension_len) {
         return false;
     }
-    std::transform(ext.begin(), ext.end(), ext.begin(),
+    std::ranges::transform(ext, ext.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" ||
-           ext == ".tga" || ext == ".gif" || ext == ".psd" || ext == ".pic" ||
-           ext == ".pnm" || ext == ".pgm" || ext == ".ppm" || ext == ".hdr" ||
-           ext == ".webp";
+    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp"
+           || ext == ".tga" || ext == ".gif" || ext == ".psd" || ext == ".pic"
+           || ext == ".pnm" || ext == ".pgm" || ext == ".ppm" || ext == ".hdr"
+           || ext == ".webp";
 }
 
-enum class ContentType {
+enum class ContentType : std::uint8_t {
     Directory,
     ListFile,
     TarFile,
     CompressedTarFile,
     Unknown
 };
-
-ContentType detect_content_type_from_fd(int fd) {
-    // Read first 512 bytes to detect content type
-    char buffer[512];
-    ssize_t bytes_read = read(fd, buffer, sizeof(buffer));
-    if (bytes_read < 257) {
-        return ContentType::Unknown;
-    }
-    
-    // Check for tar magic bytes at positions 257-262 (ustar signature)
-    if (bytes_read >= 263) {
-        const char* ustar_sig = buffer + 257;
-        if (strncmp(ustar_sig, "ustar", 5) == 0) {
-            return ContentType::TarFile;
-        }
-    }
-    
-    // Check for compression magic bytes at the beginning
-    if (bytes_read >= 2) {
-        // gzip magic: 0x1f 0x8b
-        if (static_cast<unsigned char>(buffer[0]) == 0x1f && 
-            static_cast<unsigned char>(buffer[1]) == 0x8b) {
-            return ContentType::CompressedTarFile;
-        }
-    }
-    
-    if (bytes_read >= 3) {
-        // bzip2 magic: "BZh"
-        if (buffer[0] == 'B' && buffer[1] == 'Z' && buffer[2] == 'h') {
-            return ContentType::CompressedTarFile;
-        }
-    }
-    
-    if (bytes_read >= 6) {
-        // xz magic: 0xfd 0x37 0x7a 0x58 0x5a 0x00
-        if (static_cast<unsigned char>(buffer[0]) == 0xfd &&
-            static_cast<unsigned char>(buffer[1]) == 0x37 &&
-            static_cast<unsigned char>(buffer[2]) == 0x7a &&
-            static_cast<unsigned char>(buffer[3]) == 0x58 &&
-            static_cast<unsigned char>(buffer[4]) == 0x5a &&
-            static_cast<unsigned char>(buffer[5]) == 0x00) {
-            return ContentType::CompressedTarFile;
-        }
-    }
-    
-    return ContentType::Unknown;
-}
 
 ContentType detect_content_type_from_path(const fs::path& path) {
     const bool is_dir = fs::exists(path) && fs::is_directory(path);
@@ -724,7 +731,7 @@ ContentType detect_content_type_from_path(const fs::path& path) {
     
     // For files, check extension first for quick detection
     std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
+    std::ranges::transform(ext, ext.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     
     if (ext == ".tar") {
@@ -732,16 +739,16 @@ ContentType detect_content_type_from_path(const fs::path& path) {
     }
     
     std::string filename = path.filename().string();
-    std::transform(filename.begin(), filename.end(), filename.begin(),
+    std::ranges::transform(filename, filename.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     
     // Check for compressed tar extensions
-    if (filename.find(".tar.gz") != std::string::npos ||
-        filename.find(".tar.bz2") != std::string::npos ||
-        filename.find(".tar.xz") != std::string::npos ||
-        filename.find(".tgz") != std::string::npos ||
-        filename.find(".tbz2") != std::string::npos ||
-        filename.find(".txz") != std::string::npos) {
+    if (filename.find(".tar.gz") != std::string::npos
+        || filename.find(".tar.bz2") != std::string::npos
+        || filename.find(".tar.xz") != std::string::npos
+        || filename.find(".tgz") != std::string::npos
+        || filename.find(".tbz2") != std::string::npos
+        || filename.find(".txz") != std::string::npos) {
         return ContentType::CompressedTarFile;
     }
     
@@ -759,8 +766,8 @@ bool is_compressed_tar_file(const fs::path& path) {
 
 bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
     struct archive* a = archive_read_new();
-    if (!a) {
-        std::cerr << "Error: Failed to create archive reader" << std::endl;
+    if (a == nullptr) {
+        std::cerr << "Error: Failed to create archive reader" << '\n';
         return false;
     }
     
@@ -768,23 +775,23 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
     archive_read_support_format_all(a);
     archive_read_support_filter_all(a);
     
-    if (archive_read_open_filename(a, tar_path.string().c_str(), 10240) != ARCHIVE_OK) {
-        std::cerr << "Error: Failed to open tar file: " << archive_error_string(a) << std::endl;
+    if (archive_read_open_filename(a, tar_path.string().c_str(), k_tar_read_buffer_size) != ARCHIVE_OK) {
+        std::cerr << "Error: Failed to open tar file: " << archive_error_string(a) << '\n';
         archive_read_free(a);
         return false;
     }
     
     struct archive* ext = archive_write_disk_new();
-    if (!ext) {
-        std::cerr << "Error: Failed to create archive writer" << std::endl;
+    if (ext == nullptr) {
+        std::cerr << "Error: Failed to create archive writer" << '\n';
         archive_read_free(a);
         return false;
     }
     
     archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
     
-    int r;
-    struct archive_entry* entry;
+    la_ssize_t r = 0;
+    struct archive_entry* entry = nullptr;
     
     while (true) {
         r = archive_read_next_header(a, &entry);
@@ -792,7 +799,7 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
             break;
         }
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << std::endl;
+            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << '\n';
             break;
         }
         
@@ -803,7 +810,7 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
         
         // Get the filename
         const char* filename = archive_entry_pathname(entry);
-        if (!filename) {
+        if (filename == nullptr) {
             continue;
         }
         
@@ -821,28 +828,28 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
         // Extract the file
         r = archive_write_header(ext, entry);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << std::endl;
+            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << '\n';
         } else {
-            const void* buff;
-            size_t size;
-            la_int64_t offset;
+            const void* buff = nullptr;
+            size_t size = 0;
+            la_int64_t offset = 0;
             
             while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
                 r = archive_write_data_block(ext, buff, size, offset);
                 if (r < ARCHIVE_OK) {
-                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << std::endl;
+                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << '\n';
                     break;
                 }
             }
             
             if (r < ARCHIVE_OK) {
-                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << std::endl;
+                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << '\n';
             }
         }
         
         r = archive_write_finish_entry(ext);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << std::endl;
+            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << '\n';
         }
     }
     
@@ -856,8 +863,8 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
 
 bool extract_tar_from_stdin(const fs::path& output_dir) {
     struct archive* a = archive_read_new();
-    if (!a) {
-        std::cerr << "Error: Failed to create archive reader" << std::endl;
+    if (a == nullptr) {
+        std::cerr << "Error: Failed to create archive reader" << '\n';
         return false;
     }
     
@@ -866,23 +873,23 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
     archive_read_support_filter_all(a);
     
     // Open from stdin
-    if (archive_read_open_fd(a, STDIN_FILENO, 10240) != ARCHIVE_OK) {
-        std::cerr << "Error: Failed to open stdin for tar extraction: " << archive_error_string(a) << std::endl;
+    if (archive_read_open_fd(a, STDIN_FILENO, k_tar_read_buffer_size) != ARCHIVE_OK) {
+        std::cerr << "Error: Failed to open stdin for tar extraction: " << archive_error_string(a) << '\n';
         archive_read_free(a);
         return false;
     }
     
     struct archive* ext = archive_write_disk_new();
-    if (!ext) {
-        std::cerr << "Error: Failed to create archive writer" << std::endl;
+    if (ext == nullptr) {
+        std::cerr << "Error: Failed to create archive writer" << '\n';
         archive_read_free(a);
         return false;
     }
     
     archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
     
-    int r;
-    struct archive_entry* entry;
+    la_ssize_t r = 0;
+    struct archive_entry* entry = nullptr;
     
     while (true) {
         r = archive_read_next_header(a, &entry);
@@ -890,7 +897,7 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
             break;
         }
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << std::endl;
+            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << '\n';
             break;
         }
         
@@ -901,7 +908,7 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
         
         // Get the filename
         const char* filename = archive_entry_pathname(entry);
-        if (!filename) {
+        if (filename == nullptr) {
             continue;
         }
         
@@ -919,28 +926,28 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
         // Extract the file
         r = archive_write_header(ext, entry);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << std::endl;
+            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << '\n';
         } else {
-            const void* buff;
-            size_t size;
-            la_int64_t offset;
+            const void* buff = nullptr;
+            size_t size = 0;
+            la_int64_t offset = 0;
             
             while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
                 r = archive_write_data_block(ext, buff, size, offset);
                 if (r < ARCHIVE_OK) {
-                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << std::endl;
+                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << '\n';
                     break;
                 }
             }
             
             if (r < ARCHIVE_OK) {
-                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << std::endl;
+                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << '\n';
             }
         }
         
         r = archive_write_finish_entry(ext);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << std::endl;
+            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << '\n';
         }
     }
     
@@ -952,7 +959,7 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
     return true;
 }
 
-enum class InputType {
+enum class InputType : std::uint8_t {
     Directory,
     ListFile,
     TarFile,
@@ -998,7 +1005,7 @@ bool detect_and_extract_tar_content(const fs::path& input_path, InputContext& ou
         out_context.type = InputType::TarFile;
         out_context.working_folder = temp_dir;
         return true;
-    } else if (is_dir) {
+    } if (is_dir) {
         out_context.type = InputType::Directory;
         out_context.working_folder = input_path;
         return true;
@@ -1042,8 +1049,8 @@ bool load_content_from_stdin(InputContext& out_context) {
 void prune_stale_cache_entries(std::unordered_map<std::string, ImageCacheEntry>& entries,
                                long long now_unix,
                                long long max_age_seconds) {
-    if (max_age_seconds < 0 || max_age_seconds > 31536000) { // 1 year limit
-        max_age_seconds = 86400; // default to 1 day
+    if (max_age_seconds < 0 || max_age_seconds > k_max_cache_age_seconds_limit) { // 1 year limit
+        max_age_seconds = k_default_cache_age_seconds; // default to 1 day
     }
     for (auto it = entries.begin(); it != entries.end();) {
         const long long cached_at = it->second.cached_at_unix;
@@ -1094,7 +1101,7 @@ bool load_image_cache(const fs::path& cache_path,
                 break;
             }
         }
-        if (entry.w <= 0 || entry.h <= 0 || entry.w > 100000 || entry.h > 100000) {
+        if (entry.w <= 0 || entry.h <= 0 || entry.w > k_max_image_dimension || entry.h > k_max_image_dimension) {
             continue;
         }
         entry.trim_transparent = trim_flag != 0;
@@ -1107,7 +1114,7 @@ bool load_image_cache(const fs::path& cache_path,
 
 bool save_image_cache(const fs::path& cache_path,
                       const std::unordered_map<std::string, ImageCacheEntry>& entries) {
-    if (entries.size() > 10000) { // Limit cache size
+    if (entries.size() > k_max_cache_entries) { // Limit cache size
         return false;
     }
 
@@ -1128,7 +1135,7 @@ bool save_image_cache(const fs::path& cache_path,
             path = path.substr(0, path.size() - 2);
         }
         const ImageCacheEntry& e = kv.second;
-        if (e.w <= 0 || e.h <= 0 || e.w > 100000 || e.h > 100000) {
+        if (e.w <= 0 || e.h <= 0 || e.w > k_max_image_dimension || e.h > k_max_image_dimension) {
             continue;
         }
         out << std::quoted(path) << " "
@@ -1223,7 +1230,7 @@ std::string to_hex_size_t(size_t value) {
 }
 
 bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds) {
-    if (max_age_seconds < 0 || max_age_seconds > 31536000) { // 1 year limit
+    if (max_age_seconds < 0 || max_age_seconds > k_max_cache_age_seconds_limit) { // 1 year limit
         return true;
     }
     std::error_code ec;
@@ -1261,7 +1268,7 @@ std::string build_layout_signature(const std::string& profile_name,
         parts.push_back(line.str());
     }
     if (!preserve_source_order) {
-        std::sort(parts.begin(), parts.end());
+        std::ranges::sort(parts);
     }
 
     std::ostringstream sig;
@@ -1272,7 +1279,7 @@ std::string build_layout_signature(const std::string& profile_name,
         << max_height_limit << "|"
         << padding << "|"
         << max_combinations << "|"
-        << std::setprecision(17) << scale << "|"
+        << std::setprecision(k_floating_point_precision) << scale << "|"
         << (trim_transparent ? 1 : 0) << "|"
         << (preserve_source_order ? 1 : 0);
     for (const std::string& part : parts) {
@@ -1299,7 +1306,7 @@ std::string build_layout_seed_signature(const std::string& profile_name,
         parts.push_back(line.str());
     }
     if (!preserve_source_order) {
-        std::sort(parts.begin(), parts.end());
+        std::ranges::sort(parts);
     }
 
     std::ostringstream sig;
@@ -1309,7 +1316,7 @@ std::string build_layout_seed_signature(const std::string& profile_name,
         << max_width_limit << "|"
         << max_height_limit << "|"
         << max_combinations << "|"
-        << std::setprecision(17) << scale << "|"
+        << std::setprecision(k_floating_point_precision) << scale << "|"
         << (trim_transparent ? 1 : 0) << "|"
         << (preserve_source_order ? 1 : 0);
     for (const std::string& part : parts) {
@@ -1512,7 +1519,7 @@ void prune_cache_family_group(const fs::path& base_cache_path,
         }
 
         const std::string name = entry.path().filename().string();
-        if (name.rfind(prefix, 0) != 0) {
+        if (!name.starts_with(prefix)) {
             continue;
         }
 
@@ -1541,14 +1548,14 @@ void prune_cache_family_group(const fs::path& base_cache_path,
             continue;
         }
 
-        keep_candidates.push_back(CacheFileInfo{entry.path(), mtime});
+        keep_candidates.push_back({.path=entry.path(), .mtime=mtime});
     }
 
     if (keep_candidates.size() <= max_files_to_keep) {
         return;
     }
 
-    std::sort(keep_candidates.begin(), keep_candidates.end(), [](const CacheFileInfo& a, const CacheFileInfo& b) {
+    std::ranges::sort(keep_candidates, [](const CacheFileInfo& a, const CacheFileInfo& b) {
         return a.mtime > b.mtime;
     });
 
@@ -1569,6 +1576,9 @@ void prune_cache_family(const fs::path& base_cache_path,
 void prune_all_spratlayout_cache_families(long long max_age_seconds,
                                           size_t max_layout_files_to_keep,
                                           size_t max_seed_files_to_keep) {
+    if (max_age_seconds < 0 || max_age_seconds > k_max_cache_age_seconds_limit) {
+        max_age_seconds = k_default_cache_age_seconds;
+    }
     const fs::path parent = cache_root_dir();
     std::error_code ec;
     if (!fs::exists(parent, ec) || ec || !fs::is_directory(parent, ec)) {
@@ -1586,7 +1596,7 @@ void prune_all_spratlayout_cache_families(long long max_age_seconds,
             continue;
         }
         const std::string name = entry.path().filename().string();
-        if (name.rfind("spratlayout_", 0) != 0) {
+        if (!name.starts_with("spratlayout_")) {
             continue;
         }
 
@@ -1629,7 +1639,7 @@ void remove_legacy_top_level_cache_files() {
             continue;
         }
         const std::string name = entry.path().filename().string();
-        if (name.rfind("spratlayout_", 0) != 0) {
+        if (!name.starts_with("spratlayout_")) {
             continue;
         }
         if (name.find(".cache") == std::string::npos) {
@@ -1712,7 +1722,7 @@ bool try_apply_layout_seed(const LayoutSeedCache& seed,
         placed.x = entry.x;
         placed.y = entry.y;
         out_sprites.push_back(std::move(placed));
-        rects.push_back(Rect{entry.x, entry.y, x1, y1});
+        rects.push_back({.x0=entry.x, .y0=entry.y, .x1=x1, .y1=y1});
         out_atlas_width = std::max(out_atlas_width, x1);
         out_atlas_height = std::max(out_atlas_height, y1);
     }
@@ -1724,7 +1734,7 @@ bool try_apply_layout_seed(const LayoutSeedCache& seed,
     for (size_t i = 0; i < order.size(); ++i) {
         order[i] = i;
     }
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    std::ranges::sort(order, [&](size_t a, size_t b) {
         return rects[a].x0 < rects[b].x0;
     });
 
@@ -1751,7 +1761,7 @@ std::string build_layout_output_text(int atlas_width,
                                      const std::vector<Sprite>& sprites) {
     std::ostringstream output;
     output << "atlas " << atlas_width << "," << atlas_height << "\n";
-    output << "scale " << std::setprecision(8) << scale << "\n";
+    output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
     for (const auto& s : sprites) {
         std::string path = s.path;
         size_t pos = 0;
@@ -1826,7 +1836,7 @@ bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int pad
             return false;
         }
         Node* node = insert(root.get(), sprite, w, h);
-        if (!node) {
+        if (node == nullptr) {
             return false;
         }
         sprite.x = node->x;
@@ -1835,7 +1845,7 @@ bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int pad
     return true;
 }
 
-enum class SortMode {
+enum class SortMode : std::uint8_t {
     Height,
     Width,
     Area,
@@ -1845,24 +1855,29 @@ enum class SortMode {
 
 bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
     auto cmp_height = [](const Sprite& a, const Sprite& b) {
-        if (a.h != b.h) return a.h > b.h;
+        if (a.h != b.h) { return a.h > b.h;
+}
         return a.w > b.w;
     };
     auto cmp_width = [](const Sprite& a, const Sprite& b) {
-        if (a.w != b.w) return a.w > b.w;
+        if (a.w != b.w) { return a.w > b.w;
+}
         return a.h > b.h;
     };
     auto cmp_area = [](const Sprite& a, const Sprite& b) {
         long long area_a = static_cast<long long>(a.w) * static_cast<long long>(a.h);
         long long area_b = static_cast<long long>(b.w) * static_cast<long long>(b.h);
-        if (area_a != area_b) return area_a > area_b;
-        if (a.h != b.h) return a.h > b.h;
+        if (area_a != area_b) { return area_a > area_b;
+}
+        if (a.h != b.h) { return a.h > b.h;
+}
         return a.w > b.w;
     };
     auto cmp_max_side = [](const Sprite& a, const Sprite& b) {
         int max_a = std::max(a.w, a.h);
         int max_b = std::max(b.w, b.h);
-        if (max_a != max_b) return max_a > max_b;
+        if (max_a != max_b) { return max_a > max_b;
+}
         long long area_a = static_cast<long long>(a.w) * static_cast<long long>(a.h);
         long long area_b = static_cast<long long>(b.w) * static_cast<long long>(b.h);
         return area_a > area_b;
@@ -1870,7 +1885,8 @@ bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
     auto cmp_perimeter = [](const Sprite& a, const Sprite& b) {
         int p_a = a.w + a.h;
         int p_b = b.w + b.h;
-        if (p_a != p_b) return p_a > p_b;
+        if (p_a != p_b) { return p_a > p_b;
+}
         long long area_a = static_cast<long long>(a.w) * static_cast<long long>(a.h);
         long long area_b = static_cast<long long>(b.w) * static_cast<long long>(b.h);
         return area_a > area_b;
@@ -1878,19 +1894,19 @@ bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
 
     switch (mode) {
         case SortMode::Height:
-            std::sort(sprites.begin(), sprites.end(), cmp_height);
+            std::ranges::sort(sprites, cmp_height);
             return true;
         case SortMode::Width:
-            std::sort(sprites.begin(), sprites.end(), cmp_width);
+            std::ranges::sort(sprites, cmp_width);
             return true;
         case SortMode::Area:
-            std::sort(sprites.begin(), sprites.end(), cmp_area);
+            std::ranges::sort(sprites, cmp_area);
             return true;
         case SortMode::MaxSide:
-            std::sort(sprites.begin(), sprites.end(), cmp_max_side);
+            std::ranges::sort(sprites, cmp_max_side);
             return true;
         case SortMode::Perimeter:
-            std::sort(sprites.begin(), sprites.end(), cmp_perimeter);
+            std::ranges::sort(sprites, cmp_perimeter);
             return true;
     }
     return false;
@@ -1903,15 +1919,9 @@ struct Rect {
     int h = 0;
 };
 
-enum class RectHeuristic {
-    BestShortSideFit,
-    BestAreaFit,
-    BottomLeft
-};
-
 bool rects_intersect(const Rect& a, const Rect& b) {
-    return !(a.x + a.w <= b.x || b.x + b.w <= a.x ||
-             a.y + a.h <= b.y || b.y + b.h <= a.y);
+    return a.x + a.w > b.x && b.x + b.w > a.x &&
+             a.y + a.h > b.y && b.y + b.h > a.y;
 }
 
 bool rect_contains(const Rect& a, const Rect& b) {
@@ -2027,19 +2037,23 @@ bool pack_compact_maxrects(
             int area_fit = leftover_h * leftover_w;
 
             bool better = false;
-            if (heuristic == RectHeuristic::BestShortSideFit) {
-                better = short_fit < best_short_fit ||
-                         (short_fit == best_short_fit && long_fit < best_long_fit) ||
-                         (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
-                         (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
-            } else if (heuristic == RectHeuristic::BestAreaFit) {
-                better = area_fit < best_area_fit ||
-                         (area_fit == best_area_fit && short_fit < best_short_fit) ||
-                         (area_fit == best_area_fit && short_fit == best_short_fit && fr.y < best_top) ||
-                         (area_fit == best_area_fit && short_fit == best_short_fit && fr.y == best_top && fr.x < best_left);
-            } else {
-                better = fr.y < best_top || (fr.y == best_top && fr.x < best_left) ||
-                         (fr.y == best_top && fr.x == best_left && short_fit < best_short_fit);
+            switch (heuristic) {
+                case RectHeuristic::BestShortSideFit:
+                    better = short_fit < best_short_fit ||
+                             (short_fit == best_short_fit && long_fit < best_long_fit) ||
+                             (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
+                             (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
+                    break;
+                case RectHeuristic::BestAreaFit:
+                    better = area_fit < best_area_fit ||
+                             (area_fit == best_area_fit && short_fit < best_short_fit) ||
+                             (area_fit == best_area_fit && short_fit == best_short_fit && fr.y < best_top) ||
+                             (area_fit == best_area_fit && short_fit == best_short_fit && fr.y == best_top && fr.x < best_left);
+                    break;
+                case RectHeuristic::BottomLeft:
+                    better = fr.y < best_top || (fr.y == best_top && fr.x < best_left) ||
+                             (fr.y == best_top && fr.x == best_left && short_fit < best_short_fit);
+                    break;
             }
 
             if (better) {
@@ -2056,14 +2070,14 @@ bool pack_compact_maxrects(
             return false;
         }
 
-        Rect used = {free_rects[static_cast<size_t>(best_index)].x,
-                     free_rects[static_cast<size_t>(best_index)].y,
-                     rw, rh};
+        Rect used = {.x=free_rects[static_cast<size_t>(best_index)].x,
+                     .y=free_rects[static_cast<size_t>(best_index)].y,
+                     .w=rw, .h=rh};
         s.x = used.x;
         s.y = used.y;
 
-        if (used.x + used.w > used_w) used_w = used.x + used.w;
-        if (used.y + used.h > used_h) used_h = used.y + used.h;
+        used_w = std::max(used.x + used.w, used_w);
+        used_h = std::max(used.y + used.h, used_h);
 
         std::vector<Rect> next_free;
         next_free.reserve(free_rects.size() * 2);
@@ -2134,12 +2148,8 @@ bool pack_fast_shelf(
         s.x = x;
         s.y = y;
         x = candidate_x;
-        if (h > row_height) {
-            row_height = h;
-        }
-        if (x > atlas_width) {
-            atlas_width = x;
-        }
+        row_height = std::max(h, row_height);
+        atlas_width = std::max(x, atlas_width);
     }
 
     int total_height = 0;
@@ -2160,12 +2170,8 @@ bool compute_tight_atlas_bounds(const std::vector<Sprite>& sprites, int& out_wid
         if (!checked_add_int(s.x, s.w, x1) || !checked_add_int(s.y, s.h, y1)) {
             return false;
         }
-        if (x1 > out_width) {
-            out_width = x1;
-        }
-        if (y1 > out_height) {
-            out_height = y1;
-        }
+        out_width = std::max(x1, out_width);
+        out_height = std::max(y1, out_height);
     }
     return out_width > 0 && out_height > 0;
 }
@@ -2231,6 +2237,8 @@ bool pick_better_layout_candidate(
 
     return candidate_w < best_w;
 }
+
+} // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -2339,9 +2347,7 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid padding value: " << value << "\n";
                 return 1;
             }
-            if (padding < 0) {
-                padding = 0;
-            }
+            padding = std::max(padding, 0);
             has_padding_override = true;
         } else if (arg == "--max-combinations" && i + 1 < argc) {
             std::string value = argv[++i];
@@ -2475,7 +2481,7 @@ int main(int argc, char** argv) {
                 config_candidates.push_back(*user_config);
             }
             config_candidates.push_back(exec_dir / k_profiles_config_filename);
-            config_candidates.push_back(fs::path(k_global_profiles_config_path));
+            config_candidates.emplace_back(k_global_profiles_config_path);
         }
 
         bool loaded_profile_file = false;
@@ -2591,7 +2597,6 @@ int main(int argc, char** argv) {
     }
 
     InputContext input_context;
-    bool loaded_from_stdin = false;
     
     // Check if we should read from stdin (when folder is "-")
     if (folder == "-") {
@@ -2599,7 +2604,6 @@ int main(int argc, char** argv) {
             std::cerr << "Error: Failed to load content from stdin\n";
             return 1;
         }
-        loaded_from_stdin = true;
     } else {
         if (!detect_and_extract_tar_content(folder, input_context)) {
             std::cerr << "Error: Failed to load content from input\n";
@@ -2608,9 +2612,6 @@ int main(int argc, char** argv) {
     }
 
     const fs::path cache_path = build_cache_path(input_context.working_folder);
-    constexpr long long k_cache_max_age_seconds = 3600;
-    constexpr size_t k_cache_max_layout_files = 16;
-    constexpr size_t k_cache_max_seed_files = 8;
     const long long now_unix = now_unix_seconds();
     remove_legacy_top_level_cache_files();
     prune_all_spratlayout_cache_families(k_cache_max_age_seconds, k_cache_max_layout_files, k_cache_max_seed_files);
@@ -2726,7 +2727,6 @@ int main(int argc, char** argv) {
 
     std::vector<Sprite> sprites;
     for (const auto& source : sources) {
-        const fs::path& file_path = source.file_path;
         const std::string& path = source.path;
         const ImageMeta& meta = source.meta;
 
@@ -2754,24 +2754,26 @@ int main(int argc, char** argv) {
         Sprite loaded_sprite;
         loaded_sprite.path = path;
         if (!trim_transparent) {
-            int w, h, channels;
-            if (!stbi_info(path.c_str(), &w, &h, &channels)) {
+            int w;
+            int h;
+            int channels;
+            if (stbi_info(path.c_str(), &w, &h, &channels) == 0) {
                 continue;
             }
             loaded_sprite.w = w;
             loaded_sprite.h = h;
             sprites.push_back(loaded_sprite);
-            cache_entries[cache_key] = ImageCacheEntry{
-                trim_transparent,
-                meta.file_size,
-                meta.mtime_ticks,
-                loaded_sprite.w,
-                loaded_sprite.h,
-                loaded_sprite.trim_left,
-                loaded_sprite.trim_top,
-                loaded_sprite.trim_right,
-                loaded_sprite.trim_bottom,
-                now_unix
+            cache_entries[cache_key] = {
+                .trim_transparent=trim_transparent,
+                .file_size=meta.file_size,
+                .mtime_ticks=meta.mtime_ticks,
+                .w=loaded_sprite.w,
+                .h=loaded_sprite.h,
+                .trim_left=loaded_sprite.trim_left,
+                .trim_top=loaded_sprite.trim_top,
+                .trim_right=loaded_sprite.trim_right,
+                .trim_bottom=loaded_sprite.trim_bottom,
+                .cached_at_unix=now_unix
             };
             continue;
         }
@@ -2780,7 +2782,7 @@ int main(int argc, char** argv) {
         int h = 0;
         int channels = 0;
         unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
-        if (!data) {
+        if (data == nullptr) {
             continue;
         }
 
@@ -2807,17 +2809,17 @@ int main(int argc, char** argv) {
 
         stbi_image_free(data);
         sprites.push_back(loaded_sprite);
-        cache_entries[cache_key] = ImageCacheEntry{
-            trim_transparent,
-            meta.file_size,
-            meta.mtime_ticks,
-            loaded_sprite.w,
-            loaded_sprite.h,
-            loaded_sprite.trim_left,
-            loaded_sprite.trim_top,
-            loaded_sprite.trim_right,
-            loaded_sprite.trim_bottom,
-            now_unix
+        cache_entries[cache_key] = {
+            .trim_transparent=trim_transparent,
+            .file_size=meta.file_size,
+            .mtime_ticks=meta.mtime_ticks,
+            .w=loaded_sprite.w,
+            .h=loaded_sprite.h,
+            .trim_left=loaded_sprite.trim_left,
+            .trim_top=loaded_sprite.trim_top,
+            .trim_right=loaded_sprite.trim_right,
+            .trim_bottom=loaded_sprite.trim_bottom,
+            .cached_at_unix=now_unix
         };
     }
 
@@ -2875,7 +2877,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    int atlas_width = 0, atlas_height = 0;
+    int atlas_width = 0;
+    int atlas_height = 0;
     int width_upper_bound = sum_width;
     int height_upper_bound = sum_height;
     if (max_width_limit > 0) {
@@ -2907,14 +2910,14 @@ int main(int argc, char** argv) {
 
     if (!reused_layout_seed) {
         std::unique_ptr<Node> root;
-        const std::array<SortMode, 5> sort_modes = {
+        const std::array<SortMode, k_sort_mode_count> sort_modes = {
             SortMode::Area,
             SortMode::MaxSide,
             SortMode::Height,
             SortMode::Width,
             SortMode::Perimeter
         };
-        const std::array<RectHeuristic, 3> rect_heuristics = {
+        const std::array<RectHeuristic, k_rect_heuristic_count> rect_heuristics = {
             RectHeuristic::BestShortSideFit,
             RectHeuristic::BestAreaFit,
             RectHeuristic::BottomLeft
@@ -2975,13 +2978,13 @@ int main(int argc, char** argv) {
 
         std::vector<int> pot_widths;
         std::vector<int> pot_heights;
-        for (int w = min_pot_width; w > 0 && static_cast<size_t>(w) <= best_area; w *= 2) {
+        for (int w = min_pot_width; w > 0 && std::cmp_less_equal(w, best_area); w *= 2) {
             pot_widths.push_back(w);
             if (w > std::numeric_limits<int>::max() / 2) {
                 break;
             }
         }
-        for (int h = min_pot_height; h > 0 && static_cast<size_t>(h) <= best_area; h *= 2) {
+        for (int h = min_pot_height; h > 0 && std::cmp_less_equal(h, best_area); h *= 2) {
             pot_heights.push_back(h);
             if (h > std::numeric_limits<int>::max() / 2) {
                 break;
@@ -3052,10 +3055,12 @@ int main(int argc, char** argv) {
             worker_count = 1;
         }
 
-        std::array<std::vector<Sprite>, 5> sorted_sprites_by_mode;
-        for (size_t i = 0; i < sort_modes.size(); ++i) {
-            sorted_sprites_by_mode[i] = sprites;
-            sort_sprites_by_mode(sorted_sprites_by_mode[i], sort_modes[i]);
+        std::array<std::vector<Sprite>, k_sort_mode_count> sorted_sprites_by_mode;
+        int sort_idx = 0;
+        for (SortMode sm : sort_modes) {
+            sorted_sprites_by_mode[sort_idx] = sprites;
+            sort_sprites_by_mode(sorted_sprites_by_mode[sort_idx], sm);
+            ++sort_idx;
         }
 
         int seed_width = max_width;
@@ -3066,16 +3071,10 @@ int main(int argc, char** argv) {
                 return 1;
             }
             int root_width = static_cast<int>(std::ceil(area_root));
-            if (root_width > seed_width) {
-                seed_width = root_width;
-            }
+            seed_width = std::max(root_width, seed_width);
         }
-        if (seed_width > width_upper_bound) {
-            seed_width = width_upper_bound;
-        }
-        if (seed_width < max_width) {
-            seed_width = max_width;
-        }
+        seed_width = std::min(seed_width, width_upper_bound);
+        seed_width = std::max(seed_width, max_width);
         if (have_layout_seed) {
             int seed_hint_width = seed_cache.atlas_width;
             if (padding > seed_cache.padding) {
@@ -3160,17 +3159,11 @@ int main(int argc, char** argv) {
             long double area_root = std::sqrt(static_cast<long double>(total_area));
             if (area_root <= static_cast<long double>(std::numeric_limits<int>::max())) {
                 int candidate = static_cast<int>(std::ceil(area_root));
-                if (candidate > fast_target_width) {
-                    fast_target_width = candidate;
-                }
+                fast_target_width = std::max(candidate, fast_target_width);
             }
         }
-        if (fast_target_width > width_upper_bound) {
-            fast_target_width = width_upper_bound;
-        }
-        if (fast_target_width < max_width) {
-            fast_target_width = max_width;
-        }
+        fast_target_width = std::min(fast_target_width, width_upper_bound);
+        fast_target_width = std::max(fast_target_width, max_width);
 
         std::unordered_set<int> seen_widths;
         std::vector<int> width_candidates;
@@ -3196,17 +3189,15 @@ int main(int argc, char** argv) {
             add_width_candidate(seed_hint_width);
         }
 
-        const int range = std::max(1, width_upper_bound - max_width);
-        const int step = std::max(8, range / 24);
-        const std::array<int, 11> offsets = {
-            0, -1, 1, -2, 2, -4, 4, -8, 8, -12, 12
-        };
-        const std::array<int, 3> anchor_widths = {seed_width, fast_target_width, max_width};
+        const int range = std::max(0, width_upper_bound - fast_target_width);
+        const int step = std::max(k_search_step_min, range / k_search_step_divisor);
+        const std::array<int, k_guided_offsets_count> offsets = k_guided_search_offsets;
+        const std::array<int, k_guided_anchor_count> anchor_widths = {seed_width, fast_target_width, max_width};
         for (int anchor : anchor_widths) {
             for (int mul : offsets) {
                 const long long width_ll =
                     static_cast<long long>(anchor) +
-                    static_cast<long long>(mul) * static_cast<long long>(step);
+                    (static_cast<long long>(mul) * static_cast<long long>(step));
                 if (width_ll < static_cast<long long>(std::numeric_limits<int>::min()) ||
                     width_ll > static_cast<long long>(std::numeric_limits<int>::max())) {
                     continue;
@@ -3214,13 +3205,7 @@ int main(int argc, char** argv) {
                 add_width_candidate(static_cast<int>(width_ll));
             }
         }
-        std::sort(width_candidates.begin(), width_candidates.end());
-
-        const std::array<size_t, 3> guided_sort_indices = {2, 0, 1}; // Height, Area, MaxSide
-        const std::array<RectHeuristic, 2> guided_heuristics = {
-            RectHeuristic::BestShortSideFit,
-            RectHeuristic::BestAreaFit
-        };
+        std::ranges::sort(width_candidates);
 
         if (!budget_exhausted && !width_candidates.empty()) {
             worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
@@ -3269,11 +3254,11 @@ int main(int argc, char** argv) {
                     bool local_budget_exhausted = false;
                     for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                         const int width = width_candidates[width_index];
-                        for (size_t sort_idx : guided_sort_indices) {
+                        for (size_t sort_idx : k_guided_sort_indices) {
                             if (local_budget_exhausted) {
                                 break;
                             }
-                            for (RectHeuristic rect_heuristic : guided_heuristics) {
+                            for (RectHeuristic rect_heuristic : k_guided_heuristics) {
                                 if (!consume_combination_budget()) {
                                     local_budget_exhausted = true;
                                     break;
@@ -3364,7 +3349,7 @@ int main(int argc, char** argv) {
                     bool local_budget_exhausted = false;
                     for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                         const int width = width_candidates[width_index];
-                        for (size_t sort_idx : guided_sort_indices) {
+                        for (size_t sort_idx : k_guided_sort_indices) {
                             if (!consume_combination_budget()) {
                                 local_budget_exhausted = true;
                                 break;
@@ -3412,7 +3397,7 @@ int main(int argc, char** argv) {
         } else {
             selected_candidate = best_space_candidate.valid ? &best_space_candidate : &best_gpu_candidate;
         }
-        if (!selected_candidate || !selected_candidate->valid) {
+        if ((selected_candidate == nullptr) || !selected_candidate->valid) {
             std::cerr << "Error: failed to compute compact layout\n";
             return 1;
         }
@@ -3503,13 +3488,9 @@ int main(int argc, char** argv) {
                 return 1;
             }
             int candidate = static_cast<int>(std::ceil(area_root));
-            if (candidate > target_width) {
-                target_width = candidate;
-            }
+            target_width = std::max(candidate, target_width);
         }
-        if (target_width > width_upper_bound) {
-            target_width = width_upper_bound;
-        }
+        target_width = std::min(target_width, width_upper_bound);
         if (have_layout_seed) {
             int seed_hint_width = seed_cache.atlas_width;
             if (padding > seed_cache.padding) {
