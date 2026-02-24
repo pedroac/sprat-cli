@@ -76,7 +76,7 @@ Detect sprite frames in spritesheets:
 Extract sprites from spritesheets using frame coordinates:
 
 ```sh
-./spratunpack spritesheet.png frames.spratframes output/
+./spratunpack spritesheet.png --frames frames.spratframes --output output/
 ```
 
 Manual page:
@@ -433,7 +433,53 @@ Example:
 ./spratpack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet.png
 ```
 
-You can also pipe both commands directly:
+## Sprite Detection (`spratframes`)
+
+`spratframes` scans an image and detects individual sprite boundaries. It can use transparency-based detection (finding connected components of non-transparent pixels) or look for specific rectangle borders.
+
+```sh
+./spratframes sheet.png > frames.spratframes
+```
+
+Options:
+- `--has-rectangles`: Look for closed rectangles instead of using transparency.
+- `--rectangle-color COLOR`: Border color to detect (e.g., `#FF00FF`, `255,0,255`).
+- `--tolerance N`: Manhattan distance for grouping pixels (default: 1).
+- `--min-size N`: Filter out sprites smaller than NxN pixels.
+- `--threads N`: Parallel processing.
+
+Example with magenta borders:
+```sh
+./spratframes --has-rectangles --rectangle-color "#FF00FF" sheet.png > frames.txt
+```
+
+## Unpacking Atlases (`spratunpack`)
+
+`spratunpack` extracts individual sprites from a texture atlas using a frames definition file.
+
+```sh
+./spratunpack atlas.png --frames atlas.json --output ./extracted
+```
+
+If no output directory is specified, it writes a **TAR archive** to stdout, making it easy to pipe to other tools or network transfers.
+
+```sh
+./spratunpack atlas.png > sprites.tar
+```
+
+Options:
+- `-f, --frames PATH`: Path to frames definition (auto-detects `.json` or `.spratframes`).
+- `-o, --output DIR`: Destination directory.
+- `-j, --threads N`: Parallel extraction.
+
+Supported formats:
+- TexturePacker/sprat JSON (Hash or Array)
+- Minimalist `.spratframes` format
+
+If no frames file is specified, `spratunpack` will look for `<atlas>.json` or `<atlas>.spratframes` automatically.
+
+## Layout transforms (`spratconvert`)
+
 
 ```sh
 ./spratlayout ./frames | ./spratpack > spritesheet.png

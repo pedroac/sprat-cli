@@ -1229,6 +1229,30 @@ std::string to_hex_size_t(size_t value) {
     return oss.str();
 }
 
+void print_usage() {
+    std::cout << "Usage: spratlayout <folder> [OPTIONS]\n"
+              << "\n"
+              << "Scan an image folder and write a text layout to standard output.\n"
+              << "\n"
+              << "Options:\n"
+              << "  --profile NAME             Profile name from config (default: fast)\n"
+              << "  --profiles-config PATH     Use an explicit profile configuration file\n"
+              << "  --mode MODE                Packing mode: compact, pot, or fast\n"
+              << "  --optimize TARGET          Optimization target: gpu or space\n"
+              << "  --max-width N              Maximum atlas width\n"
+              << "  --max-height N             Maximum atlas height\n"
+              << "  --padding N                Extra pixels between packed sprites\n"
+              << "  --max-combinations N       Max combinations for compact search (0=auto)\n"
+              << "  --source-resolution WxH    Source design resolution baseline\n"
+              << "  --target-resolution WxH    Target output resolution\n"
+              << "  --resolution-reference REF Axis ratio driver: largest or smallest\n"
+              << "  --scale F                  Pre-scale factor (0 < F <= 1)\n"
+              << "  --trim-transparent         Enable transparent-border trimming\n"
+              << "  --no-trim-transparent      Disable transparent-border trimming\n"
+              << "  --threads N                Number of worker threads\n"
+              << "  --help, -h                 Show this help message\n";
+}
+
 bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds) {
     if (max_age_seconds < 0 || max_age_seconds > k_max_cache_age_seconds_limit) { // 1 year limit
         return true;
@@ -2241,17 +2265,7 @@ bool pick_better_layout_candidate(
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "Usage: spratlayout <folder> [--profile NAME] [--profiles-config PATH] "
-                  << "[--mode compact|pot|fast] [--optimize gpu|space] [--max-width N] [--max-height N] "
-                  << "[--padding N] [--max-combinations N] [--source-resolution WxH] [--target-resolution WxH] "
-                  << "[--resolution-reference largest|smallest] "
-                  << "[--scale F] [--trim-transparent|--no-trim-transparent] "
-                  << "[--threads N]\n";
-        return 1;
-    }
-
-    fs::path folder = argv[1];
+    fs::path folder;
     std::string requested_profile_name;
     std::string profiles_config_path;
     bool has_mode_override = false;
@@ -2284,9 +2298,12 @@ int main(int argc, char** argv) {
     bool has_threads_override = false;
 
     // parse args
-    for (int i = 2; i < argc; ++i) {
+    for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--profile" && i + 1 < argc) {
+        if (arg == "--help" || arg == "-h") {
+            print_usage();
+            return 0;
+        } else if (arg == "--profile" && i + 1 < argc) {
             requested_profile_name = argv[++i];
         } else if (arg == "--profiles-config" && i + 1 < argc) {
             profiles_config_path = argv[++i];
@@ -2417,10 +2434,22 @@ int main(int argc, char** argv) {
                 return 1;
             }
             has_threads_override = true;
-        } else {
+        } else if (arg.starts_with("-")) {
             std::cerr << "Unknown argument: " << arg << "\n";
             return 1;
+        } else {
+            if (folder.empty()) {
+                folder = arg;
+            } else {
+                std::cerr << "Error: Too many arguments: " << arg << "\n";
+                return 1;
+            }
         }
+    }
+
+    if (folder.empty()) {
+        print_usage();
+        return 1;
     }
 
     std::vector<ProfileDefinition> profile_definitions;

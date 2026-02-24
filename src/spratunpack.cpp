@@ -99,8 +99,14 @@ private:
             if (fs::exists(json_path)) {
                 config_.frames_path = json_path;
             } else {
-                std::cerr << "Error: Frames file not found and could not be auto-detected.\n";
-                return false;
+                fs::path sprat_path = config_.input_path;
+                sprat_path.replace_extension(".spratframes");
+                if (fs::exists(sprat_path)) {
+                    config_.frames_path = sprat_path;
+                } else {
+                    std::cerr << "Error: Frames file not found and could not be auto-detected.\n";
+                    return false;
+                }
             }
         }
 
@@ -119,9 +125,60 @@ private:
 
         if (extension == ".json") {
             return parse_json(content);
+        } if (extension == ".spratframes" || extension == ".txt") {
+            return parse_spratframes(content);
         }             std::cerr << "Error: Unsupported frames format " << extension << "\n";
             return false;
        
+    }
+
+    bool parse_spratframes(const std::string& content) {
+        std::istringstream iss(content);
+        std::string line;
+        int index = 0;
+        while (std::getline(iss, line)) {
+            line = trim_copy(line);
+            if (line.empty() || line.starts_with("path ") || line.starts_with("background ")) {
+                continue;
+            }
+
+            if (line.starts_with("sprite ")) {
+                std::string data = line.substr(7);
+                std::istringstream liss(data);
+                std::string pos_str, size_str;
+                if (liss >> pos_str >> size_str) {
+                    SpriteFrame frame;
+                    frame.name = "sprite_" + std::to_string(index++);
+                    
+                    size_t comma_pos = pos_str.find(',');
+                    if (comma_pos != std::string::npos) {
+                        frame.frame.x = std::stoi(pos_str.substr(0, comma_pos));
+                        frame.frame.y = std::stoi(pos_str.substr(comma_pos + 1));
+                    }
+                    
+                    comma_pos = size_str.find(',');
+                    if (comma_pos != std::string::npos) {
+                        frame.frame.w = std::stoi(size_str.substr(0, comma_pos));
+                        frame.frame.h = std::stoi(size_str.substr(comma_pos + 1));
+                    }
+                    
+                    frames_.push_back(frame);
+                }
+            }
+        }
+        return !frames_.empty();
+    }
+
+    static std::string trim_copy(const std::string& s) {
+        size_t start = 0;
+        while (start < s.size() && (std::isspace(static_cast<unsigned char>(s[start])) != 0)) {
+            ++start;
+        }
+        size_t end = s.size();
+        while (end > start && (std::isspace(static_cast<unsigned char>(s[end - 1])) != 0)) {
+            --end;
+        }
+        return s.substr(start, end - start);
     }
 
     bool parse_json(const std::string& content) {
@@ -440,52 +497,76 @@ private:
 };
 
 void print_usage() {
-    std::cout << "Usage: spratunpack <atlas.png> [options]\n"
+    std::cout << "Usage: spratunpack <atlas.png> [OPTIONS]\n"
+              << "\n"
+              << "Extract individual sprites from an atlas using a frames definition file.\n"
+              << "\n"
               << "Options:\n"
-              << "  -f, --frames <file.json>  Frames definition file (auto-detected if atlas.json exists)\n"
-              << "  -o, --output <dir>        Output directory (default: current)\n"
-              << "  -s, --stdout              Output as tar to stdout\n"
-              << "  -j, --threads <n>         Number of threads to use (default: auto)\n"
-              << "  -h, --help                Show this help message\n";
+              << "  -f, --frames PATH          Frames definition file (auto-detected if atlas.json exists)\n"
+              << "  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n"
+              << "  -j, --threads N            Number of threads to use (default: auto)\n"
+              << "  -h, --help                 Show this help message\n";
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        print_usage();
-        return 1;
-    }
-
     Config config;
-    config.input_path = argv[1];
-    config.output_dir = ".";
+    config.output_dir = "";
 
-    for (int i = 2; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg.empty() || arg[0] == '-') {
-            std::cerr << "Unknown option: " << arg << "\n";
-            return 1;
-        }
         if (arg == "-h" || arg == "--help") {
             print_usage();
             return 0;
-        }
-        if (arg == "-f" || arg == "--frames") {
+        } else if (arg == "-f" || arg == "--frames") {
             if (i + 1 < argc) {
                 config.frames_path = argv[++i];
+            } else {
+                std::cerr << "Error: Missing value for " << arg << "\n";
+                return 1;
             }
         } else if (arg == "-o" || arg == "--output") {
             if (i + 1 < argc) {
                 config.output_dir = argv[++i];
+            } else {
+                std::cerr << "Error: Missing value for " << arg << "\n";
+                return 1;
             }
-        } else if (arg == "-s" || arg == "--stdout") {
-            config.stdout_mode = true;
         } else if (arg == "-j" || arg == "--threads") {
             if (i + 1 < argc) {
-                config.threads = std::stoi(argv[++i]);
+                try {
+                    config.threads = std::stoi(argv[++i]);
+                } catch (const std::exception&) {
+                    std::cerr << "Error: Invalid thread count: " << argv[i] << "\n";
+                    return 1;
+                }
+            } else {
+                std::cerr << "Error: Missing value for " << arg << "\n";
+                return 1;
+            }
+        } else if (arg.starts_with("-")) {
+            std::cerr << "Unknown option: " << arg << "\n";
+            print_usage();
+            return 1;
+        } else {
+            if (config.input_path.empty()) {
+                config.input_path = arg;
+            } else {
+                std::cerr << "Error: Too many arguments: " << arg << "\n";
+                print_usage();
+                return 1;
             }
         }
+    }
+
+    if (config.input_path.empty()) {
+        print_usage();
+        return 1;
+    }
+
+    if (config.output_dir.empty()) {
+        config.stdout_mode = true;
     }
 
     if (config.threads == 0) {

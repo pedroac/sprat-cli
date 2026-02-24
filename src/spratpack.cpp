@@ -400,6 +400,19 @@ bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
 
 } // namespace
 
+void print_usage() {
+    std::cout << "Usage: spratpack [OPTIONS]\n"
+              << "\n"
+              << "Read layout text from stdin and write a PNG atlas to stdout.\n"
+              << "\n"
+              << "Options:\n"
+              << "  --frame-lines          Draw rectangle outlines for each sprite\n"
+              << "  --line-width N         Outline thickness in pixels (default: 1)\n"
+              << "  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n"
+              << "  --threads N            Number of worker threads\n"
+              << "  --help, -h             Show this help message\n";
+}
+
 int main(int argc, char** argv) {
     bool draw_frame_lines = false;
     int line_width = 1;
@@ -410,7 +423,10 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--frame-lines") {
+        if (arg == "--help" || arg == "-h") {
+            print_usage();
+            return 0;
+        } else if (arg == "--frame-lines") {
             draw_frame_lines = true;
         } else if (arg == "--line-width" && i + 1 < argc) {
             std::string value = argv[++i];
@@ -434,7 +450,7 @@ int main(int argc, char** argv) {
             }
             thread_limit = static_cast<unsigned int>(parsed);
         } else {
-            std::cerr << "Usage: spratpack [--frame-lines] [--line-width N] [--line-color R,G,B[,A]] [--threads N]\n";
+            print_usage();
             return 1;
         }
     }

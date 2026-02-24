@@ -1235,7 +1235,16 @@ void list_transforms() {
 }
 
 void print_usage() {
-    std::cerr << "Usage: spratconvert [--transform NAME|PATH] [--markers FILE] [--animations FILE] [--list-transforms]\n";
+    std::cout << "Usage: spratconvert [OPTIONS]\n"
+              << "\n"
+              << "Read layout text from stdin and transform it into other formats.\n"
+              << "\n"
+              << "Options:\n"
+              << "  --transform NAME|PATH      Transform name or path (default: json)\n"
+              << "  --list-transforms          Print available transforms and exit\n"
+              << "  --markers PATH             Load external markers file\n"
+              << "  --animations PATH          Load external animations file\n"
+              << "  --help, -h                 Show this help message\n";
 }
 } // namespace
 
