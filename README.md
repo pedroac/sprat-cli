@@ -95,72 +95,65 @@ sudo cmake --install .
 
 ## Workflow
 
-`spratlayout` scans a folder of input images (or a plaintext list of image paths) and prints a text layout to stdout:
+`sprat-cli` follows the UNIX philosophy: each tool does one thing well and communicates via text. The standard pipeline consists of three steps:
 
+### 1. Scanning (`spratlayout`)
+Scans a folder of images and calculates their optimal positions. It prints a **layout text** to stdout. This step is mathematical and does not process image pixels, making it extremely fast.
 ```sh
 ./spratlayout ./frames > layout.txt
 ```
 
-If the first argument is a file, `spratlayout` treats it as a newline-separated list of image paths. Blank lines and lines beginning with `#` are ignored. Relative paths are resolved relative to the list file, each path must exist, be a regular image file (`.png`, `.jpg`, `.bmp`, etc.), and they are loaded in the order listed; otherwise the command fails.
+### 2. Packing (`spratpack`)
+Reads the layout text from stdin, loads the images, and blits them into a single PNG atlas.
+```sh
+./spratpack < layout.txt > spritesheet.png
+```
 
-Profiles are flexible named rule sets. A profile groups packing rules (for example mode, optimize target, limits, padding, trim, scale, threads) under one name, so you can run `--profile NAME` instead of repeating many options each time.
+### 3. Transforming (`spratconvert`)
+Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, etc.) for your game engine.
+```sh
+./spratconvert --transform json < layout.txt > layout.json
+```
 
-Profile definitions are driven by `spratprofiles.cfg`. The lookup order is:
+### Extra: Deconstruction (Reverse Engineering)
+If you start with a monolithic spritesheet and need to recover individual frames or its layout before using the workflow above:
+1.  **Detect (`spratframes`)**: Scans an existing spritesheet and prints a layout definition to stdout.
+    ```sh
+    ./spratframes existing_sheet.png > frames.txt
+    ```
+2.  **Unpack (`spratunpack`)**: Takes the sheet and the detected frames to extract individual images.
+    ```sh
+    ./spratunpack existing_sheet.png --frames frames.txt --output ./recovered_frames
+    ```
+Now you can use `./recovered_frames` as the input for `spratlayout`.
 
-1. `--profiles-config PATH` (when provided)
+---
+
+## Configuration & Profiles
+
+### Profiles
+Profiles are named rule sets that group packing options (mode, padding, scale, etc.). Instead of passing ten flags to `spratlayout`, you can define a profile in `spratprofiles.cfg` and use it with `--profile NAME`.
+
+Profile definitions are searched in:
+1. `--profiles-config PATH` (CLI override)
 2. `~/.config/sprat/spratprofiles.cfg`
-3. `spratprofiles.cfg` in the same directory as `spratlayout`
-4. Global installed config (from `make install`, typically `${prefix}/share/sprat/spratprofiles.cfg`)
+3. `spratprofiles.cfg` in the same directory as the binary
+4. `/usr/local/share/sprat/spratprofiles.cfg` (Global)
 
-Each `[profile name]` section can define:
+### Spratlayout Options
+- `--mode compact|pot|fast`: Packing algorithm choice.
+- `--optimize gpu|space`: Prioritize GPU-friendly dimensions or minimum area.
+- `--padding N`: Pixels between sprites to prevent texture bleeding.
+- `--trim-transparent`: Remove empty borders to save space.
+- `--scale F`: Pre-scale images (0.0 to 1.0).
+- `--threads N`: Parallelize the packing search.
 
-- `mode=compact|pot|fast`
-- `optimize=gpu|space`
-- `max_width` and `max_height` (optional atlas limits)
-- `padding` (integer >= 0)
-- `max_combinations` (integer >= 0)
-- `scale` (number > 0 and <= 1)
-- `trim_transparent=true|false`
-- `threads` (integer > 0)
-- `source_resolution` (WxH)
-- `target_resolution` (WxH or `source`)
-- `resolution_reference=largest|smallest`
+### Layout Caching
+`spratlayout` automatically caches image metadata in the system temp directory. If your source images haven't changed, subsequent runs will be nearly instantaneous. Entries older than one hour are pruned automatically.
 
-Add new sections to define custom profiles and refer to them with `--profile NAME`. Profile values are defaults; command options override them per run.
+---
 
-Examples (concept):
-
-- `--profile mobile` applies the rules stored under `mobile`.
-- `--profile mobile --padding 4` uses `mobile` and overrides only padding for that run.
-
-`spratlayout` options:
-
-- `--profile NAME` (default: `fast`)
-- `--profiles-config PATH` (override the config file path; can be relative or absolute)
-- `--mode compact|pot|fast`
-- `--optimize gpu|space`
-- `--padding N` (default: `0`)
-- `--max-combinations N` (default: `0` = auto/unlimited; caps compact candidate trials)
-- `--scale F` (default: `1`, valid range: `(0, 1]`; applies before resolution mapping)
-- `--trim-transparent` / `--no-trim-transparent`
-- `--max-width N` / `--max-height N` (optional atlas limits)
-- `--threads N` (override worker count for compact profile search; default: auto)
-
-Layout caching:
-
-- `spratlayout` keeps metadata and output caches in the system temp directory (for example `/tmp` on Linux/macOS, `%TEMP%` on Windows).
-- Cache entries are reused when inputs and options are unchanged.
-- Cache entries older than one hour are pruned automatically.
-
-Why these options help:
-
-- `--padding N`: avoids texture bleeding/artifacts from sampling and subpixel math.
-- `--scale F`: normalize intentionally oversized source sprites before target resolution mapping.
-- `--trim-transparent`: removes empty borders to reduce atlas usage.
-- `--max-width/--max-height`: enforce hardware/platform texture limits.
-- `spratpack --frame-lines`: visual debug of sprite bounds, spacing, and overlaps.
-
-## Recipes
+## Sprite Detection (`spratframes`)
 
 ### Compact Mode (GPU Optimized)
 
