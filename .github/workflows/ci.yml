@@ -36,10 +36,18 @@ jobs:
       - name: Configure
         shell: bash
         run: |
-          cmake -S . -B build \
-            -DSPRAT_DOWNLOAD_STB=ON \
-            -DCMAKE_BUILD_TYPE=Release \
-            ${{ runner.os == 'Windows' && format('-DCMAKE_TOOLCHAIN_FILE={0}/scripts/buildsystems/vcpkg.cmake', env.VCPKG_ROOT) || '' }}
+          CMAKE_OPTIONS=(
+            -S .
+            -B build
+            -DSPRAT_DOWNLOAD_STB=ON
+            -DCMAKE_BUILD_TYPE=Release
+          )
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            # Convert backslashes to forward slashes for CMake compatibility in bash
+            VCPKG_TOOLCHAIN="${VCPKG_ROOT//\\//}/scripts/buildsystems/vcpkg.cmake"
+            CMAKE_OPTIONS+=("-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN")
+          fi
+          cmake "${CMAKE_OPTIONS[@]}"
 
       - name: Build
         run: cmake --build build --parallel --config Release
