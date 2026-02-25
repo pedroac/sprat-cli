@@ -8,17 +8,20 @@ fi
 
 convert_bin="$1"
 
-# Path conversion for Windows
-fix_path() {
-    if [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
-        cygpath -m "$1"
-    else
-        echo "$1"
-    fi
-}
-
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
+
+# Path conversion for Windows - Cache the base temp dir once
+if [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
+    tmp_dir_win="$(cygpath -m "$tmp_dir")"
+    fix_path() {
+        echo "${1/$tmp_dir/$tmp_dir_win}"
+    }
+else
+    fix_path() {
+        echo "$1"
+    }
+fi
 
 layout_file="$tmp_dir/layout.txt"
 cat > "$layout_file" <<'LAYOUT'

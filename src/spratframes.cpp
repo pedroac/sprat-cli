@@ -717,6 +717,11 @@ void print_usage() {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        std::cerr << "Failed to set stdout to binary mode\n";
+    }
+#endif
     FramesConfig config;
     bool show_help = false;
     

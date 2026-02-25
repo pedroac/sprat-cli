@@ -1797,7 +1797,9 @@ std::string build_layout_output_text(int atlas_width,
     output << "atlas " << atlas_width << "," << atlas_height << "\n";
     output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
     for (const auto& s : sprites) {
-        std::string path = s.path;
+        std::string path = s.path.string();
+        // Standardize path separators to forward slashes for output consistency
+        std::replace(path.begin(), path.end(), '\\', '/');
         size_t pos = 0;
         while ((pos = path.find('"', pos)) != std::string::npos) {
             path.insert(pos, "\\");
@@ -3605,6 +3607,13 @@ int main(int argc, char** argv) {
         trim_transparent,
         sprites
     );
+
+#ifdef _WIN32
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        std::cerr << "Failed to set stdout to binary mode\n";
+    }
+#endif
+
     std::cout << output_text;
     save_output_cache(output_cache_path, layout_signature, output_text);
     prune_cache_family(cache_path, k_cache_max_age_seconds, k_cache_max_layout_files, k_cache_max_seed_files);
