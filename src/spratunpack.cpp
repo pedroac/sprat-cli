@@ -22,11 +22,21 @@ namespace fs = std::filesystem;
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <fcntl.h>
 #include <io.h>
+#include <fcntl.h>
+#include <stdio.h>
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
+#endif
+#ifndef _O_BINARY
+#define _O_BINARY 0x8000
+#endif
+#ifndef _fileno
+#define _fileno fileno
+#endif
+#ifndef _setmode
+#define _setmode setmode
 #endif
 #endif
 

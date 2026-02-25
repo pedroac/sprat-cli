@@ -28,8 +28,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ github.workspace }}/vcpkg/installed
-            ${{ github.workspace }}/vcpkg/packages
+            ${{ github.workspace }}/vcpkg_installed
             ${{ github.workspace }}/vcpkg/downloads
           key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
@@ -58,12 +57,6 @@ jobs:
             # Convert backslashes to forward slashes for CMake compatibility in bash
             VCPKG_TOOLCHAIN="${VCPKG_ROOT//\\//}/scripts/buildsystems/vcpkg.cmake"
             CMAKE_OPTIONS+=("-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN")
-            # Help CMake find LibArchive in manifest mode if the toolchain doesn't handle it automatically
-            VCPKG_INSTALLED="${{ github.workspace }}/vcpkg_installed/x64-windows"
-            CMAKE_OPTIONS+=(
-              "-DLibArchive_LIBRARY=$VCPKG_INSTALLED/lib/archive.lib"
-              "-DLibArchive_INCLUDE_DIR=$VCPKG_INSTALLED/include"
-            )
           fi
           cmake "${CMAKE_OPTIONS[@]}"
 
