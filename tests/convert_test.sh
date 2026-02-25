@@ -7,6 +7,16 @@ if [ "$#" -ne 1 ]; then
 fi
 
 convert_bin="$1"
+
+# Path conversion for Windows
+fix_path() {
+    if [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
+        cygpath -m "$1"
+    else
+        echo "$1"
+    fi
+}
+
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -68,7 +78,7 @@ END
 [/footer]
 CUSTOM
 
-"$convert_bin" --transform "$custom_transform" < "$layout_file" > "$tmp_dir/out.custom"
+"$convert_bin" --transform "$(fix_path "$custom_transform")" < "$layout_file" > "$tmp_dir/out.custom"
 grep -q '^BEGIN 64x32 count=2' "$tmp_dir/out.custom"
 grep -q '1|./frames/b.png|16,0 8x8' "$tmp_dir/out.custom"
 
@@ -112,10 +122,10 @@ animation_count={{animation_count}}
 [/sprites]
 EXTRAS
 
-"$convert_bin" --transform "$extras_transform" --markers "$markers_file" --animations "$animations_file" < "$layout_file" > "$tmp_dir/out.extras"
+"$convert_bin" --transform "$(fix_path "$extras_transform")" --markers "$(fix_path "$markers_file")" --animations "$(fix_path "$animations_file")" < "$layout_file" > "$tmp_dir/out.extras"
 grep -q '^markers=true animations=true$' "$tmp_dir/out.extras"
-grep -q "^markers_path=$markers_file$" "$tmp_dir/out.extras"
-grep -q "^animations_path=$animations_file$" "$tmp_dir/out.extras"
+grep -q "^markers_path=$(fix_path "$markers_file")$" "$tmp_dir/out.extras"
+grep -q "^animations_path=$(fix_path "$animations_file")$" "$tmp_dir/out.extras"
 grep -q '^marker_count=3$' "$tmp_dir/out.extras"
 grep -q '^animation_count=2$' "$tmp_dir/out.extras"
 grep -Fq '0|a|./frames/a.png|2|[{"name":"hit","type":"point","x":3,"y":5},{"name":"hurt","type":"circle","x":6,"y":7,"radius":4}]' "$tmp_dir/out.extras"
@@ -211,7 +221,7 @@ END
 [/footer]
 ITER
 
-"$convert_bin" --transform "$iter_transform" --markers "$markers_file" --animations "$animations_file" < "$layout_file" > "$tmp_dir/out.iter.full"
+"$convert_bin" --transform "$(fix_path "$iter_transform")" --markers "$(fix_path "$markers_file")" --animations "$(fix_path "$animations_file")" < "$layout_file" > "$tmp_dir/out.iter.full"
 grep -q '^M_ON$' "$tmp_dir/out.iter.full"
 grep -q '^M_BEGIN$' "$tmp_dir/out.iter.full"
 grep -q '^M0=hit@0:a$' "$tmp_dir/out.iter.full"
@@ -230,7 +240,7 @@ if grep -q '^A_EMPTY$' "$tmp_dir/out.iter.full"; then
   exit 1
 fi
 
-"$convert_bin" --transform "$iter_transform" < "$layout_file" > "$tmp_dir/out.iter.empty"
+"$convert_bin" --transform "$(fix_path "$iter_transform")" < "$layout_file" > "$tmp_dir/out.iter.empty"
 grep -q '^M_EMPTY$' "$tmp_dir/out.iter.empty"
 grep -q '^A_EMPTY$' "$tmp_dir/out.iter.empty"
 if grep -q '^M_ON$' "$tmp_dir/out.iter.empty"; then
@@ -242,12 +252,12 @@ if grep -q '^A_ON$' "$tmp_dir/out.iter.empty"; then
   exit 1
 fi
 
-"$convert_bin" --transform json --markers "$markers_file" --animations "$animations_file" < "$layout_file" > "$tmp_dir/out.builtin.json"
+"$convert_bin" --transform json --markers "$(fix_path "$markers_file")" --animations "$(fix_path "$animations_file")" < "$layout_file" > "$tmp_dir/out.builtin.json"
 
 if command -v python3 >/dev/null 2>&1; then
-  python3 -m json.tool "$tmp_dir/out.builtin.json" > /dev/null
+  python3 -m json.tool "$(fix_path "$tmp_dir/out.builtin.json")" > /dev/null
 elif command -v python >/dev/null 2>&1; then
-  python -m json.tool "$tmp_dir/out.builtin.json" > /dev/null
+  python -m json.tool "$(fix_path "$tmp_dir/out.builtin.json")" > /dev/null
 fi
 grep -q '"animations": \[' "$tmp_dir/out.builtin.json"
 grep -q '"sprites": \[' "$tmp_dir/out.builtin.json"

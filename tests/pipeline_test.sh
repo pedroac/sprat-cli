@@ -9,6 +9,15 @@ fi
 spratlayout_bin="$1"
 spratpack_bin="$2"
 
+# Path conversion for Windows
+fix_path() {
+    if [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
+        cygpath -m "$1"
+    else
+        echo "$1"
+    fi
+}
+
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -55,7 +64,15 @@ max_height=1024
 [profile css]
 mode=fast
 EOF
+# For Windows native binaries, we might need to set USERPROFILE or other variables
+# but spratlayout uses a custom profiles config path which we pass via --profiles-config
+# or it uses the default location relative to HOME. 
+# In Git Bash, HOME is usually mapped correctly, but native binaries might look at USERPROFILE.
 export HOME="$tmp_dir"
+# Also set USERPROFILE for Windows native binaries just in case they use it for home detection
+if [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
+    export USERPROFILE="$(cygpath -w "$tmp_dir")"
+fi
 
 layout_file="$tmp_dir/layout.txt"
 default_layout_file="$tmp_dir/layout_default.txt"
@@ -63,11 +80,11 @@ fast_layout_file="$tmp_dir/layout_fast.txt"
 css_layout_file="$tmp_dir/layout_css.txt"
 sheet_file="$tmp_dir/spritesheet.png"
 
-"$spratlayout_bin" "$frames_dir" --profile fast --padding 1 > "$layout_file"
-"$spratlayout_bin" "$frames_dir" --padding 1 > "$default_layout_file"
-"$spratlayout_bin" "$frames_dir" --profiles-config "$tmp_dir/missing.cfg" --padding 1 > "$default_layout_file.with_missing_cfg"
-"$spratlayout_bin" "$frames_dir" --profile fast --padding 1 > "$fast_layout_file"
-"$spratlayout_bin" "$frames_dir" --profile css --padding 1 > "$css_layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile fast --padding 1 > "$layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --padding 1 > "$default_layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profiles-config "$(fix_path "$tmp_dir/missing.cfg")" --padding 1 > "$default_layout_file.with_missing_cfg"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile fast --padding 1 > "$fast_layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile css --padding 1 > "$css_layout_file"
 
 if ! cmp -s "$layout_file" "$default_layout_file"; then
     echo "Default profile output differs from --profile fast" >&2
