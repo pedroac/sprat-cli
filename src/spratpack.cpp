@@ -2,6 +2,13 @@
 // MIT License (c) 2026 Pedro
 // Compile: g++ -std=c++17 -O2 src/spratpack.cpp -o spratpack
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <algorithm>
 #include <iostream>
 #include <vector>
@@ -707,6 +714,13 @@ int main(int argc, char** argv) {
             draw_sprite_outline(atlas, atlas_width, atlas_height, s, line_width, line_color);
         }
     }
+
+#ifdef _WIN32
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        std::cerr << "Failed to set stdout to binary mode\n";
+        return 1;
+    }
+#endif
 
     auto write_callback = [](void* context, void* data, int size) {
         auto* out = static_cast<std::ostream*>(context);
