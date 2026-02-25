@@ -19,8 +19,15 @@ namespace fs = std::filesystem;
 #include <thread>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <fcntl.h>
 #include <io.h>
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 #endif
 
 #define STB_IMAGE_IMPLEMENTATION

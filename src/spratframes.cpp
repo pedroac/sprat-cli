@@ -2,6 +2,11 @@
 // MIT License (c) 2026 Pedro
 // Compile: g++ -std=c++17 -O2 src/spratframes.cpp -o spratframes
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
 #include <algorithm>
 #include <iostream>
 #include <utility>
