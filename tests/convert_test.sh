@@ -243,7 +243,12 @@ if grep -q '^A_ON$' "$tmp_dir/out.iter.empty"; then
 fi
 
 "$convert_bin" --transform json --markers "$markers_file" --animations "$animations_file" < "$layout_file" > "$tmp_dir/out.builtin.json"
-python3 -m json.tool "$tmp_dir/out.builtin.json" > /dev/null
+
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m json.tool "$tmp_dir/out.builtin.json" > /dev/null
+elif command -v python >/dev/null 2>&1; then
+  python -m json.tool "$tmp_dir/out.builtin.json" > /dev/null
+fi
 grep -q '"animations": \[' "$tmp_dir/out.builtin.json"
 grep -q '"sprites": \[' "$tmp_dir/out.builtin.json"
 grep -q '"name": "a"' "$tmp_dir/out.builtin.json"
