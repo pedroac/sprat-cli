@@ -2,6 +2,16 @@
 // MIT License (c) 2026 Pedro
 // Compile: g++ -std=c++17 -O2 src/spratlayout.cpp -o spratlayout
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <io.h>
+#ifndef STDIN_FILENO
+#define STDIN_FILENO 0
+#endif
+#endif
+
 #include <algorithm>
 #include <iostream>
 #include <utility>
@@ -30,16 +40,6 @@ namespace fs = std::filesystem;
 #include <system_error>
 #include <archive.h>
 #include <archive_entry.h>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <io.h>
-#ifndef STDIN_FILENO
-#define STDIN_FILENO 0
-#endif
-#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>

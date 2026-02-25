@@ -11,6 +11,10 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
     add_compile_options(-fpermissive)
 endif()
 
+if(WIN32)
+    add_definitions(-DNOMINMAX)
+endif()
+
 # External headers
 set(STB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stb)
 file(MAKE_DIRECTORY ${STB_DIR})
