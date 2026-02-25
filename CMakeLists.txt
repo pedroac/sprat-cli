@@ -13,6 +13,9 @@ endif()
 
 if(WIN32)
     add_definitions(-DNOMINMAX)
+    if(MINGW)
+        add_link_options(-static -static-libgcc -static-libstdc++)
+    endif()
 endif()
 
 # External headers
@@ -74,10 +77,24 @@ ensure_stb_header(stb_image.h)
 ensure_stb_header(stb_image_write.h)
 
 # Binaries
-find_package(LibArchive)
-if(LibArchive_FOUND)
-    set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
-    set(LIBARCHIVE_INCLUDE_DIRS "")
+# For Windows cross-compilation, PkgConfig often leaks host paths. 
+# We prefer find_package or explicit paths.
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    find_package(LibArchive)
+    if(LibArchive_FOUND)
+        set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
+        set(LIBARCHIVE_INCLUDE_DIRS "")
+    else()
+        # Fallback for manual identification if find_package fails
+        find_library(LIBARCHIVE_LIBRARY NAMES archive libarchive)
+        find_path(LIBARCHIVE_INCLUDE_DIR NAMES archive.h)
+        if(LIBARCHIVE_LIBRARY AND LIBARCHIVE_INCLUDE_DIR)
+            set(LIBARCHIVE_LIBRARIES ${LIBARCHIVE_LIBRARY})
+            set(LIBARCHIVE_INCLUDE_DIRS ${LIBARCHIVE_INCLUDE_DIR})
+        else()
+            message(FATAL_ERROR "LibArchive not found. Please provide -DLibArchive_LIBRARY and -DLibArchive_INCLUDE_DIR")
+        endif()
+    endif()
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(LIBARCHIVE REQUIRED libarchive)

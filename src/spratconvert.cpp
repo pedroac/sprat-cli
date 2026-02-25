@@ -2,6 +2,18 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <io.h>
+#include <fcntl.h>
+#include <stdio.h>
+#ifndef _O_BINARY
+#define _O_BINARY 0x8000
+#endif
+#ifndef _fileno
+#define _fileno fileno
+#endif
+#ifndef _setmode
+#define _setmode setmode
+#endif
 #endif
 #include <algorithm>
 #include <cctype>

@@ -7,8 +7,19 @@
 #define NOMINMAX
 #endif
 #include <io.h>
+#include <fcntl.h>
+#include <stdio.h>
 #ifndef STDIN_FILENO
 #define STDIN_FILENO 0
+#endif
+#ifndef _O_BINARY
+#define _O_BINARY 0x8000
+#endif
+#ifndef _fileno
+#define _fileno fileno
+#endif
+#ifndef _setmode
+#define _setmode setmode
 #endif
 #endif
 
@@ -1797,7 +1808,7 @@ std::string build_layout_output_text(int atlas_width,
     output << "atlas " << atlas_width << "," << atlas_height << "\n";
     output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
     for (const auto& s : sprites) {
-        std::string path = s.path.string();
+        std::string path = s.path;
         // Standardize path separators to forward slashes for output consistency
         std::replace(path.begin(), path.end(), '\\', '/');
         size_t pos = 0;
