@@ -41,6 +41,7 @@
 *.dwo
 
 # More
+vcpkg_installed/
 **/CMakeFiles/
 **/CMakeCache
 **/CMakeCache.txt

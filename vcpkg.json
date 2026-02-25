@@ -1,0 +1,8 @@
+{
+  "name": "sprat-cli",
+  "version": "0.1.0",
+  "dependencies": [
+    "libarchive"
+  ],
+  "builtin-baseline": "26283ac5e8a068561a718ce18b169bfad84c7dab"
+}

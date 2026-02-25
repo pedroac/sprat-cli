@@ -27,10 +27,6 @@ jobs:
         if: runner.os == 'Windows'
         uses: lukka/run-vcpkg@v11
 
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: vcpkg install libarchive:x64-windows
-
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |

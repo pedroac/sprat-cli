@@ -19,7 +19,12 @@ cat > "$tmp_dir/pixel.b64" <<'EOF'
 iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7ZxaoAAAAASUVORK5CYII=
 EOF
 
-base64 -d "$tmp_dir/pixel.b64" > "$frames_dir/frame_a.png"
+if base64 --version 2>&1 | grep -q "GNU"; then
+    base64 -d "$tmp_dir/pixel.b64" > "$frames_dir/frame_a.png"
+else
+    # macOS/BSD base64
+    base64 -D -i "$tmp_dir/pixel.b64" -o "$frames_dir/frame_a.png"
+fi
 cp "$frames_dir/frame_a.png" "$frames_dir/frame_b.png"
 
 # Isolate test from user configuration and provide required profiles

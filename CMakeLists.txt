@@ -70,8 +70,14 @@ ensure_stb_header(stb_image.h)
 ensure_stb_header(stb_image_write.h)
 
 # Binaries
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
+find_package(LibArchive)
+if(LibArchive_FOUND)
+    set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
+    set(LIBARCHIVE_INCLUDE_DIRS "")
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
+endif()
 
 add_executable(spratlayout src/spratlayout.cpp)
 target_link_libraries(spratlayout ${LIBARCHIVE_LIBRARIES})
