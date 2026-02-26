@@ -508,14 +508,6 @@ bool load_profiles_config_from_file(const fs::path& path,
 
 std::optional<fs::path> resolve_user_profiles_config_path() {
 #ifdef _WIN32
-    const char* home = std::getenv("HOME");
-    if (home != nullptr && home[0] != '\0') {
-        // Native Windows executables often cannot use MSYS-style POSIX paths (e.g. /tmp/...).
-        if (home[0] != '/') {
-            return fs::path(home) / k_user_profiles_config_relpath;
-        }
-    }
-
     const char* userprofile = std::getenv("USERPROFILE");
     if (userprofile != nullptr && userprofile[0] != '\0') {
         return fs::path(userprofile) / k_user_profiles_config_relpath;
@@ -524,6 +516,11 @@ std::optional<fs::path> resolve_user_profiles_config_path() {
     const char* appdata = std::getenv("APPDATA");
     if (appdata != nullptr && appdata[0] != '\0') {
         return fs::path(appdata) / "sprat" / k_profiles_config_filename;
+    }
+
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && home[0] != '\0') {
+        return fs::path(home) / k_user_profiles_config_relpath;
     }
 
     return std::nullopt;

@@ -63,5 +63,25 @@ jobs:
       - name: Build
         run: cmake --build build --parallel --config Release
 
-      - name: Test
+      - name: Prepare test environment (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item -Path spratprofiles.cfg -Destination build/spratprofiles.cfg -Force
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\sprat-home\.config\sprat" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\sprat-appdata\sprat" | Out-Null
+          Copy-Item -Path spratprofiles.cfg -Destination "$env:RUNNER_TEMP\sprat-home\.config\sprat\spratprofiles.cfg" -Force
+          Copy-Item -Path spratprofiles.cfg -Destination "$env:RUNNER_TEMP\sprat-appdata\sprat\spratprofiles.cfg" -Force
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          HOME: ${{ runner.temp }}\sprat-home
+          USERPROFILE: ${{ runner.temp }}\sprat-home
+          APPDATA: ${{ runner.temp }}\sprat-appdata
+        run: ctest --test-dir build --output-on-failure -C Release
+
+      - name: Test (Non-Windows)
+        if: runner.os != 'Windows'
         run: ctest --test-dir build --output-on-failure -C Release
