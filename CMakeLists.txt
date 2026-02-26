@@ -122,6 +122,17 @@ target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURREN
 target_compile_definitions(spratlayout PRIVATE
     SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")
 
+# Keep a default profile config beside built binaries (e.g. build-win/) so
+# spratlayout can resolve it via exe-directory lookup without extra setup.
+foreach(target spratlayout spratpack spratconvert spratframes spratunpack)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/spratprofiles.cfg
+            $<TARGET_FILE_DIR:${target}>/spratprofiles.cfg
+        COMMENT "Copying spratprofiles.cfg to $<TARGET_FILE_DIR:${target}>"
+        VERBATIM)
+endforeach()
+
 install(TARGETS spratlayout spratpack spratconvert
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES spratprofiles.cfg
