@@ -507,11 +507,33 @@ bool load_profiles_config_from_file(const fs::path& path,
 }
 
 std::optional<fs::path> resolve_user_profiles_config_path() {
+#ifdef _WIN32
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && home[0] != '\0') {
+        // Native Windows executables often cannot use MSYS-style POSIX paths (e.g. /tmp/...).
+        if (home[0] != '/') {
+            return fs::path(home) / k_user_profiles_config_relpath;
+        }
+    }
+
+    const char* userprofile = std::getenv("USERPROFILE");
+    if (userprofile != nullptr && userprofile[0] != '\0') {
+        return fs::path(userprofile) / k_user_profiles_config_relpath;
+    }
+
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata != nullptr && appdata[0] != '\0') {
+        return fs::path(appdata) / "sprat" / k_profiles_config_filename;
+    }
+
+    return std::nullopt;
+#else
     const char* home = std::getenv("HOME");
     if (home == nullptr || home[0] == '\0') {
         return std::nullopt;
     }
     return fs::path(home) / k_user_profiles_config_relpath;
+#endif
 }
 
 struct Sprite {
@@ -2526,53 +2548,61 @@ int main(int argc, char** argv) {
         exec_dir = cwd;
     }
 
-    if (has_requested_profile) {
-        std::string config_error;
-        std::vector<fs::path> config_candidates;
-        if (!profiles_config_path.empty()) {
-            fs::path config_candidate(profiles_config_path);
-            if (config_candidate.is_relative() && !cwd.empty()) {
-                config_candidate = cwd / config_candidate;
-            }
-            config_candidates.push_back(std::move(config_candidate));
-        } else {
-            if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
-                config_candidates.push_back(*user_config);
-            }
-            config_candidates.push_back(exec_dir / k_profiles_config_filename);
-            config_candidates.emplace_back(k_global_profiles_config_path);
+    std::string config_error;
+    std::vector<fs::path> config_candidates;
+    if (!profiles_config_path.empty()) {
+        fs::path config_candidate(profiles_config_path);
+        if (config_candidate.is_relative() && !cwd.empty()) {
+            config_candidate = cwd / config_candidate;
         }
+        config_candidates.push_back(std::move(config_candidate));
+    } else {
+        if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
+            config_candidates.push_back(*user_config);
+        }
+        config_candidates.push_back(exec_dir / k_profiles_config_filename);
+        config_candidates.emplace_back(k_global_profiles_config_path);
+    }
 
-        bool loaded_profile_file = false;
-        std::vector<std::string> tried_candidates;
-        for (const fs::path& candidate : config_candidates) {
-            std::error_code ec;
-            const bool exists = fs::exists(candidate, ec);
-            if (ec || !exists) {
-                tried_candidates.push_back(candidate.string());
-                continue;
-            }
-            if (!load_profiles_config_from_file(candidate, profile_definitions, config_error)) {
+    bool loaded_profile_file = false;
+    std::vector<std::string> tried_candidates;
+    for (const fs::path& candidate : config_candidates) {
+        std::error_code ec;
+        const bool exists = fs::exists(candidate, ec);
+        if (ec || !exists) {
+            tried_candidates.push_back(candidate.string());
+            continue;
+        }
+        if (!load_profiles_config_from_file(candidate, profile_definitions, config_error)) {
+            if (has_requested_profile) {
                 std::cerr << "Failed to load profile config (" << candidate << "): " << config_error << "\n";
                 return 1;
             }
-            loaded_profile_file = true;
-            break;
+            tried_candidates.push_back(candidate.string());
+            continue;
         }
+        loaded_profile_file = true;
+        break;
+    }
 
-        if (!loaded_profile_file) {
-            std::cerr << "Failed to load profile config. Tried:";
-            for (const std::string& candidate : tried_candidates) {
-                std::cerr << " " << candidate;
-            }
-            std::cerr << "\n";
-            return 1;
+    if (has_requested_profile && !loaded_profile_file) {
+        std::cerr << "Failed to load profile config. Tried:";
+        for (const std::string& candidate : tried_candidates) {
+            std::cerr << " " << candidate;
         }
+        std::cerr << "\n";
+        return 1;
+    }
 
+    if (loaded_profile_file) {
         for (const auto& def : profile_definitions) {
             profile_map.emplace(def.name, def);
         }
+    }
 
+    const bool should_apply_profile =
+        has_requested_profile || (loaded_profile_file && profile_map.contains(selected_profile_name));
+    if (should_apply_profile) {
         auto profile_it = profile_map.find(selected_profile_name);
         if (profile_it == profile_map.end()) {
             std::string available;

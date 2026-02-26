@@ -16,3 +16,8 @@ add_test(
             $<TARGET_FILE:spratconvert>
 )
 
+add_test(
+    NAME profile_resolution
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/profile_resolution_test.sh
+            $<TARGET_FILE:spratlayout>
+)
