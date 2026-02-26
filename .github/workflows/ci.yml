@@ -1,13 +1,43 @@
 name: CI
 
 on:
-  push:
   pull_request:
-  release:
-    types: [created]
+  push:
+    branches:
+      - release
+
+permissions:
+  contents: read
 
 jobs:
-  build-and-test:
+  pr-build-and-test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-dev
+
+      - name: Configure
+        run: |
+          cmake \
+            -S . \
+            -B build \
+            -DSPRAT_DOWNLOAD_STB=ON \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel --config Release
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C Release
+
+  release-build-package:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +72,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install pkg-config libarchive
-          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Configure
         shell: bash
@@ -54,7 +84,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           )
           if [ "${{ runner.os }}" == "Windows" ]; then
-            # Convert backslashes to forward slashes for CMake compatibility in bash
             VCPKG_TOOLCHAIN="${VCPKG_ROOT//\\//}/scripts/buildsystems/vcpkg.cmake"
             CMAKE_OPTIONS+=("-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN")
           fi
@@ -85,3 +114,85 @@ jobs:
       - name: Test (Non-Windows)
         if: runner.os != 'Windows'
         run: ctest --test-dir build --output-on-failure -C Release
+
+      - name: Package Linux (.tar.gz)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          out_dir="dist/sprat-cli-linux-x64"
+          mkdir -p "$out_dir"
+          cp build/spratlayout "$out_dir/"
+          cp build/spratpack "$out_dir/"
+          cp build/spratconvert "$out_dir/"
+          cp build/spratframes "$out_dir/"
+          cp build/spratunpack "$out_dir/"
+          cp spratprofiles.cfg "$out_dir/"
+          tar -C dist -czf dist/sprat-cli-linux-x64.tar.gz sprat-cli-linux-x64
+
+      - name: Package macOS (.dmg)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          out_dir="dist/sprat-cli-macos-x64"
+          mkdir -p "$out_dir"
+          cp build/spratlayout "$out_dir/"
+          cp build/spratpack "$out_dir/"
+          cp build/spratconvert "$out_dir/"
+          cp build/spratframes "$out_dir/"
+          cp build/spratunpack "$out_dir/"
+          cp spratprofiles.cfg "$out_dir/"
+          hdiutil create \
+            -volname "sprat-cli" \
+            -srcfolder "$out_dir" \
+            -ov \
+            -format UDZO \
+            dist/sprat-cli-macos-x64.dmg
+
+      - name: Package Windows (.zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $outDir = "dist/sprat-cli-windows-x64"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          Copy-Item -Path build/Release/spratlayout.exe -Destination $outDir -Force
+          Copy-Item -Path build/Release/spratpack.exe -Destination $outDir -Force
+          Copy-Item -Path build/Release/spratconvert.exe -Destination $outDir -Force
+          Copy-Item -Path build/Release/spratframes.exe -Destination $outDir -Force
+          Copy-Item -Path build/Release/spratunpack.exe -Destination $outDir -Force
+          Copy-Item -Path spratprofiles.cfg -Destination $outDir -Force
+          Compress-Archive -Path "$outDir/*" -DestinationPath "dist/sprat-cli-windows-x64.zip" -Force
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprat-cli-${{ runner.os }}
+          path: |
+            dist/*.tar.gz
+            dist/*.dmg
+            dist/*.zip
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+    runs-on: ubuntu-latest
+    needs: release-build-package
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release tag
+        id: release_tag
+        run: echo "tag=release-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.release_tag.outputs.tag }}
+          name: Release ${{ steps.release_tag.outputs.tag }}
+          commit: ${{ github.sha }}
+          generateReleaseNotes: true
+          artifacts: "dist/*.tar.gz,dist/*.dmg,dist/*.zip"
