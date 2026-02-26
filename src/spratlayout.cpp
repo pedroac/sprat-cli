@@ -507,26 +507,31 @@ bool load_profiles_config_from_file(const fs::path& path,
 }
 
 std::optional<fs::path> resolve_user_profiles_config_path() {
-#ifdef _WIN32
     const char* appdata = std::getenv("APPDATA");
     if (appdata != nullptr && appdata[0] != '\0') {
-        return fs::path(appdata) / "sprat" / k_profiles_config_filename;
+        const fs::path appdata_cfg = fs::path(appdata) / "sprat" / k_profiles_config_filename;
+        std::error_code ec;
+        if (fs::exists(appdata_cfg, ec) && !ec) {
+            return appdata_cfg;
+        }
     }
-    return std::nullopt;
-#else
     const char* home = std::getenv("HOME");
     if (home == nullptr || home[0] == '\0') {
         return std::nullopt;
     }
-    return fs::path(home) / k_user_profiles_config_relpath;
-#endif
+    const fs::path home_cfg = fs::path(home) / k_user_profiles_config_relpath;
+    std::error_code ec;
+    if (fs::exists(home_cfg, ec) && !ec) {
+        return home_cfg;
+    }
+    return std::nullopt;
 }
 
 std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& cwd) {
     std::vector<fs::path> candidates;
-#ifdef _WIN32
-    // Windows lookup order:
-    // 1) %APPDATA%\sprat\spratprofiles.cfg (user config)
+    // Lookup order:
+    // 1) user config (Windows: %APPDATA%\sprat\spratprofiles.cfg,
+    //                 others: ~/.config/sprat/spratprofiles.cfg)
     // 2) ./spratprofiles.cfg (current directory)
     // 3) global installed config
     if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
@@ -534,13 +539,6 @@ std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& c
     }
     candidates.push_back(cwd / k_profiles_config_filename);
     candidates.emplace_back(k_global_profiles_config_path);
-#else
-    if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
-        candidates.push_back(*user_config);
-    }
-    candidates.push_back(cwd / k_profiles_config_filename);
-    candidates.emplace_back(k_global_profiles_config_path);
-#endif
     return candidates;
 }
 
