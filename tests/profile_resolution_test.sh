@@ -49,6 +49,19 @@ trim_transparent=false
 EOF
 }
 
+normalize_eol() {
+    tr -d '\r' < "$1"
+}
+
+files_match_text() {
+    local left="$1"
+    local right="$2"
+    if diff -u <(normalize_eol "$left") <(normalize_eol "$right") >/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 run_profile() {
     local out_file="$1"
     (
@@ -69,7 +82,7 @@ assert_matches_explicit() {
         "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile probe --profiles-config "$(fix_path "$expected_cfg")" > "$explicit_out"
     )
 
-    if ! cmp -s "$implicit_out" "$explicit_out"; then
+    if ! files_match_text "$implicit_out" "$explicit_out"; then
         echo "Profile lookup did not match expected source: $label" >&2
         echo "--- implicit output ---" >&2
         cat "$implicit_out" >&2 || true

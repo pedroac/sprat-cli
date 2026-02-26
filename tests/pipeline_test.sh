@@ -53,6 +53,19 @@ $(fix_path "$frames_dir/frame_a.png")
 $(fix_path "$frames_dir/frame_b.png")
 EOF
 
+normalize_eol() {
+    tr -d '\r' < "$1"
+}
+
+files_match_text() {
+    local left="$1"
+    local right="$2"
+    if diff -u <(normalize_eol "$left") <(normalize_eol "$right") >/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 # Isolate test from user configuration and provide required profiles
 mkdir -p "$tmp_dir/.config/sprat"
 profiles_cfg="$tmp_dir/.config/sprat/spratprofiles.cfg"
@@ -104,7 +117,7 @@ sheet_file="$tmp_dir/spritesheet.png"
 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile fast --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$fast_layout_file"
 "$spratlayout_bin" "$(fix_path "$frames_dir")" --profile css --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$css_layout_file"
 
-if ! cmp -s "$layout_file" "$default_layout_file"; then
+if ! files_match_text "$layout_file" "$default_layout_file"; then
     echo "Default profile output differs from --profile fast" >&2
     echo "--- layout_file (--profile fast) ---" >&2
     cat "$layout_file" >&2 || true
@@ -120,7 +133,7 @@ if ! cmp -s "$layout_file" "$default_layout_file"; then
     exit 1
 fi
 
-if ! cmp -s "$default_layout_file" "$default_layout_file.with_missing_cfg"; then
+if ! files_match_text "$default_layout_file" "$default_layout_file.with_missing_cfg"; then
     echo "No-profile defaults should not depend on profile config path" >&2
     echo "--- default_layout_file ---" >&2
     cat "$default_layout_file" >&2 || true
