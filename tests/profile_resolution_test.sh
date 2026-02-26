@@ -51,7 +51,10 @@ EOF
 
 run_profile() {
     local out_file="$1"
-    "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile probe > "$out_file"
+    (
+        cd "$tmp_dir"
+        "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile probe > "$out_file"
+    )
 }
 
 assert_matches_explicit() {
@@ -61,7 +64,10 @@ assert_matches_explicit() {
     local explicit_out="$tmp_dir/${label}_explicit.txt"
 
     run_profile "$implicit_out"
-    "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile probe --profiles-config "$(fix_path "$expected_cfg")" > "$explicit_out"
+    (
+        cd "$tmp_dir"
+        "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile probe --profiles-config "$(fix_path "$expected_cfg")" > "$explicit_out"
+    )
 
     if ! cmp -s "$implicit_out" "$explicit_out"; then
         echo "Profile lookup did not match expected source: $label" >&2
@@ -69,57 +75,34 @@ assert_matches_explicit() {
     fi
 }
 
-exe_dir="$(dirname "$spratlayout_bin")"
-exe_cfg="$exe_dir/spratprofiles.cfg"
-exe_cfg_backup="$tmp_dir/exe_spratprofiles.backup"
-exe_cfg_had_backup=0
-
-if [ -f "$exe_cfg" ]; then
-    cp "$exe_cfg" "$exe_cfg_backup"
-    exe_cfg_had_backup=1
-fi
-
 cleanup() {
-    if [ "$exe_cfg_had_backup" -eq 1 ]; then
-        cp "$exe_cfg_backup" "$exe_cfg"
-    else
-        rm -f "$exe_cfg"
-    fi
     rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
 
 appdata_root="$tmp_dir/appdata"
-programdata_root="$tmp_dir/programdata"
 userprofile_root="$tmp_dir/userprofile"
 home_root="$tmp_dir/home"
-mkdir -p "$appdata_root" "$programdata_root" "$userprofile_root" "$home_root"
+mkdir -p "$appdata_root" "$userprofile_root" "$home_root"
 
 appdata_cfg="$appdata_root/sprat/spratprofiles.cfg"
-programdata_cfg="$programdata_root/Sprat/spratprofiles.cfg"
+cwd_cfg="$tmp_dir/spratprofiles.cfg"
 
-export APPDATA="$(cygpath -w "$appdata_root")"
-export PROGRAMDATA="$(cygpath -w "$programdata_root")"
-export USERPROFILE="$(cygpath -w "$userprofile_root")"
-export HOME="$(cygpath -w "$home_root")"
+export APPDATA="$(cygpath -m "$appdata_root")"
+export USERPROFILE="$(cygpath -m "$userprofile_root")"
+export HOME="$(cygpath -m "$home_root")"
 
-# 1) APPDATA should be preferred when present.
+# 1) User config (APPDATA) should be preferred when present.
 write_cfg "$appdata_cfg" 3
-rm -f "$exe_cfg" "$programdata_cfg"
+write_cfg "$cwd_cfg" 7
 assert_matches_explicit "$appdata_cfg" "appdata"
 
-# 2) Exe directory should be used when APPDATA config is absent.
-rm -f "$appdata_cfg" "$programdata_cfg"
-write_cfg "$exe_cfg" 7
-assert_matches_explicit "$exe_cfg" "exedir"
+# 2) Current directory config should be used when user config is absent.
+rm -f "$appdata_cfg"
+write_cfg "$cwd_cfg" 7
+assert_matches_explicit "$cwd_cfg" "cwd"
 
-# 3) PROGRAMDATA should be used when APPDATA and exe-dir configs are absent.
-rm -f "$appdata_cfg" "$exe_cfg"
-write_cfg "$programdata_cfg" 11
-assert_matches_explicit "$programdata_cfg" "programdata"
-
-# 4) Precedence: APPDATA > exe-dir > PROGRAMDATA.
-write_cfg "$programdata_cfg" 13
-write_cfg "$exe_cfg" 9
+# 3) Precedence: APPDATA > current directory.
+write_cfg "$cwd_cfg" 9
 write_cfg "$appdata_cfg" 5
 assert_matches_explicit "$appdata_cfg" "precedence"

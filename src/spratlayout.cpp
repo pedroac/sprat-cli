@@ -508,11 +508,10 @@ bool load_profiles_config_from_file(const fs::path& path,
 
 std::optional<fs::path> resolve_user_profiles_config_path() {
 #ifdef _WIN32
-    const char* home = std::getenv("HOME");
-    if (home != nullptr && home[0] != '\0') {
-        return fs::path(home) / k_user_profiles_config_relpath;
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata != nullptr && appdata[0] != '\0') {
+        return fs::path(appdata) / "sprat" / k_profiles_config_filename;
     }
-
     return std::nullopt;
 #else
     const char* home = std::getenv("HOME");
@@ -523,117 +522,23 @@ std::optional<fs::path> resolve_user_profiles_config_path() {
 #endif
 }
 
-void append_candidate_if_set(std::vector<fs::path>& candidates,
-                             const char* env_name,
-                             const fs::path& relative_path) {
-    const char* value = std::getenv(env_name);
-    if (value == nullptr || value[0] == '\0') {
-        return;
-    }
-    const std::string base(value);
-    candidates.push_back(fs::path(base) / relative_path);
-#ifdef _WIN32
-    // Some runtimes (e.g. MSYS shells) can expose Windows env paths that are
-    // not resolved consistently by std::filesystem when backslashes are used.
-    if (base.find('\\') != std::string::npos) {
-        std::string normalized = base;
-        std::replace(normalized.begin(), normalized.end(), '\\', '/');
-        if (normalized != base) {
-            candidates.push_back(fs::path(normalized) / relative_path);
-        }
-    }
-#endif
-}
-
-#ifdef _WIN32
-std::vector<fs::path> build_env_candidates(const char* env_name, const fs::path& relative_path) {
-    std::vector<fs::path> candidates;
-    append_candidate_if_set(candidates, env_name, relative_path);
-    return candidates;
-}
-
-void maybe_seed_windows_appdata_profiles(const fs::path& exec_dir, bool verbose_errors) {
-    std::vector<fs::path> appdata_candidates =
-        build_env_candidates("APPDATA", fs::path("sprat") / k_profiles_config_filename);
-    if (appdata_candidates.empty()) {
-        if (verbose_errors) {
-            std::cerr << "APPDATA is not set; skipping profile bootstrap to %APPDATA%.\n";
-        }
-        return;
-    }
-
-    // If APPDATA already has a config in any compatible path form, keep it.
-    for (const fs::path& appdata_cfg : appdata_candidates) {
-        std::error_code ec;
-        const bool exists = fs::exists(appdata_cfg, ec);
-        if (exists) {
-            return;
-        }
-        if (ec && verbose_errors) {
-            std::cerr << "Failed checking APPDATA profile path (" << appdata_cfg << "): "
-                      << ec.message() << "\n";
-        }
-    }
-
-    const fs::path source_cfg = exec_dir / k_profiles_config_filename;
-    std::error_code source_ec;
-    if (!fs::exists(source_cfg, source_ec)) {
-        if (source_ec && verbose_errors) {
-            std::cerr << "Failed checking fallback profile source (" << source_cfg << "): "
-                      << source_ec.message() << "\n";
-        }
-        return;
-    }
-
-    bool copied = false;
-    for (const fs::path& appdata_cfg : appdata_candidates) {
-        std::error_code mkdir_ec;
-        fs::create_directories(appdata_cfg.parent_path(), mkdir_ec);
-        if (mkdir_ec) {
-            if (verbose_errors) {
-                std::cerr << "Failed creating APPDATA profile directory (" << appdata_cfg.parent_path()
-                          << "): " << mkdir_ec.message() << "\n";
-            }
-            continue;
-        }
-
-        std::error_code copy_ec;
-        if (fs::copy_file(source_cfg, appdata_cfg, fs::copy_options::skip_existing, copy_ec)) {
-            copied = true;
-            break;
-        }
-        if (copy_ec && verbose_errors) {
-            std::cerr << "Failed copying profile config to APPDATA (" << appdata_cfg << "): "
-                      << copy_ec.message() << "\n";
-        }
-    }
-
-    if (!copied && verbose_errors) {
-        std::cerr << "Could not bootstrap %APPDATA% profile config from " << source_cfg << ".\n";
-    }
-}
-#endif
-
-std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& exec_dir) {
+std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& cwd) {
     std::vector<fs::path> candidates;
 #ifdef _WIN32
     // Windows lookup order:
-    // 1) %APPDATA%\sprat\spratprofiles.cfg
-    // 2) <exe_dir>\spratprofiles.cfg
-    // 3) %PROGRAMDATA%\Sprat\spratprofiles.cfg
-    append_candidate_if_set(candidates, "APPDATA", fs::path("sprat") / k_profiles_config_filename);
-    candidates.push_back(exec_dir / k_profiles_config_filename);
-    append_candidate_if_set(candidates, "PROGRAMDATA", fs::path("Sprat") / k_profiles_config_filename);
-
-    // Legacy fallbacks for compatibility.
-    append_candidate_if_set(candidates, "USERPROFILE", k_user_profiles_config_relpath);
-    append_candidate_if_set(candidates, "HOME", k_user_profiles_config_relpath);
+    // 1) %APPDATA%\sprat\spratprofiles.cfg (user config)
+    // 2) ./spratprofiles.cfg (current directory)
+    // 3) global installed config
+    if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
+        candidates.push_back(*user_config);
+    }
+    candidates.push_back(cwd / k_profiles_config_filename);
     candidates.emplace_back(k_global_profiles_config_path);
 #else
     if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
         candidates.push_back(*user_config);
     }
-    candidates.push_back(exec_dir / k_profiles_config_filename);
+    candidates.push_back(cwd / k_profiles_config_filename);
     candidates.emplace_back(k_global_profiles_config_path);
 #endif
     return candidates;
@@ -2660,28 +2565,19 @@ int main(int argc, char** argv) {
         }
         config_candidates.push_back(std::move(config_candidate));
     } else {
-#ifdef _WIN32
-        maybe_seed_windows_appdata_profiles(exec_dir, has_requested_profile);
-#endif
-        config_candidates = build_default_profiles_config_candidates(exec_dir);
+        config_candidates = build_default_profiles_config_candidates(cwd);
     }
 
     bool loaded_profile_file = false;
     std::vector<std::string> tried_candidates;
     std::vector<std::string> candidate_access_errors;
     for (const fs::path& candidate : config_candidates) {
-        std::error_code ec;
-        const bool exists = fs::exists(candidate, ec);
-        if (ec) {
-            candidate_access_errors.push_back(candidate.string() + " (" + ec.message() + ")");
-            tried_candidates.push_back(candidate.string());
-            continue;
-        }
-        if (!exists) {
-            tried_candidates.push_back(candidate.string());
-            continue;
-        }
         if (!load_profiles_config_from_file(candidate, profile_definitions, config_error)) {
+            if (config_error.rfind("failed to open '", 0) == 0) {
+                tried_candidates.push_back(candidate.string());
+                candidate_access_errors.push_back(candidate.string() + " (" + config_error + ")");
+                continue;
+            }
             if (has_requested_profile) {
                 std::cerr << "Failed to load profile config (" << candidate << "): " << config_error << "\n";
                 return 1;
