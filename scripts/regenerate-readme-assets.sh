@@ -75,4 +75,9 @@ echo "Generating recipe: resolution"
 "$SPRATLAYOUT" "$FRAMES_DIR" --source-resolution 3840x2160 --target-resolution 1920x1080 --padding 2 > "$ASSET_DIR/res_3840x2160_1920x1080_pad2.txt"
 "$SPRATPACK" < "$ASSET_DIR/res_3840x2160_1920x1080_pad2.txt" > "$ASSET_DIR/res_3840x2160_1920x1080_pad2.png"
 
+# 7. Rotation
+echo "Generating recipe: rotation"
+"$SPRATLAYOUT" "$FRAMES_DIR" --rotate --trim-transparent > "$ASSET_DIR/rotation_pad2.txt"
+"$SPRATPACK" < "$ASSET_DIR/rotation_pad2.txt" > "$ASSET_DIR/rotation_pad2.png"
+
 echo "Done."

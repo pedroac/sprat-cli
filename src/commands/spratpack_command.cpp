@@ -31,6 +31,7 @@
 #include <thread>
 #include <utility>
 #include "core/layout_parser.h"
+#include "core/cli_parse.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -49,6 +50,7 @@ using Sprite = sprat::core::Sprite;
 using Layout = sprat::core::Layout;
 using sprat::core::parse_int;
 using sprat::core::parse_layout;
+using sprat::core::to_quoted;
 
 bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
     if (a == 0 || b <= std::numeric_limits<size_t>::max() / a) {
@@ -265,12 +267,12 @@ int run_spratpack(int argc, char** argv) {
     for (const auto& s : sprites) {
         if (s.x < 0 || s.y < 0 || s.w <= 0 || s.h <= 0 || s.src_x < 0 || s.src_y < 0
             || s.trim_right < 0 || s.trim_bottom < 0) {
-            std::cerr << "Invalid sprite bounds: " << s.path << "\n";
+            std::cerr << "Invalid sprite bounds: " << to_quoted(s.path) << "\n";
             return 1;
         }
         if (s.w > atlas_width || s.h > atlas_height
             || s.x > atlas_width - s.w || s.y > atlas_height - s.h) {
-            std::cerr << "Sprite out of atlas bounds: " << s.path << "\n";
+            std::cerr << "Sprite out of atlas bounds: " << to_quoted(s.path) << "\n";
             return 1;
         }
     }
@@ -281,7 +283,7 @@ int run_spratpack(int argc, char** argv) {
         int channels = 0;
         unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
         if (!data) {
-            error_out = "Failed to load: " + s.path;
+            error_out = "Failed to load: " + to_quoted(s.path);
             return false;
         }
         int source_x = s.has_trim ? s.src_x : 0;
@@ -290,12 +292,12 @@ int run_spratpack(int argc, char** argv) {
         int source_h = s.has_trim ? (h - s.src_y - s.trim_bottom) : h;
 
         if (source_x < 0 || source_y < 0 || source_w <= 0 || source_h <= 0) {
-            error_out = "Crop out of bounds: " + s.path;
+            error_out = "Crop out of bounds: " + to_quoted(s.path);
             stbi_image_free(data);
             return false;
         }
         if (source_x > w - source_w || source_y > h - source_h) {
-            error_out = "Trim offsets out of bounds: " + s.path;
+            error_out = "Trim offsets out of bounds: " + to_quoted(s.path);
             stbi_image_free(data);
             return false;
         }
@@ -306,14 +308,14 @@ int run_spratpack(int argc, char** argv) {
             // Validate that scaled destination dimensions are plausible for the
             // declared source crop rectangle to guard malformed inputs.
             if (source_w == 0 || source_h == 0) {
-                error_out = "Invalid scaled source crop: " + s.path;
+                error_out = "Invalid scaled source crop: " + to_quoted(s.path);
                 stbi_image_free(data);
                 return false;
             }
         }
 
         if (scaled_source_w == 0 || scaled_source_h == 0) {
-            error_out = "Invalid destination sprite size: " + s.path;
+            error_out = "Invalid destination sprite size: " + to_quoted(s.path);
             stbi_image_free(data);
             return false;
         }
@@ -322,7 +324,7 @@ int run_spratpack(int argc, char** argv) {
         size_t source_bytes = 0;
         if (!checked_mul_size_t(static_cast<size_t>(w), static_cast<size_t>(h), source_pixels)
             || !checked_mul_size_t(source_pixels, NUM_CHANNELS, source_bytes)) {
-            error_out = "Source image is too large: " + s.path;
+            error_out = "Source image is too large: " + to_quoted(s.path);
             stbi_image_free(data);
             return false;
         }
@@ -338,7 +340,7 @@ int run_spratpack(int argc, char** argv) {
                     || !checked_mul_size_t(dest_pixels, NUM_CHANNELS, dest_offset)
                     || dest_offset > atlas.size()
                     || row_bytes > atlas.size() - dest_offset) {
-                    error_out = "Atlas indexing out of bounds: " + s.path;
+                    error_out = "Atlas indexing out of bounds: " + to_quoted(s.path);
                     stbi_image_free(data);
                     return false;
                 }
@@ -350,7 +352,7 @@ int run_spratpack(int argc, char** argv) {
                     || !checked_mul_size_t(src_pixels, NUM_CHANNELS, src_offset)
                     || src_offset > source_bytes
                     || row_bytes > source_bytes - src_offset) {
-                    error_out = "Source indexing overflow: " + s.path;
+                    error_out = "Source indexing overflow: " + to_quoted(s.path);
                     stbi_image_free(data);
                     return false;
                 }
@@ -373,7 +375,7 @@ int run_spratpack(int argc, char** argv) {
                     size_t dest_pixels = 0;
                     size_t dest_offset = 0;
                     if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels)) {
-                        error_out = "Atlas indexing overflow: " + s.path;
+                        error_out = "Atlas indexing overflow: " + to_quoted(s.path);
                         stbi_image_free(data);
                         return false;
                     }
@@ -381,7 +383,7 @@ int run_spratpack(int argc, char** argv) {
                     if (!checked_mul_size_t(dest_pixels, NUM_CHANNELS, dest_offset)
                         || dest_offset > atlas.size()
                         || NUM_CHANNELS > atlas.size() - dest_offset) {
-                        error_out = "Atlas indexing out of bounds: " + s.path;
+                        error_out = "Atlas indexing out of bounds: " + to_quoted(s.path);
                         stbi_image_free(data);
                         return false;
                     }
@@ -393,7 +395,7 @@ int run_spratpack(int argc, char** argv) {
                         || !checked_mul_size_t(src_pixels, NUM_CHANNELS, src_offset)
                         || src_offset > source_bytes
                         || NUM_CHANNELS > source_bytes - src_offset) {
-                        error_out = "Source indexing overflow: " + s.path;
+                        error_out = "Source indexing overflow: " + to_quoted(s.path);
                         stbi_image_free(data);
                         return false;
                     }

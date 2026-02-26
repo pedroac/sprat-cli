@@ -17,9 +17,6 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-resolution\-reference\fR largest|smallest]
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
-[\fB\-\-no\-trim\-transparent\fR]
-[\fB\-\-rotate\fR]
-[\fB\-\-threads\fR \fIN\fR]
 .PP
 .B spratpack
 [\fB\-\-frame\-lines\fR]
@@ -197,14 +194,8 @@ Pre-scale factor applied before source/target resolution mapping. Valid range: \
 \fB\-\-trim\-transparent\fR
 Enable transparent-border trimming (overrides profile value).
 .TP
-\fB\-\-no\-trim\-transparent\fR
-Disable transparent-border trimming (overrides profile value).
-.TP
 \fB\-\-rotate\fR
 Enable 90-degree sprite rotation during packing (overrides profile value).
-.TP
-\fB\-\-threads\fR \fIN\fR
-Worker thread count for compact profile search. Overrides profile value.
 .PP
 Config keys available per profile section:
 .IP "\(bu" 2

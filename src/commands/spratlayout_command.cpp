@@ -67,6 +67,7 @@ namespace {
 using sprat::core::parse_non_negative_int;
 using sprat::core::parse_positive_int;
 using sprat::core::parse_positive_uint;
+using sprat::core::to_quoted;
 
 std::string trim_copy(const std::string& s) {
     size_t start = 0;
@@ -318,17 +319,43 @@ bool parse_profiles_config(std::istream& input,
                 error = "unsupported section '" + section_type + "' at line " + std::to_string(line_number);
                 return false;
             }
+
             std::string name;
-            if (!(iss >> name)) {
+            std::string remainder;
+            std::getline(iss, remainder);
+            remainder = trim_copy(remainder);
+
+            if (remainder.empty()) {
                 error = "missing profile name at line " + std::to_string(line_number);
                 return false;
             }
-            std::string extra;
-            if (iss >> extra) {
-                error = "unexpected token '" + extra + "' in profile header at line " +
-                        std::to_string(line_number);
-                return false;
+
+            if (remainder.front() == '"') {
+                size_t pos = 0;
+                std::string parse_error;
+                if (!sprat::core::parse_quoted(remainder, pos, name, parse_error)) {
+                    error = "invalid quoted profile name at line " + std::to_string(line_number) + ": " + parse_error;
+                    return false;
+                }
+                std::string extra = trim_copy(remainder.substr(pos));
+                if (!extra.empty()) {
+                    error = "unexpected token '" + extra + "' after quoted profile name at line " + std::to_string(line_number);
+                    return false;
+                }
+            } else {
+                std::istringstream name_iss(remainder);
+                if (!(name_iss >> name)) {
+                    error = "missing profile name at line " + std::to_string(line_number);
+                    return false;
+                }
+                std::string extra;
+                if (name_iss >> extra) {
+                    error = "unexpected token '" + extra + "' in profile name (use quotes for names with spaces) at line " +
+                            std::to_string(line_number);
+                    return false;
+                }
             }
+
             if (seen_names.contains(name)) {
                 error = "duplicate profile '" + name + "' at line " + std::to_string(line_number);
                 return false;
@@ -1037,7 +1064,7 @@ bool detect_and_extract_tar_content(const fs::path& input_path, InputContext& ou
         
         // Extract the tar file
         if (!extract_tar_file(input_path, temp_dir)) {
-            std::cerr << "Error: Failed to extract tar file: " << input_path << "\n";
+            std::cerr << "Error: Failed to extract tar file: " << to_quoted(input_path) << "\n";
             // Cleanup on error
             for (const auto& dir : out_context.temp_dirs_to_cleanup) {
                 fs::remove_all(dir, ec);
@@ -1292,7 +1319,6 @@ void print_usage() {
               << "  --resolution-reference REF Axis ratio driver: largest or smallest\n"
               << "  --scale F                  Pre-scale factor (0 < F <= 1)\n"
               << "  --trim-transparent         Enable transparent-border trimming\n"
-              << "  --no-trim-transparent      Disable transparent-border trimming\n"
               << "  --rotate                   Allow 90-degree sprite rotation during packing\n"
               << "  --threads N                Number of worker threads\n"
               << "  --help, -h                 Show this help message\n";
@@ -1854,12 +1880,7 @@ std::string build_layout_output_text(int atlas_width,
         std::string path = s.path;
         // Standardize path separators to forward slashes for output consistency
         std::replace(path.begin(), path.end(), '\\', '/');
-        size_t pos = 0;
-        while ((pos = path.find('"', pos)) != std::string::npos) {
-            path.insert(pos, "\\");
-            pos += 2;
-        }
-        output << "sprite \"" << path << "\" "
+        output << "sprite " << to_quoted(path) << " "
                << s.x << "," << s.y << " "
                << s.w << "," << s.h;
         if (trim_transparent) {
@@ -2553,9 +2574,6 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--trim-transparent") {
             trim_transparent = true;
             has_trim_override = true;
-        } else if (arg == "--no-trim-transparent") {
-            trim_transparent = false;
-            has_trim_override = true;
         } else if (arg == "--rotate") {
             allow_rotate = true;
             has_rotate_override = true;
@@ -2652,7 +2670,7 @@ int run_spratlayout(int argc, char** argv) {
                 continue;
             }
             if (has_requested_profile) {
-                std::cerr << "Failed to load profile config (" << candidate << "): " << config_error << "\n";
+                std::cerr << "Failed to load profile config (" << to_quoted(candidate) << "): " << config_error << "\n";
                 return 1;
             }
             tried_candidates.push_back(candidate.string());
@@ -2672,7 +2690,7 @@ int run_spratlayout(int argc, char** argv) {
         if (!candidate_access_errors.empty()) {
             std::cerr << "Profile config access errors:\n";
             for (const std::string& error : candidate_access_errors) {
-                std::cerr << "  - " << error << "\n";
+                std::cerr << "  - " << to_quoted(error) << "\n";
             }
         }
         return 1;
@@ -2819,7 +2837,7 @@ int run_spratlayout(int argc, char** argv) {
     auto add_source = [&](const fs::path& image_path, bool strict) -> bool {
         if (!is_supported_image_extension(image_path)) {
             if (strict) {
-                std::cerr << "Invalid extension in list input: " << image_path << "\n";
+                std::cerr << "Invalid extension in list input: " << to_quoted(image_path) << "\n";
                 return false;
             }
             return true;
@@ -2827,7 +2845,7 @@ int run_spratlayout(int argc, char** argv) {
         ImageMeta meta;
         if (!read_image_meta(image_path, meta)) {
             if (strict) {
-                std::cerr << "Failed to stat image: " << image_path << "\n";
+                std::cerr << "Failed to stat image: " << to_quoted(image_path) << "\n";
                 return false;
             }
             return true;
@@ -2888,7 +2906,7 @@ int run_spratlayout(int argc, char** argv) {
                 entry_path = input_context.working_folder.parent_path() / entry_path;
             }
             if (!fs::exists(entry_path) || !fs::is_regular_file(entry_path)) {
-                std::cerr << "Invalid image path at line " << line_number << ": " << trimmed << "\n";
+                std::cerr << "Invalid image path at line " << line_number << ": " << to_quoted(trimmed) << "\n";
                 return 1;
             }
             if (!add_source(entry_path, true)) {

@@ -66,6 +66,7 @@ constexpr int k_max_channel_value = 255;
 namespace {
 using sprat::core::parse_positive_int;
 using sprat::core::parse_non_negative_int;
+using sprat::core::to_quoted;
 
 struct Color {
     unsigned char r, g, b, a;
@@ -142,13 +143,14 @@ private:
 public:
     SpriteFramesDetector(FramesConfig  config) : config_(std::move(config)) {}
     
+
     bool load_image() {
         // Validate image dimensions to prevent integer overflow
         int req_channels = 4; // Always load with alpha
         unsigned char* data = stbi_load(config_.input_path.string().c_str(), &width_, &height_, &channels_, req_channels);
         
         if (data == nullptr) {
-            std::cerr << "Error: Failed to load image: " << config_.input_path << '\n';
+            std::cerr << "Error: Failed to load image: " << to_quoted(config_.input_path.string()) << '\n';
             return false;
         }
         
@@ -543,7 +545,7 @@ private:
     
     [[nodiscard]] bool output_spratframes(const std::vector<SpriteFrame>& frames) const {
         // First line: path <filepath>
-        std::cout << "path " << config_.input_path.string() << "\n";
+        std::cout << "path " << to_quoted(config_.input_path.string()) << "\n";
         
         // Check if we need to output background color
         if (config_.has_rectangles) {
@@ -815,7 +817,7 @@ int run_spratframes(int argc, char** argv) {
     
     // Validate input file exists
     if (!fs::exists(config.input_path) || !fs::is_regular_file(config.input_path)) {
-        std::cerr << "Error: Input file does not exist or is not a file: " << config.input_path << '\n';
+        std::cerr << "Error: Input file does not exist or is not a file: " << to_quoted(config.input_path.string()) << '\n';
         return 1;
     }
     

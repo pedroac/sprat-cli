@@ -364,7 +364,7 @@ EOF
 
 scaled_layout="$tmp_dir/scaled_layout.txt"
 scaled_sheet="$tmp_dir/scaled_sheet.png"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --scale 0.5 > "$scaled_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --scale 0.5 > "$scaled_layout"
 
 if ! grep -Eq '^scale 0\.5[0-9]*$' "$scaled_layout"; then
     echo "Scaled layout did not emit expected scale line" >&2
@@ -385,7 +385,7 @@ fi
 
 # Resolution mapping should combine with scale (effective = scale * target/source).
 scaled_resolution_layout="$tmp_dir/scaled_resolution_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 2x2 > "$scaled_resolution_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --source-resolution 4x4 --target-resolution 2x2 > "$scaled_resolution_layout"
 
 if ! grep -Eq '^scale 0\.5[0-9]*$' "$scaled_resolution_layout"; then
     echo "Resolution mapping did not emit expected scale line" >&2
@@ -398,7 +398,7 @@ if ! grep -q '^atlas 2,2$' "$scaled_resolution_layout"; then
 fi
 
 scaled_combined_layout="$tmp_dir/scaled_combined_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 2x2 --scale 0.5 > "$scaled_combined_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --source-resolution 4x4 --target-resolution 2x2 --scale 0.5 > "$scaled_combined_layout"
 
 if ! grep -Eq '^scale 0\.25[0-9]*$' "$scaled_combined_layout"; then
     echo "Combined source/target and scale did not emit expected scale line" >&2
@@ -411,37 +411,37 @@ if ! grep -q '^atlas 1,1$' "$scaled_combined_layout"; then
 fi
 
 # Validation: source/target must be provided together, format is WxH, and scale must be <= 1.
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 > "$tmp_dir/invalid_source_only.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --source-resolution 4x4 > "$tmp_dir/invalid_source_only.out" 2>&1; then
     echo "Expected source-resolution without target-resolution to fail" >&2
     exit 1
 fi
 
 # Mismatched proportions should use selected reference axis for scaling.
 scaled_largest_layout="$tmp_dir/scaled_largest_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 > "$scaled_largest_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --source-resolution 4x4 --target-resolution 3x2 > "$scaled_largest_layout"
 if ! grep -Eq '^scale 0\.75[0-9]*$' "$scaled_largest_layout"; then
     echo "Mismatched proportions did not use expected largest-ratio scale" >&2
     exit 1
 fi
 
 scaled_smallest_layout="$tmp_dir/scaled_smallest_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 --resolution-reference smallest > "$scaled_smallest_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --source-resolution 4x4 --target-resolution 3x2 --resolution-reference smallest > "$scaled_smallest_layout"
 if ! grep -Eq '^scale 0\.5[0-9]*$' "$scaled_smallest_layout"; then
     echo "Mismatched proportions did not use expected smallest-ratio scale" >&2
     exit 1
 fi
 
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4X4 --target-resolution 2x2 > "$tmp_dir/invalid_resolution_format.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --source-resolution 4X4 --target-resolution 2x2 > "$tmp_dir/invalid_resolution_format.out" 2>&1; then
     echo "Expected invalid resolution format (must be WxH with lowercase x) to fail" >&2
     exit 1
 fi
 
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 --resolution-reference largest --resolution-reference smallest > "$tmp_dir/invalid_resolution_reference_repeat.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --source-resolution 4x4 --target-resolution 3x2 --resolution-reference largest --resolution-reference smallest > "$tmp_dir/invalid_resolution_reference_repeat.out" 2>&1; then
     echo "Expected repeated --resolution-reference values to fail" >&2
     exit 1
 fi
 
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --scale 1.1 > "$tmp_dir/invalid_scale.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")"  --scale 1.1 > "$tmp_dir/invalid_scale.out" 2>&1; then
     echo "Expected scale greater than 1 to fail" >&2
     exit 1
 fi

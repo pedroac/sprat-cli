@@ -53,6 +53,7 @@ typedef SSIZE_T ssize_t;
 
 namespace {
 using sprat::core::parse_non_negative_uint;
+using sprat::core::to_quoted;
 
 constexpr int NUM_CHANNELS = 4;
 
@@ -71,9 +72,11 @@ struct SpriteFrame {
 
 struct Config {
     fs::path input_path;
+    fs::path detected_input_path;
     fs::path frames_path;
     fs::path output_dir;
     bool input_from_stdin = false;
+    bool frames_from_stdin = false;
     bool stdout_mode = false;
     unsigned int threads = 0;
 };
@@ -83,9 +86,9 @@ public:
     SpriteUnpacker(Config  config) : config_(std::move(config)) {}
 
     bool run() {
-        if (!load_image()) { return false;
-}
         if (!load_frames()) { return false;
+}
+        if (!load_image()) { return false;
 }
 
         if (config_.stdout_mode) {
@@ -102,7 +105,12 @@ private:
 
     bool load_image() {
         unsigned char* data = nullptr;
-        if (config_.input_from_stdin) {
+        fs::path actual_input_path = config_.input_path;
+        if (actual_input_path.empty() && !config_.detected_input_path.empty()) {
+            actual_input_path = config_.detected_input_path;
+        }
+
+        if (actual_input_path.empty() && config_.input_from_stdin) {
             const std::vector<unsigned char> stdin_bytes(
                 std::istreambuf_iterator<char>(std::cin),
                 std::istreambuf_iterator<char>());
@@ -117,15 +125,19 @@ private:
                 &height_,
                 &channels_,
                 NUM_CHANNELS);
-        } else {
+        } else if (!actual_input_path.empty()) {
             data = stbi_load(
-                config_.input_path.string().c_str(), &width_, &height_, &channels_, NUM_CHANNELS);
+                actual_input_path.string().c_str(), &width_, &height_, &channels_, NUM_CHANNELS);
+        } else {
+            std::cerr << "Error: No input atlas provided.\n";
+            return false;
         }
+
         if (data == nullptr) {
-            if (config_.input_from_stdin) {
+            if (actual_input_path.empty()) {
                 std::cerr << "Error: Failed to load atlas image from stdin\n";
             } else {
-                std::cerr << "Error: Failed to load image " << config_.input_path << "\n";
+                std::cerr << "Error: Failed to load image " << to_quoted(actual_input_path.string()) << "\n";
             }
             return false;
         }
@@ -136,48 +148,101 @@ private:
     }
 
     bool load_frames() {
-        if (config_.frames_path.empty()) {
-            if (config_.input_from_stdin) {
-                std::cerr << "Error: --frames is required when reading atlas from stdin.\n";
-                return false;
-            }
-            // Try to auto-detect frames file
-            fs::path json_path = config_.input_path;
-            json_path.replace_extension(".json");
-            if (fs::exists(json_path)) {
-                config_.frames_path = json_path;
-            } else {
-                fs::path sprat_path = config_.input_path;
-                sprat_path.replace_extension(".spratframes");
-                if (fs::exists(sprat_path)) {
-                    config_.frames_path = sprat_path;
-                } else {
-                    std::cerr << "Error: Frames file not found and could not be auto-detected.\n";
+        std::string content;
+        std::string extension;
+
+        if (config_.frames_from_stdin || (config_.frames_path.empty() && config_.input_from_stdin)) {
+            content.assign(std::istreambuf_iterator<char>(std::cin),
+                          std::istreambuf_iterator<char>());
+            if (content.empty()) {
+                if (config_.frames_from_stdin) {
+                    std::cerr << "Error: No frames data received on stdin\n";
                     return false;
                 }
+                // If we were just hoping for frames on stdin because input was missing,
+                // but got nothing, we'll fail later in load_image.
+                // But wait, if we are here, input_from_stdin is true.
+                std::cerr << "Error: No data received on stdin. Expected atlas image or frames definition.\n";
+                return false;
+            }
+            // For stdin, we try to detect format from content
+            if (content.find("\"frames\":") != std::string::npos || content.find('[') != std::string::npos) {
+                extension = ".json";
+            } else {
+                extension = ".spratframes";
+            }
+            // If we read from stdin for frames, we must NOT read from it for image
+            if (config_.input_from_stdin) {
+                config_.input_from_stdin = false;
+            }
+        } else {
+            if (config_.frames_path.empty()) {
+                if (config_.input_path.empty()) {
+                    // Magic mode: spratframes atlas.png | spratunpack
+                    content.assign(std::istreambuf_iterator<char>(std::cin),
+                                  std::istreambuf_iterator<char>());
+                    if (content.empty()) {
+                        std::cerr << "Error: No data received on stdin. Expected frames definition.\n";
+                        return false;
+                    }
+                    if (content.find("\"frames\":") != std::string::npos || content.find('[') != std::string::npos) {
+                        extension = ".json";
+                    } else {
+                        extension = ".spratframes";
+                    }
+                } else {
+                    // Try to auto-detect frames file
+                    fs::path json_path = config_.input_path;
+                    json_path.replace_extension(".json");
+                    if (fs::exists(json_path)) {
+                        config_.frames_path = json_path;
+                    } else {
+                        fs::path sprat_path = config_.input_path;
+                        sprat_path.replace_extension(".spratframes");
+                        if (fs::exists(sprat_path)) {
+                            config_.frames_path = sprat_path;
+                        } else {
+                            // Try stdin as fallback if auto-detect fails
+                            content.assign(std::istreambuf_iterator<char>(std::cin),
+                                          std::istreambuf_iterator<char>());
+                            if (!content.empty()) {
+                                if (content.find("\"frames\":") != std::string::npos || content.find('[') != std::string::npos) {
+                                    extension = ".json";
+                                } else {
+                                    extension = ".spratframes";
+                                }
+                            } else {
+                                std::cerr << "Error: Frames file not found and could not be auto-detected.\n";
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (content.empty()) {
+                extension = config_.frames_path.extension().string();
+                std::ranges::transform(extension, extension.begin(), ::tolower);
+
+                std::ifstream file(config_.frames_path);
+                if (!file.is_open()) {
+                    std::cerr << "Error: Failed to open frames file " << to_quoted(config_.frames_path.string()) << "\n";
+                    return false;
+                }
+
+                std::stringstream ss;
+                ss << file.rdbuf();
+                content = ss.str();
             }
         }
-
-        std::string extension = config_.frames_path.extension().string();
-        std::ranges::transform(extension, extension.begin(), ::tolower);
-
-        std::ifstream file(config_.frames_path);
-        if (!file.is_open()) {
-            std::cerr << "Error: Failed to open frames file " << config_.frames_path << "\n";
-            return false;
-        }
-
-        std::stringstream ss;
-        ss << file.rdbuf();
-        std::string content = ss.str();
 
         if (extension == ".json") {
             return parse_json(content);
         } if (extension == ".spratframes" || extension == ".txt") {
             return parse_spratframes(content);
-        }             std::cerr << "Error: Unsupported frames format " << extension << "\n";
-            return false;
-       
+        }
+        std::cerr << "Error: Unsupported frames format " << extension << "\n";
+        return false;
     }
 
     bool parse_spratframes(const std::string& content) {
@@ -186,28 +251,63 @@ private:
         int index = 0;
         while (std::getline(iss, line)) {
             line = trim_copy(line);
-            if (line.empty() || line.starts_with("path ") || line.starts_with("background ")) {
+            if (line.empty()) {
+                continue;
+            }
+
+            if (line.starts_with("path ")) {
+                if (config_.detected_input_path.empty()) {
+                    std::string path_line = line.substr(5);
+                    size_t pos = 0;
+                    while (pos < path_line.size() && std::isspace(static_cast<unsigned char>(path_line[pos]))) {
+                        pos++;
+                    }
+                    if (pos < path_line.size() && path_line[pos] == '"') {
+                        std::string path;
+                        std::string error;
+                        if (sprat::core::parse_quoted(path_line, pos, path, error)) {
+                            config_.detected_input_path = path;
+                        }
+                    } else {
+                        config_.detected_input_path = trim_copy(path_line);
+                    }
+                }
+                continue;
+            }
+            
+            if (line.starts_with("background ")) {
                 continue;
             }
 
             if (line.starts_with("sprite ")) {
-                std::string data = line.substr(7);
-                std::istringstream liss(data);
-                std::string pos_str, size_str;
-                if (liss >> pos_str >> size_str) {
-                    SpriteFrame frame;
-                    frame.name = "sprite_" + std::to_string(index++);
-                    
-                    size_t comma_pos = pos_str.find(',');
-                    if (comma_pos != std::string::npos) {
-                        frame.frame.x = std::stoi(pos_str.substr(0, comma_pos));
-                        frame.frame.y = std::stoi(pos_str.substr(comma_pos + 1));
+                std::string sprite_line = line.substr(7);
+                size_t pos = 0;
+                while (pos < sprite_line.size() && std::isspace(static_cast<unsigned char>(sprite_line[pos]))) {
+                    pos++;
+                }
+                
+                std::string name;
+                if (pos < sprite_line.size() && sprite_line[pos] == '"') {
+                    std::string error;
+                    if (!sprat::core::parse_quoted(sprite_line, pos, name, error)) {
+                        continue;
                     }
+                }
+
+                std::vector<std::string> tokens;
+                std::istringstream liss(sprite_line.substr(pos));
+                std::string token;
+                while (liss >> token) {
+                    tokens.push_back(token);
+                }
+
+                if (tokens.size() >= 2) {
+                    SpriteFrame frame;
+                    frame.name = name.empty() ? "sprite_" + std::to_string(index++) : name;
                     
-                    comma_pos = size_str.find(',');
-                    if (comma_pos != std::string::npos) {
-                        frame.frame.w = std::stoi(size_str.substr(0, comma_pos));
-                        frame.frame.h = std::stoi(size_str.substr(comma_pos + 1));
+                    if (!sprat::core::parse_pair(tokens[0], frame.frame.x, frame.frame.y) ||
+                        !sprat::core::parse_pair(tokens[1], frame.frame.w, frame.frame.h)) {
+                        continue;
                     }
                     
                     frames_.push_back(frame);
@@ -387,16 +487,16 @@ private:
         if (!fs::exists(config_.output_dir)) {
             std::error_code ec;
             if (!fs::create_directories(config_.output_dir, ec)) {
-                std::cerr << "Error: Failed to create output directory " << config_.output_dir << "\n";
+                std::cerr << "Error: Failed to create output directory " << to_quoted(config_.output_dir.string()) << "\n";
                 return false;
             }
         }
 
-        std::cout << "Unpacking " << frames_.size() << " frames to " << config_.output_dir << "...\n";
+        std::cout << "Unpacking " << frames_.size() << " frames to " << to_quoted(config_.output_dir.string()) << "...\n";
 
         for (const auto& frame : frames_) {
             if (!save_sprite_image(frame)) {
-                std::cerr << "Warning: Failed to save sprite " << frame.name << "\n";
+                std::cerr << "Warning: Failed to save sprite " << to_quoted(frame.name) << "\n";
             }
         }
 
@@ -440,7 +540,7 @@ private:
 
         for (const auto& frame : frames_) {
             if (!write_sprite_to_archive_entry(a, frame.frame, frame.name)) {
-                std::cerr << "Warning: Failed to add sprite " << frame.name << " to archive\n";
+                std::cerr << "Warning: Failed to add sprite " << to_quoted(frame.name) << " to archive\n";
                 archive_write_free(a);
                 return false;
             }
@@ -551,7 +651,7 @@ void print_usage() {
               << "If atlas path is omitted or '-' is used, atlas PNG is read from stdin.\n"
               << "\n"
               << "Options:\n"
-              << "  -f, --frames PATH          Frames definition file (auto-detected only for atlas file input)\n"
+              << "  -f, --frames PATH          Frames definition file (or '-' for stdin)\n"
               << "  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n"
               << "  -j, --threads N            Number of threads to use (default: auto)\n"
               << "  -h, --help                 Show this help message\n";
@@ -579,6 +679,10 @@ int run_spratunpack(int argc, char** argv) {
         } else if (arg == "-f" || arg == "--frames") {
             if (i + 1 < argc) {
                 config.frames_path = argv[++i];
+                if (config.frames_path == "-") {
+                    config.frames_from_stdin = true;
+                    config.frames_path = "";
+                }
             } else {
                 std::cerr << "Error: Missing value for " << arg << "\n";
                 return 1;
@@ -617,6 +721,11 @@ int run_spratunpack(int argc, char** argv) {
 
     if (config.input_path.empty() && !config.input_from_stdin) {
         config.input_from_stdin = true;
+    }
+
+    if (config.input_from_stdin && config.frames_from_stdin) {
+        std::cerr << "Error: Cannot read both atlas image and frames from stdin.\n";
+        return 1;
     }
 
     if (config.output_dir.empty()) {

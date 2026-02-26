@@ -166,7 +166,14 @@ Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, 
                             ▼
                        (feeds into)
                        spratlayout
-If you start with a monolithic spritesheet and need to recover individual frames or its layout before using the workflow above:
+If you start with a monolithic spritesheet and need to recover individual frames:
+
+**The One-liner (Recommended):**
+```sh
+./spratframes sheet.png | ./spratunpack --output ./recovered_frames
+```
+
+**Step-by-step (if you need to edit the layout first):**
 1.  **Detect (`spratframes`)**: Scans an existing spritesheet and prints a layout definition to stdout.
     ```sh
     ./spratframes existing_sheet.png > frames.txt
@@ -206,7 +213,7 @@ Profile definitions are searched in:
 
 ---
 
-## Sprite Detection (`spratframes`)
+## Packing Examples
 
 ### Compact Mode (GPU Optimized)
 
@@ -273,6 +280,16 @@ Automatically scales sprites based on a target resolution. Useful for multi-plat
 ./spratpack < layout.txt > resolution.png
 ```
 ![resolutions](README-assets/res_3840x2160_1920x1080_pad2.png)
+
+### Rotation
+
+Allows 90-degree clockwise rotation of sprites to achieve even tighter packing.
+
+```sh
+./spratlayout ./frames --rotate --trim-transparent > layout.txt
+./spratpack < layout.txt > rotation.png
+```
+![rotation](README-assets/rotation_pad2.png)
 
 ## Benchmarking
 
@@ -516,6 +533,13 @@ Example with magenta borders:
 `spratunpack` extracts individual sprites from a texture atlas using a frames definition file.
 It can read atlas PNG from a file path, `-`, or stdin (when no atlas path is provided).
 
+**Recommended One-liner:**
+```sh
+./spratframes atlas.png | ./spratunpack --output ./extracted
+```
+When piped from `spratframes`, `spratunpack` automatically detects the atlas path from the stream.
+
+**Manual usage:**
 ```sh
 ./spratunpack atlas.png --frames atlas.json --output ./extracted
 ```
