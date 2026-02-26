@@ -71,6 +71,18 @@ assert_matches_explicit() {
 
     if ! cmp -s "$implicit_out" "$explicit_out"; then
         echo "Profile lookup did not match expected source: $label" >&2
+        echo "--- implicit output ---" >&2
+        cat "$implicit_out" >&2 || true
+        echo "--- explicit output ($expected_cfg) ---" >&2
+        cat "$explicit_out" >&2 || true
+        echo "--- diff -u ---" >&2
+        diff -u "$implicit_out" "$explicit_out" >&2 || true
+        echo "--- profile debug rerun (stderr) ---" >&2
+        (
+            cd "$tmp_dir"
+            SPRAT_PROFILE_DEBUG=1 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile probe || true
+            SPRAT_PROFILE_DEBUG=1 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile probe --profiles-config "$(fix_path "$expected_cfg")" || true
+        )
         exit 1
     fi
 }

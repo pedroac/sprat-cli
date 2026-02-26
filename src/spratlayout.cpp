@@ -168,6 +168,15 @@ std::string to_lower_copy(std::string value) {
     return value;
 }
 
+bool env_flag_enabled(const char* name) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+    std::string lower = to_lower_copy(value);
+    return !(lower == "0" || lower == "false" || lower == "no" || lower == "off");
+}
+
 bool parse_mode_from_string(const std::string& value, Mode& out, std::string& error) {
     std::string lower = to_lower_copy(value);
     if (lower == "compact") {
@@ -2567,6 +2576,7 @@ int main(int argc, char** argv) {
     }
 
     bool loaded_profile_file = false;
+    fs::path loaded_profile_path;
     std::vector<std::string> tried_candidates;
     std::vector<std::string> candidate_access_errors;
     for (const fs::path& candidate : config_candidates) {
@@ -2584,6 +2594,7 @@ int main(int argc, char** argv) {
             continue;
         }
         loaded_profile_file = true;
+        loaded_profile_path = candidate;
         break;
     }
 
@@ -2610,6 +2621,14 @@ int main(int argc, char** argv) {
 
     const bool should_apply_profile =
         has_requested_profile || (loaded_profile_file && profile_map.contains(selected_profile_name));
+    const bool profile_debug = env_flag_enabled("SPRAT_PROFILE_DEBUG");
+    if (profile_debug) {
+        std::cerr << "[profile-debug] requested_profile="
+                  << (has_requested_profile ? selected_profile_name : "<none>") << "\n";
+        std::cerr << "[profile-debug] loaded_config="
+                  << (loaded_profile_file ? loaded_profile_path.string() : "<none>") << "\n";
+        std::cerr << "[profile-debug] profile_count=" << profile_definitions.size() << "\n";
+    }
     if (should_apply_profile) {
         auto profile_it = profile_map.find(selected_profile_name);
         if (profile_it == profile_map.end()) {
@@ -2675,6 +2694,19 @@ int main(int argc, char** argv) {
         if (!has_resolution_reference_override && selected_profile.resolution_reference) {
             resolution_reference = *selected_profile.resolution_reference;
         }
+        if (profile_debug) {
+            std::cerr << "[profile-debug] applied_profile=" << selected_profile.name << "\n";
+            std::cerr << "[profile-debug] mode="
+                      << (mode == Mode::FAST ? "fast" : (mode == Mode::COMPACT ? "compact" : "pot"))
+                      << " optimize="
+                      << (optimize_target == OptimizeTarget::GPU ? "gpu" : "space")
+                      << " padding=" << padding
+                      << " trim_transparent=" << (trim_transparent ? "true" : "false")
+                      << " scale=" << scale << "\n";
+        }
+    } else if (profile_debug) {
+        std::cerr << "[profile-debug] applied_profile=<none>\n";
+        std::cerr << "[profile-debug] using_cli_defaults=true\n";
     }
 
     if (has_source_resolution != has_target_resolution) {

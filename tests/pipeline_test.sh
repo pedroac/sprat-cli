@@ -106,11 +106,28 @@ sheet_file="$tmp_dir/spritesheet.png"
 
 if ! cmp -s "$layout_file" "$default_layout_file"; then
     echo "Default profile output differs from --profile fast" >&2
+    echo "--- layout_file (--profile fast) ---" >&2
+    cat "$layout_file" >&2 || true
+    echo "--- default_layout_file (implicit) ---" >&2
+    cat "$default_layout_file" >&2 || true
+    echo "--- diff -u ---" >&2
+    diff -u "$layout_file" "$default_layout_file" >&2 || true
+    if [[ "${SPRAT_PROFILE_DEBUG:-0}" != "1" ]]; then
+        echo "--- profile debug rerun (stderr) ---" >&2
+        SPRAT_PROFILE_DEBUG=1 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile fast --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 || true
+        SPRAT_PROFILE_DEBUG=1 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --padding 1 || true
+    fi
     exit 1
 fi
 
 if ! cmp -s "$default_layout_file" "$default_layout_file.with_missing_cfg"; then
     echo "No-profile defaults should not depend on profile config path" >&2
+    echo "--- default_layout_file ---" >&2
+    cat "$default_layout_file" >&2 || true
+    echo "--- default_layout_file.with_missing_cfg ---" >&2
+    cat "$default_layout_file.with_missing_cfg" >&2 || true
+    echo "--- diff -u ---" >&2
+    diff -u "$default_layout_file" "$default_layout_file.with_missing_cfg" >&2 || true
     exit 1
 fi
 
