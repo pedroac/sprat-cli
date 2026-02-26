@@ -257,6 +257,13 @@ bool parse_positive_uint(const std::string& value, unsigned int& out) {
     return true;
 }
 
+std::string strip_trailing_cr(std::string value) {
+    while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) {
+        value.pop_back();
+    }
+    return value;
+}
+
 bool parse_scale_factor(const std::string& value, double& out) {
     try {
         size_t idx = 0;
@@ -2751,12 +2758,26 @@ int main(int argc, char** argv) {
         }
     }
 
+    const bool preserve_source_order =
+        (input_context.type == InputType::ListFile || input_context.type == InputType::StdinTar);
+    if (!preserve_source_order) {
+        std::ranges::sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
+            if (lhs.path != rhs.path) {
+                return lhs.path < rhs.path;
+            }
+            if (lhs.meta.file_size != rhs.meta.file_size) {
+                return lhs.meta.file_size < rhs.meta.file_size;
+            }
+            return lhs.meta.mtime_ticks < rhs.meta.mtime_ticks;
+        });
+    }
+
     if (sources.empty()) {
         std::cerr << "Error: no valid images found\n";
         return 1;
     }
 
-    const bool is_file = (input_context.type == InputType::ListFile || input_context.type == InputType::StdinTar);
+    const bool is_file = preserve_source_order;
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         padding, max_combinations, scale, trim_transparent, is_file, sources);
