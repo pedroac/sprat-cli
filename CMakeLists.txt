@@ -76,6 +76,11 @@ endfunction()
 ensure_stb_header(stb_image.h)
 ensure_stb_header(stb_image_write.h)
 
+add_library(spratcore STATIC
+    src/core/cli_parse.cpp
+    src/core/layout_parser.cpp
+)
+
 # Binaries
 # For Windows cross-compilation, PkgConfig often leaks host paths. 
 # We prefer find_package or explicit paths.
@@ -100,24 +105,47 @@ else()
     pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
 endif()
 
-add_executable(spratlayout src/spratlayout.cpp)
-target_link_libraries(spratlayout ${LIBARCHIVE_LIBRARIES})
+add_executable(spratlayout
+    src/spratlayout.cpp
+    src/commands/spratlayout_command.cpp
+)
+target_link_libraries(spratlayout PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratlayout PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratlayout SYSTEM PRIVATE ${STB_DIR})
+target_include_directories(spratlayout PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratpack src/spratpack.cpp)
+add_executable(spratpack
+    src/spratpack.cpp
+    src/commands/spratpack_command.cpp
+)
+target_link_libraries(spratpack PRIVATE spratcore)
 target_include_directories(spratpack SYSTEM PRIVATE ${STB_DIR})
+target_include_directories(spratpack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratconvert src/spratconvert.cpp)
+add_executable(spratconvert
+    src/spratconvert.cpp
+    src/commands/spratconvert_command.cpp
+)
+target_link_libraries(spratconvert PRIVATE spratcore)
 target_include_directories(spratconvert SYSTEM PRIVATE ${STB_DIR})
+target_include_directories(spratconvert PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratframes src/spratframes.cpp)
+add_executable(spratframes
+    src/spratframes.cpp
+    src/commands/spratframes_command.cpp
+)
+target_link_libraries(spratframes PRIVATE spratcore)
 target_include_directories(spratframes SYSTEM PRIVATE ${STB_DIR})
+target_include_directories(spratframes PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratunpack src/spratunpack.cpp)
-target_link_libraries(spratunpack ${LIBARCHIVE_LIBRARIES})
+add_executable(spratunpack
+    src/spratunpack.cpp
+    src/commands/spratunpack_command.cpp
+)
+target_link_libraries(spratunpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratunpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratunpack SYSTEM PRIVATE ${STB_DIR})
+target_include_directories(spratunpack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(spratlayout PRIVATE
     SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")
