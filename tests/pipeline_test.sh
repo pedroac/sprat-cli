@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${SPRAT_TEST_DEBUG:-0}" = "1" ]; then
+    set -x
+fi
+
 if [ "$#" -ne 2 ]; then
     echo "Usage: pipeline_test.sh <spratlayout-bin> <spratpack-bin>" >&2
     exit 1
@@ -10,7 +14,11 @@ spratlayout_bin="$1"
 spratpack_bin="$2"
 
 tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT
+if [ "${SPRAT_TEST_DEBUG:-0}" = "1" ]; then
+    echo "pipeline_test tmp_dir: $tmp_dir" >&2
+else
+    trap 'rm -rf "$tmp_dir"' EXIT
+fi
 
 # Path conversion for Windows - Cache the base temp dir once
 if [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
@@ -39,9 +47,16 @@ else
 fi
 cp "$frames_dir/frame_a.png" "$frames_dir/frame_b.png"
 
+frames_list_file="$tmp_dir/frames_list.txt"
+cat > "$frames_list_file" <<EOF
+$(fix_path "$frames_dir/frame_a.png")
+$(fix_path "$frames_dir/frame_b.png")
+EOF
+
 # Isolate test from user configuration and provide required profiles
 mkdir -p "$tmp_dir/.config/sprat"
-cat > "$tmp_dir/.config/sprat/spratprofiles.cfg" <<EOF
+profiles_cfg="$tmp_dir/.config/sprat/spratprofiles.cfg"
+cat > "$profiles_cfg" <<EOF
 [profile fast]
 mode=fast
 
@@ -83,11 +98,11 @@ fast_layout_file="$tmp_dir/layout_fast.txt"
 css_layout_file="$tmp_dir/layout_css.txt"
 sheet_file="$tmp_dir/spritesheet.png"
 
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile fast --padding 1 > "$layout_file"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --padding 1 > "$default_layout_file"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profiles-config "$(fix_path "$tmp_dir/missing.cfg")" --padding 1 > "$default_layout_file.with_missing_cfg"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile fast --padding 1 > "$fast_layout_file"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile css --padding 1 > "$css_layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile fast --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_list_file")" --padding 1 > "$default_layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_list_file")" --profiles-config "$(fix_path "$tmp_dir/missing.cfg")" --padding 1 > "$default_layout_file.with_missing_cfg"
+"$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile fast --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$fast_layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile css --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$css_layout_file"
 
 if ! cmp -s "$layout_file" "$default_layout_file"; then
     echo "Default profile output differs from --profile fast" >&2
@@ -152,7 +167,7 @@ for i in $(seq 1 17); do
 done
 
 pot_layout="$tmp_dir/pot_layout.txt"
-"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile legacy > "$pot_layout"
+"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile legacy --profiles-config "$(fix_path "$profiles_cfg")" > "$pot_layout"
 
 pot_atlas="$(grep '^atlas ' "$pot_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 read -r pot_w pot_h <<< "$pot_atlas"
@@ -182,8 +197,8 @@ fi
 # In compact mode, GPU optimization should not produce a worse max-side than space optimization.
 compact_gpu_layout="$tmp_dir/compact_gpu_layout.txt"
 compact_space_layout="$tmp_dir/compact_space_layout.txt"
-"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile desktop > "$compact_gpu_layout"
-"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile space > "$compact_space_layout"
+"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" > "$compact_gpu_layout"
+"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile space --profiles-config "$(fix_path "$profiles_cfg")" > "$compact_space_layout"
 
 gpu_dims="$(grep '^atlas ' "$compact_gpu_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 space_dims="$(grep '^atlas ' "$compact_space_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
@@ -206,7 +221,7 @@ fi
 
 # Desktop profile (GPU-oriented) should not be worse than fast profile on max-side.
 compact_fast_layout="$tmp_dir/compact_fast_layout.txt"
-"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile fast > "$compact_fast_layout"
+"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile fast --profiles-config "$(fix_path "$profiles_cfg")" > "$compact_fast_layout"
 fast_dims="$(grep '^atlas ' "$compact_fast_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 read -r fast_w fast_h <<< "$fast_dims"
 fast_max_side="$fast_w"
@@ -221,7 +236,7 @@ fi
 
 # Respect explicit atlas limits in compact mode.
 bounded_layout="$tmp_dir/compact_bounded_layout.txt"
-"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile desktop --max-height 4 > "$bounded_layout"
+"$spratlayout_bin" "$(fix_path "$pot_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --max-height 4 > "$bounded_layout"
 bounded_dims="$(grep '^atlas ' "$bounded_layout" | head -n 1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 read -r bounded_w bounded_h <<< "$bounded_dims"
 if [ "$bounded_h" -gt 4 ]; then
@@ -263,7 +278,7 @@ EOF
 
 trim_layout="$tmp_dir/trim_layout.txt"
 trim_sheet="$tmp_dir/trim_sheet.png"
-"$spratlayout_bin" "$(fix_path "$trim_dir")" --profile desktop --trim-transparent > "$trim_layout"
+"$spratlayout_bin" "$(fix_path "$trim_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --trim-transparent > "$trim_layout"
 
 if ! grep -q '^atlas 1,1$' "$trim_layout"; then
     echo "Trim mode did not reduce padded image atlas to 1x1" >&2
@@ -288,11 +303,11 @@ layout_notrim_p2="$tmp_dir/layout_notrim_p2.txt"
 layout_notrim_p6="$tmp_dir/layout_notrim_p6.txt"
 layout_trim_p2_again="$tmp_dir/layout_trim_p2_again.txt"
 layout_trim_p6="$tmp_dir/layout_trim_p6.txt"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --trim-transparent --padding 2 > "$layout_trim_p2"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --padding 2 > "$layout_notrim_p2"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --padding 6 > "$layout_notrim_p6"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --trim-transparent --padding 2 > "$layout_trim_p2_again"
-"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --trim-transparent --padding 6 > "$layout_trim_p6"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --trim-transparent --padding 2 > "$layout_trim_p2"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --padding 2 > "$layout_notrim_p2"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --padding 6 > "$layout_notrim_p6"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --trim-transparent --padding 2 > "$layout_trim_p2_again"
+"$spratlayout_bin" "$(fix_path "$frames_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --trim-transparent --padding 6 > "$layout_trim_p6"
 
 atlas_notrim_p2="$(grep '^atlas ' "$layout_notrim_p2" | head -n1)"
 atlas_notrim_p6="$(grep '^atlas ' "$layout_notrim_p6" | head -n1)"
@@ -319,7 +334,7 @@ EOF
 
 scaled_layout="$tmp_dir/scaled_layout.txt"
 scaled_sheet="$tmp_dir/scaled_sheet.png"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --scale 0.5 > "$scaled_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --scale 0.5 > "$scaled_layout"
 
 if ! grep -Eq '^scale 0\.5[0-9]*$' "$scaled_layout"; then
     echo "Scaled layout did not emit expected scale line" >&2
@@ -340,7 +355,7 @@ fi
 
 # Resolution mapping should combine with scale (effective = scale * target/source).
 scaled_resolution_layout="$tmp_dir/scaled_resolution_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --source-resolution 4x4 --target-resolution 2x2 > "$scaled_resolution_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 2x2 > "$scaled_resolution_layout"
 
 if ! grep -Eq '^scale 0\.5[0-9]*$' "$scaled_resolution_layout"; then
     echo "Resolution mapping did not emit expected scale line" >&2
@@ -353,7 +368,7 @@ if ! grep -q '^atlas 2,2$' "$scaled_resolution_layout"; then
 fi
 
 scaled_combined_layout="$tmp_dir/scaled_combined_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --source-resolution 4x4 --target-resolution 2x2 --scale 0.5 > "$scaled_combined_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 2x2 --scale 0.5 > "$scaled_combined_layout"
 
 if ! grep -Eq '^scale 0\.25[0-9]*$' "$scaled_combined_layout"; then
     echo "Combined source/target and scale did not emit expected scale line" >&2
@@ -366,37 +381,37 @@ if ! grep -q '^atlas 1,1$' "$scaled_combined_layout"; then
 fi
 
 # Validation: source/target must be provided together, format is WxH, and scale must be <= 1.
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --source-resolution 4x4 > "$tmp_dir/invalid_source_only.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 > "$tmp_dir/invalid_source_only.out" 2>&1; then
     echo "Expected source-resolution without target-resolution to fail" >&2
     exit 1
 fi
 
 # Mismatched proportions should use selected reference axis for scaling.
 scaled_largest_layout="$tmp_dir/scaled_largest_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 > "$scaled_largest_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 > "$scaled_largest_layout"
 if ! grep -Eq '^scale 0\.75[0-9]*$' "$scaled_largest_layout"; then
     echo "Mismatched proportions did not use expected largest-ratio scale" >&2
     exit 1
 fi
 
 scaled_smallest_layout="$tmp_dir/scaled_smallest_layout.txt"
-"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 --resolution-reference smallest > "$scaled_smallest_layout"
+"$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 --resolution-reference smallest > "$scaled_smallest_layout"
 if ! grep -Eq '^scale 0\.5[0-9]*$' "$scaled_smallest_layout"; then
     echo "Mismatched proportions did not use expected smallest-ratio scale" >&2
     exit 1
 fi
 
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --source-resolution 4X4 --target-resolution 2x2 > "$tmp_dir/invalid_resolution_format.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4X4 --target-resolution 2x2 > "$tmp_dir/invalid_resolution_format.out" 2>&1; then
     echo "Expected invalid resolution format (must be WxH with lowercase x) to fail" >&2
     exit 1
 fi
 
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 --resolution-reference largest --resolution-reference smallest > "$tmp_dir/invalid_resolution_reference_repeat.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --source-resolution 4x4 --target-resolution 3x2 --resolution-reference largest --resolution-reference smallest > "$tmp_dir/invalid_resolution_reference_repeat.out" 2>&1; then
     echo "Expected repeated --resolution-reference values to fail" >&2
     exit 1
 fi
 
-if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --no-trim-transparent --scale 1.1 > "$tmp_dir/invalid_scale.out" 2>&1; then
+if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --no-trim-transparent --scale 1.1 > "$tmp_dir/invalid_scale.out" 2>&1; then
     echo "Expected scale greater than 1 to fail" >&2
     exit 1
 fi
