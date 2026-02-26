@@ -206,6 +206,99 @@ std::string escape_css_string(const std::string& s) {
     return out;
 }
 
+enum class PlaceholderEncoding {
+    none,
+    json,
+    xml,
+    csv,
+    css
+};
+
+std::string to_lower_copy(std::string value) {
+    std::ranges::transform(value, value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+bool has_suffix(const std::string& value, const std::string& suffix) {
+    if (value.size() < suffix.size()) {
+        return false;
+    }
+    return value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+PlaceholderEncoding detect_placeholder_encoding(const Transform& transform,
+                                                const std::string& transform_arg) {
+    const auto from_token = [](const std::string& token) -> PlaceholderEncoding {
+        std::string normalized = to_lower_copy(token);
+        if (!normalized.empty() && normalized.front() == '.') {
+            normalized.erase(normalized.begin());
+        }
+        if (normalized == "json") {
+            return PlaceholderEncoding::json;
+        }
+        if (normalized == "xml") {
+            return PlaceholderEncoding::xml;
+        }
+        if (normalized == "csv") {
+            return PlaceholderEncoding::csv;
+        }
+        if (normalized == "css") {
+            return PlaceholderEncoding::css;
+        }
+        return PlaceholderEncoding::none;
+    };
+
+    if (PlaceholderEncoding from_meta = from_token(transform.extension);
+        from_meta != PlaceholderEncoding::none) {
+        return from_meta;
+    }
+    if (PlaceholderEncoding from_name = from_token(transform.name);
+        from_name != PlaceholderEncoding::none) {
+        return from_name;
+    }
+    return from_token(transform_arg);
+}
+
+void apply_default_typed_placeholders(std::map<std::string, std::string>& vars,
+                                      PlaceholderEncoding encoding) {
+    std::string suffix;
+    switch (encoding) {
+        case PlaceholderEncoding::json:
+            suffix = "_json";
+            break;
+        case PlaceholderEncoding::xml:
+            suffix = "_xml";
+            break;
+        case PlaceholderEncoding::csv:
+            suffix = "_csv";
+            break;
+        case PlaceholderEncoding::css:
+            suffix = "_css";
+            break;
+        case PlaceholderEncoding::none:
+            return;
+    }
+
+    std::vector<std::pair<std::string, std::string>> alias_updates;
+    alias_updates.reserve(vars.size());
+    for (const auto& [key, value] : vars) {
+        if (!has_suffix(key, suffix)) {
+            continue;
+        }
+        const std::string base_key = key.substr(0, key.size() - suffix.size());
+        if (vars.find(base_key) == vars.end()) {
+            continue;
+        }
+        alias_updates.emplace_back(base_key, value);
+    }
+
+    for (const auto& [base_key, encoded_value] : alias_updates) {
+        vars[base_key] = encoded_value;
+    }
+}
+
 std::string replace_tokens(const std::string& input, const std::map<std::string, std::string>& vars) {
     std::string out;
     out.reserve(input.size() + k_token_replacement_reserve_extra);
@@ -978,6 +1071,7 @@ void print_usage() {
     std::cout << "Usage: spratconvert [OPTIONS]\n"
               << "\n"
               << "Read layout text from stdin and transform it into other formats.\n"
+              << "Unsuffixed placeholders are auto-encoded based on transform output type.\n"
               << "\n"
               << "Options:\n"
               << "  --transform NAME|PATH      Transform name or path (default: json)\n"
@@ -1029,6 +1123,8 @@ int run_spratconvert(int argc, char** argv) {
         std::cerr << transform_error << "\n";
         return 1;
     }
+    const PlaceholderEncoding placeholder_encoding =
+        detect_placeholder_encoding(transform, transform_arg);
 
     std::string markers_text;
     std::string animations_text;
@@ -1100,6 +1196,7 @@ int run_spratconvert(int argc, char** argv) {
     global_vars["animations_xml"] = escape_xml(animations_text);
     global_vars["animations_csv"] = escape_csv(animations_text);
     global_vars["animations_css"] = escape_css_string(animations_text);
+    apply_default_typed_placeholders(global_vars, placeholder_encoding);
 
     if (!transform.header.empty()) {
         std::cout << replace_tokens(transform.header, global_vars);
@@ -1151,6 +1248,7 @@ int run_spratconvert(int argc, char** argv) {
                 vars["marker_sprite_path_xml"] = escape_xml(marker.sprite_path);
                 vars["marker_sprite_path_csv"] = escape_csv(marker.sprite_path);
                 vars["marker_sprite_path_css"] = escape_css_string(marker.sprite_path);
+                apply_default_typed_placeholders(vars, placeholder_encoding);
                 std::cout << replace_tokens(transform.markers, vars);
             }
         }
@@ -1196,6 +1294,7 @@ int run_spratconvert(int argc, char** argv) {
         vars["sprite_markers_xml"] = escape_xml(vars["sprite_markers_json"]);
         vars["sprite_markers_csv"] = escape_csv(vars["sprite_markers_json"]);
         vars["sprite_markers_css"] = escape_css_string(vars["sprite_markers_json"]);
+        apply_default_typed_placeholders(vars, placeholder_encoding);
 
         std::cout << replace_tokens(transform.sprite, vars);
     }
@@ -1228,6 +1327,7 @@ int run_spratconvert(int argc, char** argv) {
                 vars["animation_sprite_indexes_css"] = escape_css_string(vars["animation_sprite_indexes_json"]);
                 vars["fps"] = std::to_string(animation.fps);
                 vars["animation_fps"] = vars["fps"];
+                apply_default_typed_placeholders(vars, placeholder_encoding);
                 std::cout << replace_tokens(transform.animations, vars);
             }
         }

@@ -31,6 +31,13 @@ sprite "./frames/a.png" 0,0 16,16
 sprite "./frames/b.png" 16,0 8,8 1,2 3,4
 LAYOUT
 
+layout_quotes_file="$tmp_dir/layout.quotes.txt"
+cat > "$layout_quotes_file" <<'LAYOUTQ'
+atlas 8,8
+scale 1
+sprite "./frames/a\"q.png" 0,0 8,8
+LAYOUTQ
+
 "$convert_bin" --list-transforms > "$tmp_dir/list.txt"
 for fmt in json csv xml css; do
   if ! grep -q "^${fmt}\b" "$tmp_dir/list.txt"; then
@@ -279,5 +286,68 @@ if [ "$animations_line" -le "$sprites_line" ]; then
   echo "animations section must be outside and after sprites in json transform" >&2
   exit 1
 fi
+
+json_auto_escape_transform="$tmp_dir/json_auto_escape.transform"
+cat > "$json_auto_escape_transform" <<'JSONAUTO'
+[meta]
+name=json_auto_escape
+extension=.json
+[/meta]
+
+[header]
+{"markers":[
+[/header]
+
+[sprites]
+  [sprite]
+{"name":"{{name}}","path":"{{path}}"}
+  [/sprite]
+[/sprites]
+
+[separator]
+,
+[/separator]
+
+[if_markers]
+[/if_markers]
+
+[markers]
+  [marker]
+{"name":"{{marker_name}}","type":"{{marker_type}}"}
+  [/marker]
+[/markers]
+
+[markers_separator]
+,
+[/markers_separator]
+
+[if_no_markers]
+],"sprites":[
+[/if_no_markers]
+
+[markers_footer]
+],"sprites":[
+[/markers_footer]
+
+[footer]
+]}
+[/footer]
+JSONAUTO
+
+markers_quotes_file="$tmp_dir/markers.quotes.txt"
+cat > "$markers_quotes_file" <<'MARKERSQ'
+path "./frames/a\"q.png"
+- marker "hit\"zone" point 1,2
+MARKERSQ
+
+"$convert_bin" --transform "$(fix_path "$json_auto_escape_transform")" --markers "$(fix_path "$markers_quotes_file")" < "$layout_quotes_file" > "$tmp_dir/out.json.autoescape"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m json.tool "$(fix_path "$tmp_dir/out.json.autoescape")" > /dev/null
+elif command -v python >/dev/null 2>&1; then
+  python -m json.tool "$(fix_path "$tmp_dir/out.json.autoescape")" > /dev/null
+fi
+grep -Fq '"name":"a\"q"' "$tmp_dir/out.json.autoescape"
+grep -Fq '"path":"./frames/a\"q.png"' "$tmp_dir/out.json.autoescape"
+grep -Fq '"name":"hit\"zone"' "$tmp_dir/out.json.autoescape"
 
 echo "convert_test.sh: ok"

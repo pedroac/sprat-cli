@@ -21,3 +21,9 @@ add_test(
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/profile_resolution_test.sh
             $<TARGET_FILE:spratlayout>
 )
+
+add_test(
+    NAME spratunpack_stdin
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/spratunpack_stdin_test.sh
+            $<TARGET_FILE:spratunpack>
+)

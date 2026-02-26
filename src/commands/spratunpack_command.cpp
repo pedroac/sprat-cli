@@ -17,6 +17,7 @@ namespace fs = std::filesystem;
 #include <iomanip>
 #include <sstream>
 #include <thread>
+#include <iterator>
 #include "core/cli_parse.h"
 
 #ifdef _WIN32
@@ -72,6 +73,7 @@ struct Config {
     fs::path input_path;
     fs::path frames_path;
     fs::path output_dir;
+    bool input_from_stdin = false;
     bool stdout_mode = false;
     unsigned int threads = 0;
 };
@@ -99,9 +101,32 @@ private:
     std::vector<SpriteFrame> frames_;
 
     bool load_image() {
-        unsigned char* data = stbi_load(config_.input_path.string().c_str(), &width_, &height_, &channels_, NUM_CHANNELS);
+        unsigned char* data = nullptr;
+        if (config_.input_from_stdin) {
+            const std::vector<unsigned char> stdin_bytes(
+                std::istreambuf_iterator<char>(std::cin),
+                std::istreambuf_iterator<char>());
+            if (stdin_bytes.empty()) {
+                std::cerr << "Error: No atlas image data received on stdin\n";
+                return false;
+            }
+            data = stbi_load_from_memory(
+                stdin_bytes.data(),
+                static_cast<int>(stdin_bytes.size()),
+                &width_,
+                &height_,
+                &channels_,
+                NUM_CHANNELS);
+        } else {
+            data = stbi_load(
+                config_.input_path.string().c_str(), &width_, &height_, &channels_, NUM_CHANNELS);
+        }
         if (data == nullptr) {
-            std::cerr << "Error: Failed to load image " << config_.input_path << "\n";
+            if (config_.input_from_stdin) {
+                std::cerr << "Error: Failed to load atlas image from stdin\n";
+            } else {
+                std::cerr << "Error: Failed to load image " << config_.input_path << "\n";
+            }
             return false;
         }
 
@@ -112,6 +137,10 @@ private:
 
     bool load_frames() {
         if (config_.frames_path.empty()) {
+            if (config_.input_from_stdin) {
+                std::cerr << "Error: --frames is required when reading atlas from stdin.\n";
+                return false;
+            }
             // Try to auto-detect frames file
             fs::path json_path = config_.input_path;
             json_path.replace_extension(".json");
@@ -516,12 +545,13 @@ private:
 };
 
 void print_usage() {
-    std::cout << "Usage: spratunpack <atlas.png> [OPTIONS]\n"
+    std::cout << "Usage: spratunpack [atlas.png|-] [OPTIONS]\n"
               << "\n"
               << "Extract individual sprites from an atlas using a frames definition file.\n"
+              << "If atlas path is omitted or '-' is used, atlas PNG is read from stdin.\n"
               << "\n"
               << "Options:\n"
-              << "  -f, --frames PATH          Frames definition file (auto-detected if atlas.json exists)\n"
+              << "  -f, --frames PATH          Frames definition file (auto-detected only for atlas file input)\n"
               << "  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n"
               << "  -j, --threads N            Number of threads to use (default: auto)\n"
               << "  -h, --help                 Show this help message\n";
@@ -538,6 +568,14 @@ int run_spratunpack(int argc, char** argv) {
         if (arg == "-h" || arg == "--help") {
             print_usage();
             return 0;
+        } else if (arg == "-") {
+            if (config.input_path.empty() && !config.input_from_stdin) {
+                config.input_from_stdin = true;
+            } else {
+                std::cerr << "Error: Too many arguments: " << arg << "\n";
+                print_usage();
+                return 1;
+            }
         } else if (arg == "-f" || arg == "--frames") {
             if (i + 1 < argc) {
                 config.frames_path = argv[++i];
@@ -577,9 +615,8 @@ int run_spratunpack(int argc, char** argv) {
         }
     }
 
-    if (config.input_path.empty()) {
-        print_usage();
-        return 1;
+    if (config.input_path.empty() && !config.input_from_stdin) {
+        config.input_from_stdin = true;
     }
 
     if (config.output_dir.empty()) {
@@ -592,6 +629,9 @@ int run_spratunpack(int argc, char** argv) {
 
     // Initialize binary mode for stdout if needed
 #ifdef _WIN32
+    if (config.input_from_stdin) {
+        _setmode(_fileno(stdin), _O_BINARY);
+    }
     if (config.stdout_mode) {
         _setmode(_fileno(stdout), _O_BINARY);
     }

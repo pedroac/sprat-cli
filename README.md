@@ -97,6 +97,32 @@ sudo cmake --install .
 
 `sprat-cli` follows the UNIX philosophy: each tool does one thing well and communicates via text. The standard pipeline consists of three steps:
 
+                    ┌───────────────────────────┐
+                    │       IMAGE FOLDER        │
+                    │        ./frames           │
+                    └─────────────┬─────────────┘
+                                  │
+                                  ▼
+                        ┌─────────────────┐
+                        │   spratlayout   │
+                        │   (scanning)    │
+                        │  math only      │
+                        └────────┬────────┘
+                                 │  stdout
+                                 ▼
+                           layout.txt
+                                 │
+              ┌──────────────────┴──────────────────┐
+              ▼                                     ▼
+     ┌─────────────────┐                   ┌─────────────────┐
+     │    spratpack    │                   │  spratconvert   │
+     │    (packing)    │                   │ (transforming)  │
+     │  layout → PNG   │                   │ layout → JSON   │
+     └────────┬────────┘                   └────────┬────────┘
+              │ stdout                              │ stdout
+              ▼                                     ▼
+     spritesheet.png                          layout.json
+
 ### 1. Scanning (`spratlayout`)
 Scans a folder of images and calculates their optimal positions. It prints a **layout text** to stdout. This step is mathematical and does not process image pixels, making it extremely fast.
 ```sh
@@ -116,6 +142,30 @@ Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, 
 ```
 
 ### Extra: Deconstruction (Reverse Engineering)
+             ┌──────────────────────────┐
+             │   existing_sheet.png     │
+             └─────────────┬────────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │ spratframes  │
+                    │  (detect)    │
+                    └───────┬──────┘
+                            │ stdout
+                            ▼
+                        frames.txt
+                            │
+                            ▼
+                    ┌──────────────┐
+                    │ spratunpack  │
+                    │  (unpack)    │
+                    └───────┬──────┘
+                            ▼
+                    ./recovered_frames
+                            │
+                            ▼
+                       (feeds into)
+                       spratlayout
 If you start with a monolithic spritesheet and need to recover individual frames or its layout before using the workflow above:
 1.  **Detect (`spratframes`)**: Scans an existing spritesheet and prints a layout definition to stdout.
     ```sh
@@ -136,8 +186,10 @@ Profiles are named rule sets that group packing options (mode, padding, scale, e
 
 Profile definitions are searched in:
 1. `--profiles-config PATH` (CLI override)
-2. `~/.config/sprat/spratprofiles.cfg`
-3. `spratprofiles.cfg` in the same directory as the binary
+2. User config:
+   - Linux/macOS: `~/.config/sprat/spratprofiles.cfg`
+   - Windows: `%APPDATA%\sprat\spratprofiles.cfg`
+3. `./spratprofiles.cfg` (current working directory)
 4. `/usr/local/share/sprat/spratprofiles.cfg` (Global)
 
 ### Spratlayout Options
@@ -336,6 +388,9 @@ Common placeholders:
   - `{{markers_json}}`, `{{markers_csv}}`, `{{markers_xml}}`, `{{markers_css}}`
   - `{{animations_json}}`, `{{animations_csv}}`, `{{animations_xml}}`, `{{animations_css}}`
 
+Typed placeholders (`*_json`, `*_xml`, `*_csv`, `*_css`) are the explicit format-safe form and should be preferred.
+Unsuffixed placeholders (for example `{{name}}`, `{{marker_name}}`, `{{marker_vertices}}`) are auto-encoded using `meta.extension` (fallback: transform name/argument) when the output format is JSON/XML/CSV/CSS.
+
 Sprite names default to the source file basename without extension (for example `./frames/run_01.png` becomes `run_01`).
 
 `--markers` expects a plaintext file using the `path` and `- marker` DSL.
@@ -449,6 +504,7 @@ Example with magenta borders:
 ## Unpacking Atlases (`spratunpack`)
 
 `spratunpack` extracts individual sprites from a texture atlas using a frames definition file.
+It can read atlas PNG from a file path, `-`, or stdin (when no atlas path is provided).
 
 ```sh
 ./spratunpack atlas.png --frames atlas.json --output ./extracted
@@ -458,10 +514,12 @@ If no output directory is specified, it writes a **TAR archive** to stdout, maki
 
 ```sh
 ./spratunpack atlas.png > sprites.tar
+# Equivalent stdin form:
+cat atlas.png | ./spratunpack --frames atlas.json > sprites.tar
 ```
 
 Options:
-- `-f, --frames PATH`: Path to frames definition (auto-detects `.json` or `.spratframes`).
+- `-f, --frames PATH`: Path to frames definition (auto-detects `.json` or `.spratframes` only when atlas path is a file).
 - `-o, --output DIR`: Destination directory.
 - `-j, --threads N`: Parallel extraction.
 
@@ -469,16 +527,7 @@ Supported formats:
 - TexturePacker/sprat JSON (Hash or Array)
 - Minimalist `.spratframes` format
 
-If no frames file is specified, `spratunpack` will look for `<atlas>.json` or `<atlas>.spratframes` automatically.
-
-## Layout transforms (`spratconvert`)
-
-
-```sh
-./spratlayout ./frames | ./spratpack > spritesheet.png
-```
-
-License for third-party art is defined by the asset author; verify terms before redistribution.
+If no frames file is specified, `spratunpack` will look for `<atlas>.json` or `<atlas>.spratframes` automatically only when atlas input is a file path.
 
 ## Free Sprite Sources
 

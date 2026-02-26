@@ -48,6 +48,7 @@ vcpkg_installed/
 *.cmake
 **/Makefile
 **/build/
+**/build-win/
 **/Testing
 stb/*
 layout.*
