@@ -508,16 +508,6 @@ bool load_profiles_config_from_file(const fs::path& path,
 
 std::optional<fs::path> resolve_user_profiles_config_path() {
 #ifdef _WIN32
-    const char* userprofile = std::getenv("USERPROFILE");
-    if (userprofile != nullptr && userprofile[0] != '\0') {
-        return fs::path(userprofile) / k_user_profiles_config_relpath;
-    }
-
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata != nullptr && appdata[0] != '\0') {
-        return fs::path(appdata) / "sprat" / k_profiles_config_filename;
-    }
-
     const char* home = std::getenv("HOME");
     if (home != nullptr && home[0] != '\0') {
         return fs::path(home) / k_user_profiles_config_relpath;
@@ -531,6 +521,41 @@ std::optional<fs::path> resolve_user_profiles_config_path() {
     }
     return fs::path(home) / k_user_profiles_config_relpath;
 #endif
+}
+
+void append_candidate_if_set(std::vector<fs::path>& candidates,
+                             const char* env_name,
+                             const fs::path& relative_path) {
+    const char* value = std::getenv(env_name);
+    if (value == nullptr || value[0] == '\0') {
+        return;
+    }
+    candidates.push_back(fs::path(value) / relative_path);
+}
+
+std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& exec_dir) {
+    std::vector<fs::path> candidates;
+#ifdef _WIN32
+    // Windows lookup order:
+    // 1) %APPDATA%\sprat\spratprofiles.cfg
+    // 2) <exe_dir>\spratprofiles.cfg
+    // 3) %PROGRAMDATA%\Sprat\spratprofiles.cfg
+    append_candidate_if_set(candidates, "APPDATA", fs::path("sprat") / k_profiles_config_filename);
+    candidates.push_back(exec_dir / k_profiles_config_filename);
+    append_candidate_if_set(candidates, "PROGRAMDATA", fs::path("Sprat") / k_profiles_config_filename);
+
+    // Legacy fallbacks for compatibility.
+    append_candidate_if_set(candidates, "USERPROFILE", k_user_profiles_config_relpath);
+    append_candidate_if_set(candidates, "HOME", k_user_profiles_config_relpath);
+    candidates.emplace_back(k_global_profiles_config_path);
+#else
+    if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
+        candidates.push_back(*user_config);
+    }
+    candidates.push_back(exec_dir / k_profiles_config_filename);
+    candidates.emplace_back(k_global_profiles_config_path);
+#endif
+    return candidates;
 }
 
 struct Sprite {
@@ -2554,11 +2579,7 @@ int main(int argc, char** argv) {
         }
         config_candidates.push_back(std::move(config_candidate));
     } else {
-        if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
-            config_candidates.push_back(*user_config);
-        }
-        config_candidates.push_back(exec_dir / k_profiles_config_filename);
-        config_candidates.emplace_back(k_global_profiles_config_path);
+        config_candidates = build_default_profiles_config_candidates(exec_dir);
     }
 
     bool loaded_profile_file = false;

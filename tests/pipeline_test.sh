@@ -99,7 +99,7 @@ css_layout_file="$tmp_dir/layout_css.txt"
 sheet_file="$tmp_dir/spritesheet.png"
 
 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile fast --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$layout_file"
-"$spratlayout_bin" "$(fix_path "$frames_list_file")" --padding 1 > "$default_layout_file"
+"$spratlayout_bin" "$(fix_path "$frames_list_file")" --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$default_layout_file"
 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profiles-config "$(fix_path "$tmp_dir/missing.cfg")" --padding 1 > "$default_layout_file.with_missing_cfg"
 "$spratlayout_bin" "$(fix_path "$frames_list_file")" --profile fast --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$fast_layout_file"
 "$spratlayout_bin" "$(fix_path "$frames_dir")" --profile css --profiles-config "$(fix_path "$profiles_cfg")" --padding 1 > "$css_layout_file"
