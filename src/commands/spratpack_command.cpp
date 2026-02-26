@@ -327,7 +327,7 @@ int run_spratpack(int argc, char** argv) {
             return false;
         }
 
-        const bool copy_rows_direct = (source_w == s.w && source_h == s.h);
+        const bool copy_rows_direct = !s.rotated && (source_w == s.w && source_h == s.h);
         if (copy_rows_direct) {
             const size_t row_bytes = static_cast<size_t>(s.w) * NUM_CHANNELS;
             for (int row = 0; row < s.h; ++row) {
@@ -358,9 +358,17 @@ int run_spratpack(int argc, char** argv) {
             }
         } else {
             for (int row = 0; row < s.h; ++row) {
-                int sample_y = source_y + ((row * source_h) / s.h);
                 for (int col = 0; col < s.w; ++col) {
-                    int sample_x = source_x + ((col * source_w) / s.w);
+                    int sample_x = 0;
+                    int sample_y = 0;
+                    if (!s.rotated) {
+                        sample_x = source_x + ((col * source_w) / s.w);
+                        sample_y = source_y + ((row * source_h) / s.h);
+                    } else {
+                        // Rotate source pixels 90 degrees clockwise while copying to atlas.
+                        sample_x = source_x + ((row * source_w) / s.h);
+                        sample_y = source_y + (source_h - 1 - ((col * source_h) / s.w));
+                    }
 
                     size_t dest_pixels = 0;
                     size_t dest_offset = 0;

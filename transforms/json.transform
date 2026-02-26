@@ -13,7 +13,7 @@ extension=.json
 
 [sprites]
   [sprite]
-    {"name": "{{name_json}}", "path": "{{path_json}}", "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": {{sprite_markers_json}}}
+    {"name": "{{name}}", "path": "{{path}}", "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": {{sprite_markers_json}}, "rotation": {{rotation}}}
   [/sprite]
 [/sprites]
 
@@ -28,7 +28,7 @@ extension=.json
 
 [animations]
   [animation]
-    {"name": "{{animation_name_json}}", "fps": {{fps}}, "sprite_indexes": {{animation_sprite_indexes_json}}}
+    {"name": "{{animation_name}}", "fps": {{fps}}, "sprite_indexes": {{animation_sprite_indexes_json}}}
   [/animation]
 [/animations]
 

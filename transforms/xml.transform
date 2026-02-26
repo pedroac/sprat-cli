@@ -12,7 +12,7 @@ extension=.xml
 
 [sprites]
   [sprite]
-    <sprite index="{{index}}" name="{{name_xml}}" path="{{path_xml}}" x="{{x}}" y="{{y}}" w="{{w}}" h="{{h}}" trim_left="{{trim_left}}" trim_top="{{trim_top}}" trim_right="{{trim_right}}" trim_bottom="{{trim_bottom}}" marker_count="{{sprite_markers_count}}" markers_json="{{sprite_markers_xml}}" />
+    <sprite index="{{index}}" name="{{name}}" path="{{path}}" x="{{x}}" y="{{y}}" w="{{w}}" h="{{h}}" trim_left="{{trim_left}}" trim_top="{{trim_top}}" trim_right="{{trim_right}}" trim_bottom="{{trim_bottom}}" marker_count="{{sprite_markers_count}}" markers_json="{{sprite_markers_json}}" rotation="{{rotation}}" />
   [/sprite]
 [/sprites]
 
@@ -26,9 +26,10 @@ extension=.xml
 
 [animations]
   [animation]
-    <animation index="{{animation_index}}" name="{{animation_name_xml}}" fps="{{fps}}" sprite_indexes="{{animation_sprite_indexes}}" sprite_indexes_json="{{animation_sprite_indexes_xml}}" />
+    <animation index="{{animation_index}}" name="{{animation_name}}" fps="{{fps}}" sprite_indexes="{{animation_sprite_indexes}}" sprite_indexes_json="{{animation_sprite_indexes_json}}" />
   [/animation]
 [/animations]
+
 
 [animations_separator]
 [/animations_separator]

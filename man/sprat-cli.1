@@ -18,6 +18,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
 [\fB\-\-no\-trim\-transparent\fR]
+[\fB\-\-rotate\fR]
 [\fB\-\-threads\fR \fIN\fR]
 .PP
 .B spratpack
@@ -72,6 +73,8 @@ sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR]
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
+If rotation is used for a sprite, the sprite line ends with \fBrotated\fR.
+.PP
 If \fIfolder\fR is actually a text file, it is treated as a newline-delimited list of image paths (comments starting with \fB#\fR and blank lines are ignored). Relative paths are resolved relative to the list file, and each path must point to an existing image or the command fails.
 .PP
 Profile configuration is loaded from the first existing file in this order:
@@ -103,6 +106,8 @@ atlas \fIwidth,height\fR (or legacy \fIatlas width height\fR)
 scale \fIfactor\fR
 .br
 sprite lines in current or legacy numeric format
+.br
+current sprite lines may include trailing \fBrotated\fR token
 .SS spratconvert
 Reads layout text from stdin and writes transformed text to stdout.
 .PP
@@ -127,6 +132,8 @@ Templates support marker/animation conditional sections (\fB[if_markers]\fR, \fB
 Placeholders:
 .IP "\(bu" 2
 \fBSprite fields\fR: \fB{{name}}\fR (basename without extension), \fB{{path}}\fR, \fB{{x}}\fR, \fB{{y}}\fR, \fB{{w}}\fR, \fB{{h}}\fR.
+.IP "\(bu" 2
+\fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR).
 .IP "\(bu" 2
 \fBMarker fields\fR: \fB{{marker_name}}\fR, \fB{{marker_type}}\fR, \fB{{marker_sprite_index}}\fR, \fB{{marker_sprite_name}}\fR.
 .IP "\(bu" 2
@@ -192,6 +199,9 @@ Enable transparent-border trimming (overrides profile value).
 .TP
 \fB\-\-no\-trim\-transparent\fR
 Disable transparent-border trimming (overrides profile value).
+.TP
+\fB\-\-rotate\fR
+Enable 90-degree sprite rotation during packing (overrides profile value).
 .TP
 \fB\-\-threads\fR \fIN\fR
 Worker thread count for compact profile search. Overrides profile value.

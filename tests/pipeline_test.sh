@@ -445,3 +445,41 @@ if "$spratlayout_bin" "$(fix_path "$scaled_dir")" --profile desktop --profiles-c
     echo "Expected scale greater than 1 to fail" >&2
     exit 1
 fi
+
+# Rotation mode should allow constrained layouts that are impossible otherwise.
+rotate_dir="$tmp_dir/rotate_frames"
+mkdir -p "$rotate_dir"
+rotate_source="$rotate_dir/frame_rot_a.png"
+cat > "$tmp_dir/seed_rot_layout.txt" <<EOF
+atlas 3,2
+sprite "$(fix_path "$frames_dir/frame_a.png")" 0,0 1,1
+EOF
+"$spratpack_bin" < "$tmp_dir/seed_rot_layout.txt" > "$rotate_source"
+cp "$rotate_source" "$rotate_dir/frame_rot_b.png"
+
+if "$spratlayout_bin" "$(fix_path "$rotate_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --max-width 4 --max-height 3 > "$tmp_dir/rotate_disabled.out" 2>&1; then
+    echo "Expected constrained layout to fail without --rotate" >&2
+    exit 1
+fi
+
+rotate_layout="$tmp_dir/rotate_layout.txt"
+"$spratlayout_bin" "$(fix_path "$rotate_dir")" --profile desktop --profiles-config "$(fix_path "$profiles_cfg")" --max-width 4 --max-height 3 --rotate > "$rotate_layout"
+
+if ! grep -q '^atlas 4,3$' "$rotate_layout"; then
+    echo "Rotated layout did not fit expected constrained atlas 4x3" >&2
+    exit 1
+fi
+
+rotated_count="$(grep -c ' rotated$' "$rotate_layout" || true)"
+if [ "$rotated_count" -lt 1 ]; then
+    echo "Expected at least one rotated sprite line in rotated layout output" >&2
+    exit 1
+fi
+
+rotate_sheet="$tmp_dir/rotate_sheet.png"
+"$spratpack_bin" < "$rotate_layout" > "$rotate_sheet"
+rotate_signature="$(head -c 8 "$rotate_sheet" | od -An -t x1 | tr -d ' \n')"
+if [ "$rotate_signature" != "89504e470d0a1a0a" ]; then
+    echo "Rotated layout output is not a PNG file" >&2
+    exit 1
+fi

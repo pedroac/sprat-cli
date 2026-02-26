@@ -28,7 +28,7 @@ cat > "$layout_file" <<'LAYOUT'
 atlas 64,32
 scale 1
 sprite "./frames/a.png" 0,0 16,16
-sprite "./frames/b.png" 16,0 8,8 1,2 3,4
+sprite "./frames/b.png" 16,0 8,8 1,2 3,4 rotated
 LAYOUT
 
 layout_quotes_file="$tmp_dir/layout.quotes.txt"
@@ -51,8 +51,8 @@ grep -q '"atlas": {"width": 64, "height": 32}' "$tmp_dir/out.json"
 grep -q '"path": "./frames/b.png"' "$tmp_dir/out.json"
 
 "$convert_bin" --transform csv < "$layout_file" > "$tmp_dir/out.csv"
-grep -q '^index,name,path,x,y,w,h,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json$' "$tmp_dir/out.csv"
-grep -q '^1,b,./frames/b.png,16,0,8,8,1,2,3,4,0,\[\]$' "$tmp_dir/out.csv"
+grep -q '^index,name,path,x,y,w,h,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json,rotation$' "$tmp_dir/out.csv"
+grep -q '^1,b,./frames/b.png,16,0,8,8,1,2,3,4,0,\[\],90$' "$tmp_dir/out.csv"
 
 "$convert_bin" --transform xml < "$layout_file" > "$tmp_dir/out.xml"
 grep -q '^<atlas width="64" height="32" scale="1">$' "$tmp_dir/out.xml"
@@ -74,7 +74,7 @@ BEGIN {{atlas_width}}x{{atlas_height}} count={{sprite_count}}
 
 [sprites]
   [sprite]
-{{index}}|{{path}}|{{x}},{{y}} {{w}}x{{h}}
+{{index}}|{{path}}|{{x}},{{y}} {{w}}x{{h}} rotated={{rotated}}
   [/sprite]
 [/sprites]
 
@@ -90,7 +90,8 @@ CUSTOM
 
 "$convert_bin" --transform "$(fix_path "$custom_transform")" < "$layout_file" > "$tmp_dir/out.custom"
 grep -q '^BEGIN 64x32 count=2' "$tmp_dir/out.custom"
-grep -q '1|./frames/b.png|16,0 8x8' "$tmp_dir/out.custom"
+grep -q '0|./frames/a.png|0,0 16x16 rotated=false' "$tmp_dir/out.custom"
+grep -q '1|./frames/b.png|16,0 8x8 rotated=true' "$tmp_dir/out.custom"
 
 markers_file="$tmp_dir/markers.txt"
 cat > "$markers_file" <<'MARKERS'

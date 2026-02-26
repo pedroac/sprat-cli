@@ -29,6 +29,7 @@
 #include <array>
 #include <filesystem>
 namespace fs = std::filesystem;
+#include <charconv>
 #include <cctype>
 #include <limits>
 #include <cmath>
@@ -64,6 +65,7 @@ constexpr int k_max_channel_value = 255;
 
 namespace {
 using sprat::core::parse_positive_int;
+using sprat::core::parse_non_negative_int;
 
 struct Color {
     unsigned char r, g, b, a;
@@ -601,6 +603,25 @@ std::string trim_copy(const std::string& s) {
 bool parse_color(const std::string& value, Color& out) {
     if (value.empty()) { return false;
 }
+
+    auto parse_byte = [](const std::string& token, int& out_value) -> bool {
+        if (!parse_non_negative_int(token, out_value)) {
+            return false;
+        }
+        return out_value >= 0 && out_value <= k_max_channel_value;
+    };
+
+    auto parse_hex_byte = [](const std::string& token, int& out_value) -> bool {
+        if (token.empty()) {
+            return false;
+        }
+        const auto [ptr, ec] = std::from_chars(
+            token.data(), token.data() + token.size(), out_value, k_hex_base);
+        if (ec != std::errc() || ptr != token.data() + token.size()) {
+            return false;
+        }
+        return out_value >= 0 && out_value <= k_max_channel_value;
+    };
     
     std::string lower = value;
     std::ranges::transform(lower, lower.begin(), ::tolower);
@@ -610,9 +631,14 @@ bool parse_color(const std::string& value, Color& out) {
         std::string hex = lower.substr(1);
         if (hex.length() == k_hex_short_len) {
             // #RGB format
-            int r = std::stoi(hex.substr(0, 1), nullptr, k_hex_base);
-            int g = std::stoi(hex.substr(1, 1), nullptr, k_hex_base);
-            int b = std::stoi(hex.substr(2, 1), nullptr, k_hex_base);
+            int r = 0;
+            int g = 0;
+            int b = 0;
+            if (!parse_hex_byte(hex.substr(0, 1), r)
+                || !parse_hex_byte(hex.substr(1, 1), g)
+                || !parse_hex_byte(hex.substr(2, 1), b)) {
+                return false;
+            }
             out.r = static_cast<unsigned char>((r << 4) | r);
             out.g = static_cast<unsigned char>((g << 4) | g);
             out.b = static_cast<unsigned char>((b << 4) | b);
@@ -620,9 +646,14 @@ bool parse_color(const std::string& value, Color& out) {
             return true;
         } if (hex.length() == k_hex_long_len) {
             // #RRGGBB format
-            int r = std::stoi(hex.substr(0, 2), nullptr, k_hex_base);
-            int g = std::stoi(hex.substr(2, 2), nullptr, k_hex_base);
-            int b = std::stoi(hex.substr(4, 2), nullptr, k_hex_base);
+            int r = 0;
+            int g = 0;
+            int b = 0;
+            if (!parse_hex_byte(hex.substr(0, 2), r)
+                || !parse_hex_byte(hex.substr(2, 2), g)
+                || !parse_hex_byte(hex.substr(4, 2), b)) {
+                return false;
+            }
             out.r = static_cast<unsigned char>(r);
             out.g = static_cast<unsigned char>(g);
             out.b = static_cast<unsigned char>(b);
@@ -643,22 +674,19 @@ bool parse_color(const std::string& value, Color& out) {
         if (std::getline(iss, r_str, ',')
             && std::getline(iss, g_str, ',')
             && std::getline(iss, b_str)) {
-            
-            try {
-                int r = std::stoi(trim_copy(r_str));
-                int g = std::stoi(trim_copy(g_str));
-                int b = std::stoi(trim_copy(b_str));
-                
-                if (r >= 0 && r <= k_max_channel_value && g >= 0 && g <= k_max_channel_value && b >= 0 && b <= k_max_channel_value) {
-                    out.r = static_cast<unsigned char>(r);
-                    out.g = static_cast<unsigned char>(g);
-                    out.b = static_cast<unsigned char>(b);
-                    out.a = static_cast<unsigned char>(k_max_channel_value);
-                    return true;
-                }
-            } catch (const std::exception&) {
+            int r = 0;
+            int g = 0;
+            int b = 0;
+            if (!parse_byte(trim_copy(r_str), r)
+                || !parse_byte(trim_copy(g_str), g)
+                || !parse_byte(trim_copy(b_str), b)) {
                 return false;
             }
+            out.r = static_cast<unsigned char>(r);
+            out.g = static_cast<unsigned char>(g);
+            out.b = static_cast<unsigned char>(b);
+            out.a = static_cast<unsigned char>(k_max_channel_value);
+            return true;
         }
         return false;
     }
@@ -671,22 +699,19 @@ bool parse_color(const std::string& value, Color& out) {
     if (std::getline(iss, r_str, ',')
         && std::getline(iss, g_str, ',')
         && std::getline(iss, b_str)) {
-        
-        try {
-            int r = std::stoi(trim_copy(r_str));
-            int g = std::stoi(trim_copy(g_str));
-            int b = std::stoi(trim_copy(b_str));
-            
-            if (r >= 0 && r <= k_max_channel_value && g >= 0 && g <= k_max_channel_value && b >= 0 && b <= k_max_channel_value) {
-                out.r = static_cast<unsigned char>(r);
-                out.g = static_cast<unsigned char>(g);
-                out.b = static_cast<unsigned char>(b);
-                out.a = static_cast<unsigned char>(k_max_channel_value);
-                return true;
-            }
-        } catch (const std::exception&) {
+        int r = 0;
+        int g = 0;
+        int b = 0;
+        if (!parse_byte(trim_copy(r_str), r)
+            || !parse_byte(trim_copy(g_str), g)
+            || !parse_byte(trim_copy(b_str), b)) {
             return false;
         }
+        out.r = static_cast<unsigned char>(r);
+        out.g = static_cast<unsigned char>(g);
+        out.b = static_cast<unsigned char>(b);
+        out.a = static_cast<unsigned char>(k_max_channel_value);
+        return true;
     }
     
     return false;

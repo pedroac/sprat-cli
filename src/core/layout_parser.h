@@ -18,6 +18,7 @@ struct Sprite {
     int trim_right = 0;
     int trim_bottom = 0;
     bool has_trim = false;
+    bool rotated = false;
 };
 
 struct Layout {

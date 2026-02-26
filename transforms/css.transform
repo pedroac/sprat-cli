@@ -23,8 +23,13 @@ extension=.css
   background-position: -{{x}}px -{{y}}px;
   width: {{w}}px;
   height: {{h}}px;
-  /* source: {{path_css}} */
-  /* name: {{name_css}} */
+  --sprite-rotation: {{rotation}}deg;
+  /* source: {{path}} */
+  /* name: {{name}} */
+  [rotated]
+  transform: rotate(90deg);
+  transform-origin: top left;
+  [/rotated]
 }
   [/sprite]
 [/sprites]

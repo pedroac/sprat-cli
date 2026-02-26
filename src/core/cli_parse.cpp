@@ -1,40 +1,34 @@
 #include "cli_parse.h"
 
-#include <exception>
+#include <charconv>
 #include <limits>
 
 namespace sprat::core {
 
 bool parse_positive_int(const std::string& value, int& out) {
-    try {
-        size_t idx = 0;
-        long long parsed = std::stoll(value, &idx);
-        if (idx != value.size()
-            || parsed <= 0
-            || parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
-            return false;
-        }
-        out = static_cast<int>(parsed);
-        return true;
-    } catch (const std::exception&) {
+    int parsed = 0;
+    const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (ec != std::errc() || ptr != value.data() + value.size()) {
         return false;
     }
+    if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    out = parsed;
+    return true;
 }
 
 bool parse_non_negative_int(const std::string& value, int& out) {
-    try {
-        size_t idx = 0;
-        long long parsed = std::stoll(value, &idx);
-        if (idx != value.size()
-            || parsed < 0
-            || parsed > static_cast<long long>(std::numeric_limits<int>::max())) {
-            return false;
-        }
-        out = static_cast<int>(parsed);
-        return true;
-    } catch (const std::exception&) {
+    int parsed = 0;
+    const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (ec != std::errc() || ptr != value.data() + value.size()) {
         return false;
     }
+    if (parsed < 0 || parsed > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    out = parsed;
+    return true;
 }
 
 bool parse_non_negative_uint(const std::string& value, unsigned int& out) {

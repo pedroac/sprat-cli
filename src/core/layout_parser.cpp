@@ -128,6 +128,17 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         return false;
     }
 
+    bool rotated = false;
+    if (!tokens.empty() && tokens.back() == "rotated") {
+        rotated = true;
+        tokens.pop_back();
+    }
+
+    if (tokens.empty()) {
+        error = "sprite line is missing numeric fields";
+        return false;
+    }
+
     if (tokens[0].find(',') != std::string::npos) {
         constexpr size_t MODERN_SPRITE_TOKENS_MIN = 2;
         constexpr size_t MODERN_SPRITE_TOKENS_MAX = 4;
@@ -172,6 +183,7 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         }
     }
 
+    parsed.rotated = rotated;
     out = parsed;
     return true;
 }

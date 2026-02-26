@@ -32,6 +32,7 @@
 namespace fs = std::filesystem;
 #include <cstdint>
 #include <cstdlib>
+#include <cerrno>
 #include <cctype>
 #include <functional>
 #include <memory>
@@ -57,7 +58,7 @@ namespace fs = std::filesystem;
 #include <stb_image.h>
 
 constexpr int k_output_cache_format_version = 2;
-constexpr int k_seed_cache_format_version = 2;
+constexpr int k_seed_cache_format_version = 3;
 #ifndef SPRAT_GLOBAL_PROFILE_CONFIG
 #define SPRAT_GLOBAL_PROFILE_CONFIG "/usr/local/share/sprat/spratprofiles.cfg"
 #endif
@@ -93,6 +94,7 @@ struct ProfileDefinition {
     std::optional<int> max_combinations;
     std::optional<double> scale;
     std::optional<bool> trim_transparent;
+    std::optional<bool> rotate;
     std::optional<unsigned int> threads;
     std::optional<std::pair<int, int>> source_resolution;
     std::optional<std::pair<int, int>> target_resolution;
@@ -237,17 +239,21 @@ std::string strip_trailing_cr(std::string value) {
 }
 
 bool parse_scale_factor(const std::string& value, double& out) {
-    try {
-        size_t idx = 0;
-        double parsed = std::stod(value, &idx);
-        if (idx != value.size() || !std::isfinite(parsed) || parsed <= 0.0 || parsed > 1.0) {
-            return false;
-        }
-        out = parsed;
-        return true;
-    } catch (const std::exception&) {
+    if (value.empty()) {
         return false;
     }
+    const char* begin = value.c_str();
+    char* end = nullptr;
+    errno = 0;
+    const double parsed = std::strtod(begin, &end);
+    if (end != begin + value.size() || errno == ERANGE) {
+        return false;
+    }
+    if (!std::isfinite(parsed) || parsed <= 0.0 || parsed > 1.0) {
+        return false;
+    }
+    out = parsed;
+    return true;
 }
 
 bool parse_resolution(const std::string& value, int& out_width, int& out_height) {
@@ -416,6 +422,13 @@ bool parse_profiles_config(std::istream& input,
                 return false;
             }
             current->trim_transparent = parsed_trim;
+        } else if (lower_key == "rotate") {
+            bool parsed_rotate = false;
+            if (!parse_bool_value(value, parsed_rotate)) {
+                error = "invalid rotate '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->rotate = parsed_rotate;
         } else if (lower_key == "threads") {
             unsigned int parsed_threads = 0;
             if (!parse_positive_uint(value, parsed_threads)) {
@@ -520,6 +533,7 @@ struct Sprite {
     int x = 0, y = 0;
     int trim_left = 0, trim_top = 0;
     int trim_right = 0, trim_bottom = 0;
+    bool rotated = false;
 };
 
 struct ImageMeta {
@@ -564,6 +578,7 @@ struct LayoutSeedEntry {
     int trim_top = 0;
     int trim_right = 0;
     int trim_bottom = 0;
+    bool rotated = false;
 };
 
 struct LayoutSeedCache {
@@ -1261,6 +1276,7 @@ void print_usage() {
     std::cout << "Usage: spratlayout <folder> [OPTIONS]\n"
               << "\n"
               << "Scan an image folder and write a text layout to standard output.\n"
+              << "Rotated sprites are emitted with a trailing 'rotated' token.\n"
               << "\n"
               << "Options:\n"
               << "  --profile NAME             Profile name from config (default: fast)\n"
@@ -1277,6 +1293,7 @@ void print_usage() {
               << "  --scale F                  Pre-scale factor (0 < F <= 1)\n"
               << "  --trim-transparent         Enable transparent-border trimming\n"
               << "  --no-trim-transparent      Disable transparent-border trimming\n"
+              << "  --rotate                   Allow 90-degree sprite rotation during packing\n"
               << "  --threads N                Number of worker threads\n"
               << "  --help, -h                 Show this help message\n";
 }
@@ -1310,6 +1327,7 @@ std::string build_layout_signature(const std::string& profile_name,
                                    int max_combinations,
                                    double scale,
                                    bool trim_transparent,
+                                   bool allow_rotate,
                                    bool preserve_source_order,
                                    const std::vector<ImageSource>& sources) {
     std::vector<std::string> parts;
@@ -1333,6 +1351,7 @@ std::string build_layout_signature(const std::string& profile_name,
         << max_combinations << "|"
         << std::setprecision(k_floating_point_precision) << scale << "|"
         << (trim_transparent ? 1 : 0) << "|"
+        << (allow_rotate ? 1 : 0) << "|"
         << (preserve_source_order ? 1 : 0);
     for (const std::string& part : parts) {
         sig << "\n" << part;
@@ -1348,6 +1367,7 @@ std::string build_layout_seed_signature(const std::string& profile_name,
                                         int max_combinations,
                                         double scale,
                                         bool trim_transparent,
+                                        bool allow_rotate,
                                         bool preserve_source_order,
                                         const std::vector<ImageSource>& sources) {
     std::vector<std::string> parts;
@@ -1370,6 +1390,7 @@ std::string build_layout_seed_signature(const std::string& profile_name,
         << max_combinations << "|"
         << std::setprecision(k_floating_point_precision) << scale << "|"
         << (trim_transparent ? 1 : 0) << "|"
+        << (allow_rotate ? 1 : 0) << "|"
         << (preserve_source_order ? 1 : 0);
     for (const std::string& part : parts) {
         sig << "\n" << part;
@@ -1451,7 +1472,8 @@ bool load_layout_seed_cache(const fs::path& cache_path,
     if (!(in >> header_tag >> version)) {
         return false;
     }
-    if (header_tag != "spratlayout_seed_cache" || version != k_seed_cache_format_version) {
+    if (header_tag != "spratlayout_seed_cache" ||
+        (version != 2 && version != k_seed_cache_format_version)) {
         return false;
     }
 
@@ -1476,6 +1498,13 @@ bool load_layout_seed_cache(const fs::path& cache_path,
                  >> entry.trim_left >> entry.trim_top
                  >> entry.trim_right >> entry.trim_bottom)) {
             return false;
+        }
+        if (version >= 3) {
+            int rotated_flag = 0;
+            if (!(in >> rotated_flag)) {
+                return false;
+            }
+            entry.rotated = rotated_flag != 0;
         }
         out.entries.push_back(std::move(entry));
     }
@@ -1513,7 +1542,8 @@ bool save_layout_seed_cache(const fs::path& cache_path,
             << entry.trim_left << " "
             << entry.trim_top << " "
             << entry.trim_right << " "
-            << entry.trim_bottom << "\n";
+            << entry.trim_bottom << " "
+            << (entry.rotated ? 1 : 0) << "\n";
     }
     out.close();
     if (!out) {
@@ -1749,8 +1779,10 @@ bool try_apply_layout_seed(const LayoutSeedCache& seed,
             return false;
         }
         const LayoutSeedEntry& entry = *it->second;
+        const int expected_w = entry.rotated ? src.h : src.w;
+        const int expected_h = entry.rotated ? src.w : src.h;
         if (entry.x < 0 || entry.y < 0 ||
-            entry.w != src.w || entry.h != src.h ||
+            entry.w != expected_w || entry.h != expected_h ||
             entry.trim_left != src.trim_left || entry.trim_top != src.trim_top ||
             entry.trim_right != src.trim_right || entry.trim_bottom != src.trim_bottom) {
             return false;
@@ -1773,6 +1805,10 @@ bool try_apply_layout_seed(const LayoutSeedCache& seed,
         Sprite placed = src;
         placed.x = entry.x;
         placed.y = entry.y;
+        placed.rotated = entry.rotated;
+        if (placed.rotated) {
+            std::swap(placed.w, placed.h);
+        }
         out_sprites.push_back(std::move(placed));
         rects.push_back({.x0=entry.x, .y0=entry.y, .x1=x1, .y1=y1});
         out_atlas_width = std::max(out_atlas_width, x1);
@@ -1830,6 +1866,9 @@ std::string build_layout_output_text(int atlas_width,
             output << " " << s.trim_left << "," << s.trim_top
                    << " " << s.trim_right << "," << s.trim_bottom;
         }
+        if (s.rotated) {
+            output << " rotated";
+        }
         output << "\n";
     }
     return output.str();
@@ -1851,32 +1890,61 @@ bool scale_dimension(int input, double scale, int& output) {
     return true;
 }
 
-Node* insert(Node* node, Sprite& sprite, int w, int h) {
+Node* insert(Node* node, Sprite& sprite, int w, int h, bool allow_rotate, bool* used_rotated = nullptr) {
     if (node->used) {
         if (node->right) {
-            if (Node* r = insert(node->right.get(), sprite, w, h)) {
+            if (Node* r = insert(node->right.get(), sprite, w, h, allow_rotate, used_rotated)) {
                 return r;
             }
         }
         if (node->down) {
-            return insert(node->down.get(), sprite, w, h);
+            return insert(node->down.get(), sprite, w, h, allow_rotate, used_rotated);
         }
         return nullptr;
     }
-    if (w > node->w || h > node->h) {
+
+    bool fits_normal = (w <= node->w && h <= node->h);
+    bool fits_rotated = allow_rotate && (h <= node->w && w <= node->h);
+    if (!fits_normal && !fits_rotated) {
         return nullptr;
     }
-    if (w == node->w && h == node->h) {
+
+    int place_w = w;
+    int place_h = h;
+    bool rotate = false;
+    if (allow_rotate) {
+        if (!fits_normal && fits_rotated) {
+            place_w = h;
+            place_h = w;
+            rotate = true;
+        } else if (fits_normal && fits_rotated) {
+            const int normal_short = std::min(node->w - w, node->h - h);
+            const int rotated_short = std::min(node->w - h, node->h - w);
+            if (rotated_short < normal_short) {
+                place_w = h;
+                place_h = w;
+                rotate = true;
+            }
+        }
+    }
+
+    if (place_w == node->w && place_h == node->h) {
         node->used = true;
+        if (used_rotated != nullptr) {
+            *used_rotated = rotate;
+        }
         return node;
     }
     node->used = true;
-    node->down = std::make_unique<Node>(node->x, node->y + h, node->w, node->h - h);
-    node->right = std::make_unique<Node>(node->x + w, node->y, node->w - w, h);
+    node->down = std::make_unique<Node>(node->x, node->y + place_h, node->w, node->h - place_h);
+    node->right = std::make_unique<Node>(node->x + place_w, node->y, node->w - place_w, place_h);
+    if (used_rotated != nullptr) {
+        *used_rotated = rotate;
+    }
     return node;
 }
 
-bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int padding = 0) {
+bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int padding = 0, bool allow_rotate = false) {
     root->used = false;
     root->right.reset();
     root->down.reset();
@@ -1889,10 +1957,15 @@ bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int pad
         ) {
             return false;
         }
-        Node* node = insert(root.get(), sprite, w, h);
+        bool rotated = false;
+        Node* node = insert(root.get(), sprite, w, h, allow_rotate, &rotated);
         if (node == nullptr) {
             return false;
         }
+        if (rotated) {
+            std::swap(sprite.w, sprite.h);
+        }
+        sprite.rotated = rotated;
         sprite.x = node->x;
         sprite.y = node->y;
     }
@@ -2047,6 +2120,7 @@ bool pack_compact_maxrects(
     int padding,
     int max_height,
     RectHeuristic heuristic,
+    bool allow_rotate,
     int& out_width,
     int& out_height
 ) {
@@ -2063,12 +2137,15 @@ bool pack_compact_maxrects(
     for (auto& s : sprites) {
         int rw = 0;
         int rh = 0;
-        if (
-            !checked_add_int(s.w, padding, rw)
-            || !checked_add_int(s.h, padding, rh)
-            || rw <= 0 || rh <= 0 || rw > width_limit || rh > max_height
-        ) {
+        if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
             return false;
+        }
+        int rrw = rh;
+        int rrh = rw;
+        if (rw <= 0 || rh <= 0 || rw > width_limit || rh > max_height) {
+            if (!(allow_rotate && rrw > 0 && rrh > 0 && rrw <= width_limit && rrh <= max_height)) {
+                return false;
+            }
         }
 
         int best_index = -1;
@@ -2077,46 +2154,55 @@ bool pack_compact_maxrects(
         int best_area_fit = std::numeric_limits<int>::max();
         int best_top = std::numeric_limits<int>::max();
         int best_left = std::numeric_limits<int>::max();
+        bool best_rotated = false;
 
         for (size_t i = 0; i < free_rects.size(); ++i) {
             const Rect& fr = free_rects[i];
-            if (rw > fr.w || rh > fr.h) {
-                continue;
-            }
+            auto consider_orientation = [&](int cand_w, int cand_h, bool rotated) {
+                if (cand_w > fr.w || cand_h > fr.h) {
+                    return;
+                }
+                int leftover_h = fr.h - cand_h;
+                int leftover_w = fr.w - cand_w;
+                int short_fit = std::min(leftover_h, leftover_w);
+                int long_fit = std::max(leftover_h, leftover_w);
+                int area_fit = leftover_h * leftover_w;
 
-            int leftover_h = fr.h - rh;
-            int leftover_w = fr.w - rw;
-            int short_fit = std::min(leftover_h, leftover_w);
-            int long_fit = std::max(leftover_h, leftover_w);
-            int area_fit = leftover_h * leftover_w;
+                bool better = false;
+                switch (heuristic) {
+                    case RectHeuristic::BestShortSideFit:
+                        better = short_fit < best_short_fit ||
+                                 (short_fit == best_short_fit && long_fit < best_long_fit) ||
+                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
+                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
+                        break;
+                    case RectHeuristic::BestAreaFit:
+                        better = area_fit < best_area_fit ||
+                                 (area_fit == best_area_fit && short_fit < best_short_fit) ||
+                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y < best_top) ||
+                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y == best_top && fr.x < best_left);
+                        break;
+                    case RectHeuristic::BottomLeft:
+                        better = fr.y < best_top || (fr.y == best_top && fr.x < best_left) ||
+                                 (fr.y == best_top && fr.x == best_left && short_fit < best_short_fit);
+                        break;
+                }
 
-            bool better = false;
-            switch (heuristic) {
-                case RectHeuristic::BestShortSideFit:
-                    better = short_fit < best_short_fit ||
-                             (short_fit == best_short_fit && long_fit < best_long_fit) ||
-                             (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
-                             (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
-                    break;
-                case RectHeuristic::BestAreaFit:
-                    better = area_fit < best_area_fit ||
-                             (area_fit == best_area_fit && short_fit < best_short_fit) ||
-                             (area_fit == best_area_fit && short_fit == best_short_fit && fr.y < best_top) ||
-                             (area_fit == best_area_fit && short_fit == best_short_fit && fr.y == best_top && fr.x < best_left);
-                    break;
-                case RectHeuristic::BottomLeft:
-                    better = fr.y < best_top || (fr.y == best_top && fr.x < best_left) ||
-                             (fr.y == best_top && fr.x == best_left && short_fit < best_short_fit);
-                    break;
-            }
-
-            if (better) {
+                if (!better) {
+                    return;
+                }
                 best_index = static_cast<int>(i);
                 best_short_fit = short_fit;
                 best_long_fit = long_fit;
                 best_area_fit = area_fit;
                 best_top = fr.y;
                 best_left = fr.x;
+                best_rotated = rotated;
+            };
+
+            consider_orientation(rw, rh, false);
+            if (allow_rotate && s.w != s.h) {
+                consider_orientation(rrw, rrh, true);
             }
         }
 
@@ -2124,9 +2210,17 @@ bool pack_compact_maxrects(
             return false;
         }
 
+        int used_w_dim = rw;
+        int used_h_dim = rh;
+        if (best_rotated) {
+            std::swap(s.w, s.h);
+            std::swap(used_w_dim, used_h_dim);
+        }
+        s.rotated = best_rotated;
+
         Rect used = {.x=free_rects[static_cast<size_t>(best_index)].x,
                      .y=free_rects[static_cast<size_t>(best_index)].y,
-                     .w=rw, .h=rh};
+                     .w=used_w_dim, .h=used_h_dim};
         s.x = used.x;
         s.y = used.y;
 
@@ -2160,6 +2254,7 @@ bool pack_fast_shelf(
     std::vector<Sprite>& sprites,
     int max_row_width,
     int padding,
+    bool allow_rotate,
     int& out_width,
     int& out_height
 ) {
@@ -2174,19 +2269,45 @@ bool pack_fast_shelf(
     for (auto& s : sprites) {
         int w = 0;
         int h = 0;
-        int candidate_x = 0;
-        int next_y = 0;
-
-        if (
-            !checked_add_int(s.w, padding, w)
-            || !checked_add_int(s.h, padding, h)
-            || w <= 0 || h <= 0
-            || w > max_row_width
-            || !checked_add_int(x, w, candidate_x)
-        ) {
+        if (!checked_add_int(s.w, padding, w) || !checked_add_int(s.h, padding, h)) {
             return false;
         }
-        
+
+        auto score_orientation = [&](int place_w, int place_h, bool new_row_needed) -> long long {
+            const int row_h = new_row_needed ? place_h : std::max(row_height, place_h);
+            const int row_y = new_row_needed ? (y + row_height) : y;
+            return (static_cast<long long>(row_y) << 32) + static_cast<long long>(row_h);
+        };
+
+        const bool can_rotate = allow_rotate && s.w != s.h;
+        int best_place_w = w;
+        int best_place_h = h;
+        bool best_rotated = false;
+
+        auto choose_better = [&](int cand_w, int cand_h, bool cand_rotated) {
+            if (cand_w <= 0 || cand_h <= 0 || cand_w > max_row_width) {
+                return;
+            }
+            const bool cand_new_row = (x > 0 && x + cand_w > max_row_width);
+            if (cand_new_row && cand_w > max_row_width) {
+                return;
+            }
+            const bool best_new_row = (x > 0 && x + best_place_w > max_row_width);
+            const long long cand_score = score_orientation(cand_w, cand_h, cand_new_row);
+            const long long best_score = score_orientation(best_place_w, best_place_h, best_new_row);
+            if (cand_score < best_score) {
+                best_place_w = cand_w;
+                best_place_h = cand_h;
+                best_rotated = cand_rotated;
+            }
+        };
+
+        if (can_rotate) {
+            choose_better(h, w, true);
+        }
+
+        int candidate_x = x + best_place_w;
+        int next_y = 0;
         if (x > 0 && candidate_x > max_row_width) {
             if (!checked_add_int(y, row_height, next_y)) {
                 return false;
@@ -2194,15 +2315,20 @@ bool pack_fast_shelf(
             y = next_y;
             x = 0;
             row_height = 0;
-            if (!checked_add_int(x, w, candidate_x)) {
-                return false;
-            }
+            candidate_x = best_place_w;
         }
+        if (candidate_x > max_row_width) {
+            return false;
+        }
+        if (best_rotated) {
+            std::swap(s.w, s.h);
+        }
+        s.rotated = best_rotated;
 
         s.x = x;
         s.y = y;
         x = candidate_x;
-        row_height = std::max(h, row_height);
+        row_height = std::max(best_place_h, row_height);
         atlas_width = std::max(x, atlas_width);
     }
 
@@ -2324,6 +2450,8 @@ int run_spratlayout(int argc, char** argv) {
     bool has_scale_override = false;
     bool trim_transparent = false;
     bool has_trim_override = false;
+    bool allow_rotate = false;
+    bool has_rotate_override = false;
     unsigned int thread_limit = 0;
     bool has_threads_override = false;
 
@@ -2428,6 +2556,9 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--no-trim-transparent") {
             trim_transparent = false;
             has_trim_override = true;
+        } else if (arg == "--rotate") {
+            allow_rotate = true;
+            has_rotate_override = true;
         } else if (arg == "--threads" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_positive_uint(value, thread_limit)) {
@@ -2606,6 +2737,9 @@ int run_spratlayout(int argc, char** argv) {
         if (!has_threads_override && selected_profile.threads) {
             thread_limit = *selected_profile.threads;
         }
+        if (!has_rotate_override && selected_profile.rotate) {
+            allow_rotate = *selected_profile.rotate;
+        }
         if (!has_source_resolution && selected_profile.source_resolution) {
             source_resolution_width = selected_profile.source_resolution->first;
             source_resolution_height = selected_profile.source_resolution->second;
@@ -2636,6 +2770,7 @@ int run_spratlayout(int argc, char** argv) {
                       << (optimize_target == OptimizeTarget::GPU ? "gpu" : "space")
                       << " padding=" << padding
                       << " trim_transparent=" << (trim_transparent ? "true" : "false")
+                      << " rotate=" << (allow_rotate ? "true" : "false")
                       << " scale=" << scale << "\n";
         }
     } else if (profile_debug) {
@@ -2784,10 +2919,10 @@ int run_spratlayout(int argc, char** argv) {
     const bool is_file = preserve_source_order;
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        padding, max_combinations, scale, trim_transparent, is_file, sources);
+        padding, max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);
     const std::string layout_seed_signature = build_layout_seed_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        max_combinations, scale, trim_transparent, is_file, sources);
+        max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);
     const fs::path output_cache_path = build_output_cache_path(cache_path, layout_signature);
     const fs::path seed_cache_path = build_seed_cache_path(cache_path, layout_seed_signature);
     if (!is_file_older_than_seconds(output_cache_path, k_cache_max_age_seconds)) {
@@ -3031,7 +3166,7 @@ int run_spratlayout(int argc, char** argv) {
                 std::vector<Sprite> trial_sprites = sprites;
                 sort_sprites_by_mode(trial_sprites, sort_mode);
                 root = std::make_unique<Node>(0, 0, side, side);
-                if (!try_pack(root, trial_sprites, padding)) {
+                if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
                     continue;
                 }
                 size_t area = static_cast<size_t>(side) * static_cast<size_t>(side);
@@ -3088,7 +3223,7 @@ int run_spratlayout(int argc, char** argv) {
                     std::vector<Sprite> trial_sprites = sprites;
                     sort_sprites_by_mode(trial_sprites, sort_mode);
                     root = std::make_unique<Node>(0, 0, w, h);
-                    if (!try_pack(root, trial_sprites, padding)) {
+                    if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
                         continue;
                     }
 
@@ -3210,7 +3345,7 @@ int run_spratlayout(int argc, char** argv) {
                 std::vector<Sprite> seed_sprites = sorted_sprites_by_mode[sort_idx];
                 int seed_used_w = 0;
                 int seed_used_h = 0;
-                if (!pack_compact_maxrects(seed_sprites, seed_width, padding, height_upper_bound, rect_heuristic, seed_used_w, seed_used_h)) {
+                if (!pack_compact_maxrects(seed_sprites, seed_width, padding, height_upper_bound, rect_heuristic, allow_rotate, seed_used_w, seed_used_h)) {
                     continue;
                 }
                 size_t seed_area = static_cast<size_t>(seed_used_w) * static_cast<size_t>(seed_used_h);
@@ -3343,7 +3478,7 @@ int run_spratlayout(int argc, char** argv) {
                                 std::vector<Sprite> trial_sprites = sorted_sprites_by_mode[sort_idx];
                                 int used_w = 0;
                                 int used_h = 0;
-                                if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, used_w, used_h)) {
+                                if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, allow_rotate, used_w, used_h)) {
                                     continue;
                                 }
                                 size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
@@ -3434,7 +3569,7 @@ int run_spratlayout(int argc, char** argv) {
                             std::vector<Sprite> shelf_sprites = sorted_sprites_by_mode[sort_idx];
                             int shelf_w = 0;
                             int shelf_h = 0;
-                            if (!pack_fast_shelf(shelf_sprites, width, padding, shelf_w, shelf_h)) {
+                            if (!pack_fast_shelf(shelf_sprites, width, padding, allow_rotate, shelf_w, shelf_h)) {
                                 continue;
                             }
                             if (shelf_h > height_upper_bound) {
@@ -3531,6 +3666,7 @@ int run_spratlayout(int argc, char** argv) {
                     prewarm_max_combinations,
                     prewarm_scale,
                     prewarm_trim_transparent,
+                    allow_rotate,
                     is_file,
                     sources
                 );
@@ -3589,7 +3725,7 @@ int run_spratlayout(int argc, char** argv) {
             std::vector<Sprite> trial_sprites = sorted_sprites;
             int packed_width = 0;
             int packed_height = 0;
-            if (!pack_fast_shelf(trial_sprites, width, padding, packed_width, packed_height)) {
+            if (!pack_fast_shelf(trial_sprites, width, padding, allow_rotate, packed_width, packed_height)) {
                 continue;
             }
             if (packed_height > height_upper_bound) {
@@ -3632,6 +3768,7 @@ int run_spratlayout(int argc, char** argv) {
         entry.trim_top = s.trim_top;
         entry.trim_right = s.trim_right;
         entry.trim_bottom = s.trim_bottom;
+        entry.rotated = s.rotated;
         next_seed.entries.push_back(std::move(entry));
     }
     save_layout_seed_cache(seed_cache_path, next_seed);

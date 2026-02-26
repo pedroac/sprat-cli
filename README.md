@@ -197,6 +197,7 @@ Profile definitions are searched in:
 - `--optimize gpu|space`: Prioritize GPU-friendly dimensions or minimum area.
 - `--padding N`: Pixels between sprites to prevent texture bleeding.
 - `--trim-transparent`: Remove empty borders to save space.
+- `--rotate`: Allow 90-degree rotation during packing for tighter layouts.
 - `--scale F`: Pre-scale images (0.0 to 1.0).
 - `--threads N`: Parallelize the packing search.
 
@@ -307,6 +308,10 @@ When `--trim-transparent` is enabled, sprite lines include crop offsets:
 
 - `sprite "<path>" <x>,<y> <w>,<h> <left>,<top> <right>,<bottom>`
 
+When `--rotate` is enabled and a sprite is packed rotated, the line ends with:
+
+- `rotated`
+
 Example output from:
 
 ```sh
@@ -371,6 +376,10 @@ Common placeholders:
 - `{{atlas_width}}`, `{{atlas_height}}`, `{{scale}}`, `{{sprite_count}}`
 - `{{index}}`, `{{name}}`, `{{path}}`, `{{x}}`, `{{y}}`, `{{w}}`, `{{h}}`
 - `{{src_x}}`, `{{src_y}}`, `{{trim_left}}`, `{{trim_top}}`, `{{trim_right}}`, `{{trim_bottom}}`
+- `{{rotation}}` (numeric degrees; `0` when unrotated, `90` when rotated clockwise; built-in transforms use this field)
+- `[rotated]...[/rotated]` sections inside sprite templates emit their contents only for rotated sprites; non-rotated sprites have the block removed automatically.
+- `{{rotated}}` (`true` when the sprite was packed with 90-degree rotation, otherwise `false`; available for custom templates)
+- You can also guard sections by `type` attributes (for example `[markers type="json"]` or `[marker type="circle"]`) to emit format-specific or marker-type-specific content. Non-matching blocks are dropped automatically.
 - Escaped sprite fields: `{{name_json}}`, `{{name_csv}}`, `{{name_xml}}`, `{{name_css}}`, `{{path_json}}`, `{{path_csv}}`, `{{path_xml}}`, `{{path_css}}`
 - Per-sprite markers: `{{sprite_markers_count}}`, `{{sprite_markers_json}}`, `{{sprite_markers_csv}}`, `{{sprite_markers_xml}}`, `{{sprite_markers_css}}`
 - Marker loop placeholders:
@@ -461,6 +470,7 @@ Column meanings for the `sprite` line in trim mode:
 - `<w>,<h>`: trimmed width and height written into the atlas.
 - `<left>,<top>`: pixels trimmed from the left and top of the original image.
 - `<right>,<bottom>`: pixels trimmed from the right and bottom of the original image.
+- `rotated` (optional trailing token): sprite was packed rotated 90 degrees clockwise in the atlas.
 
 `spratpack` reads that layout from stdin and writes the final PNG spritesheet to stdout:
 

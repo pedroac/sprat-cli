@@ -214,6 +214,140 @@ enum class PlaceholderEncoding {
     css
 };
 
+std::string escape_value(const std::string& value, PlaceholderEncoding encoding) {
+    switch (encoding) {
+        case PlaceholderEncoding::json: return escape_json(value);
+        case PlaceholderEncoding::xml: return escape_xml(value);
+        case PlaceholderEncoding::csv: return escape_csv(value);
+        case PlaceholderEncoding::css: return escape_css_string(value);
+        default: return value;
+    }
+}
+
+std::string filter_sections_by_attr(const std::string& input,
+                                    const std::map<std::string, std::string>& vars,
+                                    PlaceholderEncoding encoding) {
+    std::string output;
+    size_t pos = 0;
+    auto encoding_to_string = [](PlaceholderEncoding enc) {
+        switch (enc) {
+            case PlaceholderEncoding::json: return std::string("json");
+            case PlaceholderEncoding::xml: return std::string("xml");
+            case PlaceholderEncoding::csv: return std::string("csv");
+            case PlaceholderEncoding::css: return std::string("css");
+            default: return std::string();
+        }
+    };
+    const std::string encoding_name = encoding_to_string(encoding);
+
+    while (pos < input.size()) {
+        size_t start = input.find('[', pos);
+        if (start == std::string::npos) {
+            output.append(input.substr(pos));
+            break;
+        }
+        output.append(input.substr(pos, start - pos));
+        if (start + 1 >= input.size() || input[start + 1] == '/') {
+            output.push_back(input[start]);
+            pos = start + 1;
+            continue;
+        }
+        size_t header_end = input.find(']', start + 1);
+        if (header_end == std::string::npos) {
+            output.append(input.substr(start));
+            break;
+        }
+        std::string header = input.substr(start + 1, header_end - start - 1);
+        std::string tag;
+        std::string attr;
+        std::string value;
+        size_t i = 0;
+        while (i < header.size() && !std::isspace(static_cast<unsigned char>(header[i]))) {
+            tag.push_back(header[i]);
+            ++i;
+        }
+        while (i < header.size()) {
+            while (i < header.size() && std::isspace(static_cast<unsigned char>(header[i]))) {
+                ++i;
+            }
+            size_t name_start = i;
+            while (i < header.size() && header[i] != '=' && !std::isspace(static_cast<unsigned char>(header[i]))) {
+                ++i;
+            }
+            std::string attr_name = header.substr(name_start, i - name_start);
+            while (i < header.size() && header[i] != '=') {
+                ++i;
+            }
+            if (i >= header.size() || header[i] != '=') {
+                break;
+            }
+            ++i;
+            while (i < header.size() && std::isspace(static_cast<unsigned char>(header[i]))) {
+                ++i;
+            }
+            if (i >= header.size() || header[i] != '"') {
+                break;
+            }
+            ++i;
+            size_t value_start = i;
+            while (i < header.size() && header[i] != '"') {
+                ++i;
+            }
+            std::string attr_value = header.substr(value_start, i - value_start);
+            ++i;
+            if (attr_name == "type" || attr_name == "marker_type") {
+                attr = attr_name;
+                value = attr_value;
+                break;
+            }
+        }
+        size_t close = input.find("[/" + tag + "]", header_end + 1);
+        if (close == std::string::npos) {
+            output.append(input.substr(start));
+            break;
+        }
+        bool keep = true;
+        if (!attr.empty()) {
+            if (attr == "type") {
+                keep = (value == encoding_name);
+            } else {
+                auto it = vars.find(attr);
+                keep = (it != vars.end() && it->second == value);
+            }
+        }
+        if (!keep) {
+            pos = close + tag.size() + 3;
+            continue;
+        }
+        output.append(input.substr(start, close + tag.size() + 3 - start));
+        pos = close + tag.size() + 3;
+    }
+
+    return output;
+}
+
+std::string filter_rotated_sections(const std::string& input, bool rotated) {
+    std::string output;
+    size_t pos = 0;
+    while (pos < input.size()) {
+        size_t start = input.find("[rotated]", pos);
+        if (start == std::string::npos) {
+            output.append(input.substr(pos));
+            break;
+        }
+        output.append(input.substr(pos, start - pos));
+        size_t end = input.find("[/rotated]", start + 9);
+        if (end == std::string::npos) {
+            break;
+        }
+        if (rotated) {
+            output.append(input.substr(start + 9, end - start - 9));
+        }
+        pos = end + 10;
+    }
+    return output;
+}
+
 std::string to_lower_copy(std::string value) {
     std::ranges::transform(value, value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -261,67 +395,48 @@ PlaceholderEncoding detect_placeholder_encoding(const Transform& transform,
     return from_token(transform_arg);
 }
 
-void apply_default_typed_placeholders(std::map<std::string, std::string>& vars,
-                                      PlaceholderEncoding encoding) {
-    std::string suffix;
-    switch (encoding) {
-        case PlaceholderEncoding::json:
-            suffix = "_json";
-            break;
-        case PlaceholderEncoding::xml:
-            suffix = "_xml";
-            break;
-        case PlaceholderEncoding::csv:
-            suffix = "_csv";
-            break;
-        case PlaceholderEncoding::css:
-            suffix = "_css";
-            break;
-        case PlaceholderEncoding::none:
-            return;
+std::string replace_tokens(const std::string& input,
+                           const std::map<std::string, std::string>& vars,
+                           PlaceholderEncoding encoding) {
+    bool rotated = false;
+    auto rotated_it = vars.find("rotated");
+    if (rotated_it != vars.end()) {
+        rotated = (rotated_it->second == "true");
     }
-
-    std::vector<std::pair<std::string, std::string>> alias_updates;
-    alias_updates.reserve(vars.size());
-    for (const auto& [key, value] : vars) {
-        if (!has_suffix(key, suffix)) {
-            continue;
-        }
-        const std::string base_key = key.substr(0, key.size() - suffix.size());
-        if (vars.find(base_key) == vars.end()) {
-            continue;
-        }
-        alias_updates.emplace_back(base_key, value);
-    }
-
-    for (const auto& [base_key, encoded_value] : alias_updates) {
-        vars[base_key] = encoded_value;
-    }
-}
-
-std::string replace_tokens(const std::string& input, const std::map<std::string, std::string>& vars) {
+    std::string filtered = filter_rotated_sections(input, rotated);
+    filtered = filter_sections_by_attr(filtered, vars, encoding);
     std::string out;
-    out.reserve(input.size() + k_token_replacement_reserve_extra);
+    out.reserve(filtered.size() + k_token_replacement_reserve_extra);
 
     size_t i = 0;
-    while (i < input.size()) {
-        size_t open = input.find("{{", i);
+    while (i < filtered.size()) {
+        size_t open = filtered.find("{{", i);
         if (open == std::string::npos) {
-            out.append(input.substr(i));
+            out.append(filtered.substr(i));
             break;
         }
 
-        out.append(input.substr(i, open - i));
-        size_t close = input.find("}}", open + 2);
+        out.append(filtered.substr(i, open - i));
+        size_t close = filtered.find("}}", open + 2);
         if (close == std::string::npos) {
-            out.append(input.substr(open));
+            out.append(filtered.substr(open));
             break;
         }
 
-        std::string key = trim_copy(input.substr(open + 2, close - (open + 2)));
+        std::string key = trim_copy(filtered.substr(open + 2, close - (open + 2)));
         auto it = vars.find(key);
         if (it != vars.end()) {
-            out.append(it->second);
+            PlaceholderEncoding entry_encoding = encoding;
+            if (has_suffix(key, "_json") && encoding == PlaceholderEncoding::json) {
+                entry_encoding = PlaceholderEncoding::none;
+            } else if (has_suffix(key, "_xml") && encoding == PlaceholderEncoding::xml) {
+                entry_encoding = PlaceholderEncoding::none;
+            } else if (has_suffix(key, "_csv") && encoding == PlaceholderEncoding::csv) {
+                entry_encoding = PlaceholderEncoding::none;
+            } else if (has_suffix(key, "_css") && encoding == PlaceholderEncoding::css) {
+                entry_encoding = PlaceholderEncoding::none;
+            }
+            out.append(escape_value(it->second, entry_encoding));
         }
         i = close + 2;
     }
@@ -759,17 +874,19 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
             std::string tag = trim_copy(trimmed.substr(1, trimmed.size() - 2));
             if (!tag.empty() && tag.front() == '/') {
                 std::string closing = trim_copy(tag.substr(1));
-                if (section_stack.empty()) {
-                    error = "Unexpected closing section [/" + closing + "]: " + path.string();
-                    return false;
+                if (is_known_section(closing)) {
+                    if (section_stack.empty()) {
+                        error = "Unexpected closing section [/" + closing + "]: " + path.string();
+                        return false;
+                    }
+                    if (closing != section_stack.back()) {
+                        error = "Mismatched closing section [/" + closing + "] for [" + section_stack.back() + "]: " + path.string();
+                        return false;
+                    }
+                    section_stack.pop_back();
+                    section_tag = true;
+                    dsl_mode = false;
                 }
-                if (closing != section_stack.back()) {
-                    error = "Mismatched closing section [/" + closing + "] for [" + section_stack.back() + "]: " + path.string();
-                    return false;
-                }
-                section_stack.pop_back();
-                section_tag = true;
-                dsl_mode = false;
             } else if (is_known_section(tag)) {
                 if (tag == "sprite") {
                     if (section_stack.empty() || section_stack.back() != "sprites") {
@@ -1187,32 +1304,22 @@ int run_spratconvert(int argc, char** argv) {
     global_vars["has_markers"] = marker_items.empty() ? "false" : "true";
     global_vars["has_animations"] = normalized_animation_items.empty() ? "false" : "true";
     global_vars["markers_raw"] = markers_text;
-    global_vars["markers_json"] = escape_json(markers_text);
-    global_vars["markers_xml"] = escape_xml(markers_text);
-    global_vars["markers_csv"] = escape_csv(markers_text);
-    global_vars["markers_css"] = escape_css_string(markers_text);
     global_vars["animations_raw"] = animations_text;
-    global_vars["animations_json"] = escape_json(animations_text);
-    global_vars["animations_xml"] = escape_xml(animations_text);
-    global_vars["animations_csv"] = escape_csv(animations_text);
-    global_vars["animations_css"] = escape_css_string(animations_text);
-    apply_default_typed_placeholders(global_vars, placeholder_encoding);
-
     if (!transform.header.empty()) {
-        std::cout << replace_tokens(transform.header, global_vars);
+    std::cout << replace_tokens(transform.header, global_vars, placeholder_encoding);
     }
 
     if (!marker_items.empty()) {
         if (!transform.if_markers.empty()) {
-            std::cout << replace_tokens(transform.if_markers, global_vars);
+            std::cout << replace_tokens(transform.if_markers, global_vars, placeholder_encoding);
         }
         if (!transform.markers_header.empty()) {
-            std::cout << replace_tokens(transform.markers_header, global_vars);
+            std::cout << replace_tokens(transform.markers_header, global_vars, placeholder_encoding);
         }
         if (!transform.markers.empty()) {
             for (size_t i = 0; i < marker_items.size(); ++i) {
                 if (i > 0 && !transform.markers_separator.empty()) {
-                    std::cout << replace_tokens(transform.markers_separator, global_vars);
+                    std::cout << replace_tokens(transform.markers_separator, global_vars, placeholder_encoding);
                 }
                 const MarkerItem& marker = marker_items[i];
                 std::map<std::string, std::string> vars = global_vars;
@@ -1248,20 +1355,19 @@ int run_spratconvert(int argc, char** argv) {
                 vars["marker_sprite_path_xml"] = escape_xml(marker.sprite_path);
                 vars["marker_sprite_path_csv"] = escape_csv(marker.sprite_path);
                 vars["marker_sprite_path_css"] = escape_css_string(marker.sprite_path);
-                apply_default_typed_placeholders(vars, placeholder_encoding);
-                std::cout << replace_tokens(transform.markers, vars);
+                std::cout << replace_tokens(transform.markers, vars, placeholder_encoding);
             }
         }
         if (!transform.markers_footer.empty()) {
-            std::cout << replace_tokens(transform.markers_footer, global_vars);
+            std::cout << replace_tokens(transform.markers_footer, global_vars, placeholder_encoding);
         }
     } else if (!transform.if_no_markers.empty()) {
-        std::cout << replace_tokens(transform.if_no_markers, global_vars);
+        std::cout << replace_tokens(transform.if_no_markers, global_vars, placeholder_encoding);
     }
 
     for (size_t i = 0; i < layout.sprites.size(); ++i) {
         if (i > 0 && !transform.separator.empty()) {
-            std::cout << replace_tokens(transform.separator, global_vars);
+            std::cout << replace_tokens(transform.separator, global_vars, placeholder_encoding);
         }
 
         const Sprite& s = layout.sprites[i];
@@ -1294,22 +1400,23 @@ int run_spratconvert(int argc, char** argv) {
         vars["sprite_markers_xml"] = escape_xml(vars["sprite_markers_json"]);
         vars["sprite_markers_csv"] = escape_csv(vars["sprite_markers_json"]);
         vars["sprite_markers_css"] = escape_css_string(vars["sprite_markers_json"]);
-        apply_default_typed_placeholders(vars, placeholder_encoding);
+        vars["rotation"] = s.rotated ? "90" : "0";
+        vars["rotated"] = s.rotated ? "true" : "false";
 
-        std::cout << replace_tokens(transform.sprite, vars);
+        std::cout << replace_tokens(transform.sprite, vars, placeholder_encoding);
     }
 
     if (!normalized_animation_items.empty()) {
         if (!transform.if_animations.empty()) {
-            std::cout << replace_tokens(transform.if_animations, global_vars);
+            std::cout << replace_tokens(transform.if_animations, global_vars, placeholder_encoding);
         }
         if (!transform.animations_header.empty()) {
-            std::cout << replace_tokens(transform.animations_header, global_vars);
+            std::cout << replace_tokens(transform.animations_header, global_vars, placeholder_encoding);
         }
         if (!transform.animations.empty()) {
             for (size_t i = 0; i < normalized_animation_items.size(); ++i) {
                 if (i > 0 && !transform.animations_separator.empty()) {
-                    std::cout << replace_tokens(transform.animations_separator, global_vars);
+                    std::cout << replace_tokens(transform.animations_separator, global_vars, placeholder_encoding);
                 }
                 const AnimationItem& animation = normalized_animation_items[i];
                 std::map<std::string, std::string> vars = global_vars;
@@ -1327,19 +1434,18 @@ int run_spratconvert(int argc, char** argv) {
                 vars["animation_sprite_indexes_css"] = escape_css_string(vars["animation_sprite_indexes_json"]);
                 vars["fps"] = std::to_string(animation.fps);
                 vars["animation_fps"] = vars["fps"];
-                apply_default_typed_placeholders(vars, placeholder_encoding);
-                std::cout << replace_tokens(transform.animations, vars);
+        std::cout << replace_tokens(transform.animations, vars, placeholder_encoding);
             }
         }
         if (!transform.animations_footer.empty()) {
-            std::cout << replace_tokens(transform.animations_footer, global_vars);
+            std::cout << replace_tokens(transform.animations_footer, global_vars, placeholder_encoding);
         }
     } else if (!transform.if_no_animations.empty()) {
-        std::cout << replace_tokens(transform.if_no_animations, global_vars);
+        std::cout << replace_tokens(transform.if_no_animations, global_vars, placeholder_encoding);
     }
 
     if (!transform.footer.empty()) {
-        std::cout << replace_tokens(transform.footer, global_vars);
+        std::cout << replace_tokens(transform.footer, global_vars, placeholder_encoding);
     }
 
     return 0;
