@@ -11,6 +11,7 @@
 #include <memory>
 namespace fs = std::filesystem;
 #include <cctype>
+#include <cstring>
 #include <limits>
 #include <cstddef>
 #include <fstream>
@@ -238,10 +239,23 @@ private:
 
         if (extension == ".json") {
             return parse_json(content);
-        } if (extension == ".spratframes" || extension == ".txt") {
+        }
+        if (extension == ".spratframes" || extension == ".txt") {
             return parse_spratframes(content);
         }
-        std::cerr << "Error: Unsupported frames format " << extension << "\n";
+
+        // Try to auto-detect from content if extension is unknown
+        if (content.find("\"frames\":") != std::string::npos || content.find("[") != std::string::npos) {
+            if (parse_json(content)) {
+                return true;
+            }
+        }
+
+        if (parse_spratframes(content)) {
+            return true;
+        }
+
+        std::cerr << "Error: Unsupported frames format " << extension << " and could not auto-detect format from content.\n";
         return false;
     }
 
@@ -308,6 +322,13 @@ private:
                     if (!sprat::core::parse_pair(tokens[0], frame.frame.x, frame.frame.y) ||
                         !sprat::core::parse_pair(tokens[1], frame.frame.w, frame.frame.h)) {
                         continue;
+                    }
+
+                    for (const auto& token : tokens) {
+                        if (token == "rotated") {
+                            frame.rotated = true;
+                            break;
+                        }
                     }
                     
                     frames_.push_back(frame);
@@ -539,7 +560,7 @@ private:
         }
 
         for (const auto& frame : frames_) {
-            if (!write_sprite_to_archive_entry(a, frame.frame, frame.name)) {
+            if (!write_sprite_to_archive_entry(a, frame)) {
                 std::cerr << "Warning: Failed to add sprite " << to_quoted(frame.name) << " to archive\n";
                 archive_write_free(a);
                 return false;
@@ -561,30 +582,41 @@ private:
         return false;
     }
 
-    bool write_sprite_to_archive_entry(struct archive* a, const Rectangle& bounds, const std::string& name) {
-        std::vector<unsigned char> sprite_data(static_cast<size_t>(bounds.w) * bounds.h * NUM_CHANNELS);
-        for (int y = 0; y < bounds.h; y++) {
-            for (int x = 0; x < bounds.w; x++) {
-                size_t src_idx = (static_cast<size_t>(bounds.y + y) * width_ + (bounds.x + x)) * NUM_CHANNELS;
-                size_t dst_idx = (static_cast<size_t>(y) * bounds.w + x) * NUM_CHANNELS;
+    bool write_sprite_to_archive_entry(struct archive* a, const SpriteFrame& frame) {
+        const auto& bounds = frame.frame;
+        const int out_w = frame.rotated ? bounds.h : bounds.w;
+        const int out_h = frame.rotated ? bounds.w : bounds.h;
+        
+        std::vector<unsigned char> sprite_data(static_cast<size_t>(out_w) * out_h * NUM_CHANNELS);
+        for (int oy = 0; oy < out_h; oy++) {
+            for (int ox = 0; ox < out_w; ox++) {
+                int atlas_x = 0;
+                int atlas_y = 0;
+                if (frame.rotated) {
+                    atlas_x = bounds.x + (out_h - 1 - oy);
+                    atlas_y = bounds.y + ox;
+                } else {
+                    atlas_x = bounds.x + ox;
+                    atlas_y = bounds.y + oy;
+                }
+
+                const size_t dst_idx = (static_cast<size_t>(oy) * out_w + ox) * NUM_CHANNELS;
+                const size_t src_idx = (static_cast<size_t>(atlas_y) * width_ + atlas_x) * NUM_CHANNELS;
                 
-                sprite_data[dst_idx] = image_data_[src_idx];     // R
-                sprite_data[dst_idx + 1] = image_data_[src_idx + 1]; // G
-                sprite_data[dst_idx + 2] = image_data_[src_idx + 2]; // B
-                sprite_data[dst_idx + 3] = image_data_[src_idx + 3]; // A
+                std::memcpy(&sprite_data[dst_idx], &image_data_[src_idx], NUM_CHANNELS);
             }
         }
 
         // Encode as PNG in memory
         int png_size = 0;
-        unsigned char* png_buffer_raw = stbi_write_png_to_mem(sprite_data.data(), bounds.w * NUM_CHANNELS,
-                                                       bounds.w, bounds.h, NUM_CHANNELS, &png_size);
+        unsigned char* png_buffer_raw = stbi_write_png_to_mem(sprite_data.data(), out_w * NUM_CHANNELS,
+                                                       out_w, out_h, NUM_CHANNELS, &png_size);
         if (png_buffer_raw == nullptr) {
             return false;
         }
         std::unique_ptr<unsigned char, void(*)(void*)> png_buffer(png_buffer_raw, std::free);
 
-        std::string filename = name;
+        std::string filename = frame.name;
         if (filename.find('.') == std::string::npos) {
             filename += ".png";
         }
@@ -619,28 +651,39 @@ private:
 
     bool save_sprite_image(const SpriteFrame& frame) {
         const auto& bounds = frame.frame;
-        std::vector<unsigned char> sprite_data(static_cast<size_t>(bounds.w) * bounds.h * NUM_CHANNELS);
-        for (int y = 0; y < bounds.h; y++) {
-            for (int x = 0; x < bounds.w; x++) {
-                size_t src_idx = (static_cast<size_t>(bounds.y + y) * width_ + (bounds.x + x)) * NUM_CHANNELS;
-                size_t dst_idx = (static_cast<size_t>(y) * bounds.w + x) * NUM_CHANNELS;
+        const int out_w = frame.rotated ? bounds.h : bounds.w;
+        const int out_h = frame.rotated ? bounds.w : bounds.h;
+        
+        std::vector<unsigned char> sprite_data(static_cast<size_t>(out_w) * out_h * NUM_CHANNELS);
+        for (int oy = 0; oy < out_h; oy++) {
+            for (int ox = 0; ox < out_w; ox++) {
+                int atlas_x = 0;
+                int atlas_y = 0;
+                if (frame.rotated) {
+                    atlas_x = bounds.x + (out_h - 1 - oy);
+                    atlas_y = bounds.y + ox;
+                } else {
+                    atlas_x = bounds.x + ox;
+                    atlas_y = bounds.y + oy;
+                }
+
+                const size_t dst_idx = (static_cast<size_t>(oy) * out_w + ox) * NUM_CHANNELS;
+                const size_t src_idx = (static_cast<size_t>(atlas_y) * width_ + atlas_x) * NUM_CHANNELS;
                 
-                sprite_data[dst_idx] = image_data_[src_idx];     // R
-                sprite_data[dst_idx + 1] = image_data_[src_idx + 1]; // G
-                sprite_data[dst_idx + 2] = image_data_[src_idx + 2]; // B
-                sprite_data[dst_idx + 3] = image_data_[src_idx + 3]; // A
+                std::memcpy(&sprite_data[dst_idx], &image_data_[src_idx], NUM_CHANNELS);
             }
         }
 
         fs::path output_path = config_.output_dir / frame.name;
-        if (output_path.extension().empty()) { output_path += ".png";
-}
+        if (output_path.extension().empty()) {
+            output_path += ".png";
+        }
         
         fs::create_directories(output_path.parent_path());
 
         return stbi_write_png(output_path.string().c_str(),
-                             bounds.w, bounds.h, NUM_CHANNELS,
-                             sprite_data.data(), bounds.w * NUM_CHANNELS) != 0;
+                             out_w, out_h, NUM_CHANNELS,
+                             sprite_data.data(), out_w * NUM_CHANNELS) != 0;
     }
 };
 

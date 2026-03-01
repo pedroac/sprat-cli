@@ -13,9 +13,17 @@ extension=.json
 
 [sprites]
   [sprite]
-    {"name": "{{name}}", "path": "{{path}}", "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": {{sprite_markers_json}}, "rotation": {{rotation}}}
+    {"name": "{{name}}", "path": "{{path}}", "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": [{{sprite_markers_json}}], "rotation": {{rotation}}}
   [/sprite]
 [/sprites]
+
+[sprite_marker]
+[if marker_type="point"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}}}[/if][if marker_type="circle"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}},"radius":{{marker_radius}}}[/if][if marker_type="rectangle"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}},"w":{{marker_w}},"h":{{marker_h}}}[/if][if marker_type="polygon"]{"name":"{{marker_name}}","type":"{{marker_type}}","vertices":{{marker_vertices_json}}}[/if]
+[/sprite_marker]
+
+[sprite_markers_separator]
+,
+[/sprite_markers_separator]
 
 [separator]
 ,

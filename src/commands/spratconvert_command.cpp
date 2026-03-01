@@ -44,6 +44,10 @@ struct Transform {
     std::string markers_separator;
     std::string markers_footer;
     std::string sprite;
+    std::string sprite_markers_header;
+    std::string sprite_marker;
+    std::string sprite_markers_separator;
+    std::string sprite_markers_footer;
     std::string separator;
     std::string if_animations;
     std::string if_no_animations;
@@ -319,7 +323,7 @@ std::string filter_sections_by_attr(const std::string& input,
             pos = close + tag.size() + 3;
             continue;
         }
-        output.append(input.substr(start, close + tag.size() + 3 - start));
+        output.append(input.substr(header_end + 1, close - header_end - 1));
         pos = close + tag.size() + 3;
     }
 
@@ -847,6 +851,10 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
             || s == "markers_footer"
             || s == "sprites"
             || s == "sprite"
+            || s == "sprite_markers_header"
+            || s == "sprite_marker"
+            || s == "sprite_markers_separator"
+            || s == "sprite_markers_footer"
             || s == "separator"
             || s == "if_animations"
             || s == "if_no_animations"
@@ -871,43 +879,48 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
 
         bool section_tag = false;
         if (trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']') {
-            std::string tag = trim_copy(trimmed.substr(1, trimmed.size() - 2));
-            if (!tag.empty() && tag.front() == '/') {
-                std::string closing = trim_copy(tag.substr(1));
-                if (is_known_section(closing)) {
-                    if (section_stack.empty()) {
-                        error = "Unexpected closing section [/" + closing + "]: " + path.string();
-                        return false;
-                    }
-                    if (closing != section_stack.back()) {
-                        error = "Mismatched closing section [/" + closing + "] for [" + section_stack.back() + "]: " + path.string();
-                        return false;
-                    }
+            std::string full_tag = trim_copy(trimmed.substr(1, trimmed.size() - 2));
+            if (!full_tag.empty() && full_tag.front() == '/') {
+                std::string tag = trim_copy(full_tag.substr(1));
+                if (is_known_section(tag) && !section_stack.empty() && tag == section_stack.back()) {
                     section_stack.pop_back();
                     section_tag = true;
                     dsl_mode = false;
                 }
-            } else if (is_known_section(tag)) {
-                if (tag == "sprite") {
-                    if (section_stack.empty() || section_stack.back() != "sprites") {
-                        // Auto-open sprites if sprite is used without it
-                        section_stack.push_back("sprites");
-                    }
-                    saw_sprite_item = true;
-                } else if (tag == "marker") {
-                    if (section_stack.empty() || section_stack.back() != "markers") {
-                        section_stack.push_back("markers");
-                    }
-                    saw_marker_item = true;
-                } else if (tag == "animation") {
-                    if (section_stack.empty() || section_stack.back() != "animations") {
-                        section_stack.push_back("animations");
-                    }
-                    saw_animation_item = true;
+            } else {
+                std::string tag;
+                size_t space_pos = full_tag.find_first_of(" \t\r\n");
+                if (space_pos != std::string::npos) {
+                    tag = full_tag.substr(0, space_pos);
+                } else {
+                    tag = full_tag;
                 }
-                section_stack.push_back(tag);
-                section_tag = true;
-                dsl_mode = false;
+                
+                if (is_known_section(tag)) {
+                    // Only treat as a section if there are no attributes
+                    if (space_pos == std::string::npos) {
+                        if (tag == "sprite") {
+                            if (section_stack.empty() || section_stack.back() != "sprites") {
+                                // Auto-open sprites if sprite is used without it
+                                section_stack.push_back("sprites");
+                            }
+                            saw_sprite_item = true;
+                        } else if (tag == "marker") {
+                            if (section_stack.empty() || section_stack.back() != "markers") {
+                                section_stack.push_back("markers");
+                            }
+                            saw_marker_item = true;
+                        } else if (tag == "animation") {
+                            if (section_stack.empty() || section_stack.back() != "animations") {
+                                section_stack.push_back("animations");
+                            }
+                            saw_animation_item = true;
+                        }
+                        section_stack.push_back(tag);
+                        section_tag = true;
+                        dsl_mode = false;
+                    }
+                }
             }
         }
 
@@ -978,13 +991,22 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
                     std::string subcmd;
                     if (liss >> subcmd && is_known_section(subcmd)) {
                         // Pop until we find where it belongs or just pop current if it's a sibling/new level
-                        if (subcmd == "sprite" || subcmd == "marker" || subcmd == "animation") {
+                        if (subcmd == "sprite" || subcmd == "marker" || subcmd == "animation" || subcmd == "sprite_marker" || 
+                            subcmd == "sprite_markers_header" || subcmd == "sprite_markers_separator" || subcmd == "sprite_markers_footer") {
                             // These can be nested. If we are in the parent, stay. If we are in another sibling, pop.
-                            std::string parent = (subcmd == "sprite") ? "sprites" : (subcmd == "marker" ? "markers" : "animations");
-                            while (!section_stack.empty() && section_stack.back() != parent) {
+                            std::string parent;
+                            if (subcmd == "sprite") parent = "sprites";
+                            else if (subcmd == "marker") parent = "markers";
+                            else if (subcmd == "animation") parent = "animations";
+                            else if (subcmd == "sprite_marker") parent = "sprite";
+                            else if (subcmd == "sprite_markers_header") parent = "sprite";
+                            else if (subcmd == "sprite_markers_separator") parent = "sprite";
+                            else if (subcmd == "sprite_markers_footer") parent = "sprite";
+
+                            while (!section_stack.empty() && section_stack.back() != parent && !parent.empty()) {
                                 section_stack.pop_back();
                             }
-                            if (section_stack.empty()) section_stack.push_back(parent);
+                            if (section_stack.empty() && !parent.empty()) section_stack.push_back(parent);
                             if (subcmd == "sprite") saw_sprite_item = true;
                             else if (subcmd == "marker") saw_marker_item = true;
                             else if (subcmd == "animation") saw_animation_item = true;
@@ -1063,6 +1085,14 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
             append_line(legacy_sprite_block, line);
         } else if (section == "sprite") {
             append_line(parsed.sprite, line);
+        } else if (section == "sprite_markers_header") {
+            append_line(parsed.sprite_markers_header, line);
+        } else if (section == "sprite_marker") {
+            append_line(parsed.sprite_marker, line);
+        } else if (section == "sprite_markers_separator") {
+            append_line(parsed.sprite_markers_separator, line);
+        } else if (section == "sprite_markers_footer") {
+            append_line(parsed.sprite_markers_footer, line);
         } else if (section == "separator") {
             append_line(parsed.separator, line);
         } else if (section == "if_animations") {
@@ -1243,25 +1273,16 @@ int run_spratconvert(int argc, char** argv) {
     const PlaceholderEncoding placeholder_encoding =
         detect_placeholder_encoding(transform, transform_arg);
 
-    std::string markers_text;
-    std::string animations_text;
-    if (!markers_path_arg.empty()) {
-        std::string file_error;
-        if (!read_text_file(fs::path(markers_path_arg), markers_text, file_error)) {
-            std::cerr << file_error << "\n";
-            return 1;
-        }
+    std::string input_text;
+    {
+        std::ostringstream buffer;
+        buffer << std::cin.rdbuf();
+        input_text = buffer.str();
     }
-    if (!animations_path_arg.empty()) {
-        std::string file_error;
-        if (!read_text_file(fs::path(animations_path_arg), animations_text, file_error)) {
-            std::cerr << file_error << "\n";
-            return 1;
-        }
-    }
+    std::istringstream layout_iss(input_text);
     Layout layout;
     std::string layout_error;
-    if (!parse_layout(std::cin, layout, layout_error)) {
+    if (!parse_layout(layout_iss, layout, layout_error)) {
         std::cerr << layout_error << "\n";
         return 1;
     }
@@ -1270,6 +1291,27 @@ int run_spratconvert(int argc, char** argv) {
     std::unordered_map<std::string, int> sprite_index_by_name;
     std::vector<std::string> sprite_names;
     collect_sprite_name_indexes(layout, sprite_index_by_path, sprite_index_by_name, sprite_names);
+
+    std::string markers_text;
+    std::string animations_text;
+    if (!markers_path_arg.empty()) {
+        std::string file_error;
+        if (!read_text_file(fs::path(markers_path_arg), markers_text, file_error)) {
+            std::cerr << file_error << "\n";
+            return 1;
+        }
+    } else {
+        markers_text = input_text;
+    }
+    if (!animations_path_arg.empty()) {
+        std::string file_error;
+        if (!read_text_file(fs::path(animations_path_arg), animations_text, file_error)) {
+            std::cerr << file_error << "\n";
+            return 1;
+        }
+    } else {
+        animations_text = input_text;
+    }
 
     std::vector<std::vector<MarkerItem>> sprite_markers;
     const std::vector<MarkerItem> marker_items =
@@ -1309,6 +1351,41 @@ int run_spratconvert(int argc, char** argv) {
     std::cout << replace_tokens(transform.header, global_vars, placeholder_encoding);
     }
 
+    auto populate_marker_vars = [&](std::map<std::string, std::string>& vars, const MarkerItem& marker, size_t index) {
+        vars["marker_index"] = std::to_string(index);
+        vars["marker_name"] = marker.name;
+        vars["marker_name_json"] = escape_json(marker.name);
+        vars["marker_name_xml"] = escape_xml(marker.name);
+        vars["marker_name_csv"] = escape_csv(marker.name);
+        vars["marker_name_css"] = escape_css_string(marker.name);
+        vars["marker_type"] = marker.type;
+        vars["marker_type_json"] = escape_json(marker.type);
+        vars["marker_type_xml"] = escape_xml(marker.type);
+        vars["marker_type_csv"] = escape_csv(marker.type);
+        vars["marker_type_css"] = escape_css_string(marker.type);
+        vars["marker_x"] = std::to_string(marker.x);
+        vars["marker_y"] = std::to_string(marker.y);
+        vars["marker_radius"] = std::to_string(marker.radius);
+        vars["marker_w"] = std::to_string(marker.w);
+        vars["marker_h"] = std::to_string(marker.h);
+        vars["marker_vertices"] = marker_vertices_to_string(marker.vertices);
+        vars["marker_vertices_json"] = marker_vertices_to_json_array(marker.vertices);
+        vars["marker_vertices_xml"] = escape_xml(vars["marker_vertices_json"]);
+        vars["marker_vertices_csv"] = escape_csv(vars["marker_vertices_json"]);
+        vars["marker_vertices_css"] = escape_css_string(vars["marker_vertices_json"]);
+        vars["marker_sprite_index"] = std::to_string(marker.sprite_index);
+        vars["marker_sprite_name"] = marker.sprite_name;
+        vars["marker_sprite_path"] = marker.sprite_path;
+        vars["marker_sprite_name_json"] = escape_json(marker.sprite_name);
+        vars["marker_sprite_name_xml"] = escape_xml(marker.sprite_name);
+        vars["marker_sprite_name_csv"] = escape_csv(marker.sprite_name);
+        vars["marker_sprite_name_css"] = escape_css_string(marker.sprite_name);
+        vars["marker_sprite_path_json"] = escape_json(marker.sprite_path);
+        vars["marker_sprite_path_xml"] = escape_xml(marker.sprite_path);
+        vars["marker_sprite_path_csv"] = escape_csv(marker.sprite_path);
+        vars["marker_sprite_path_css"] = escape_css_string(marker.sprite_path);
+    };
+
     if (!marker_items.empty()) {
         if (!transform.if_markers.empty()) {
             std::cout << replace_tokens(transform.if_markers, global_vars, placeholder_encoding);
@@ -1321,40 +1398,8 @@ int run_spratconvert(int argc, char** argv) {
                 if (i > 0 && !transform.markers_separator.empty()) {
                     std::cout << replace_tokens(transform.markers_separator, global_vars, placeholder_encoding);
                 }
-                const MarkerItem& marker = marker_items[i];
                 std::map<std::string, std::string> vars = global_vars;
-                vars["marker_index"] = std::to_string(i);
-                vars["marker_name"] = marker.name;
-                vars["marker_name_json"] = escape_json(marker.name);
-                vars["marker_name_xml"] = escape_xml(marker.name);
-                vars["marker_name_csv"] = escape_csv(marker.name);
-                vars["marker_name_css"] = escape_css_string(marker.name);
-                vars["marker_type"] = marker.type;
-                vars["marker_type_json"] = escape_json(marker.type);
-                vars["marker_type_xml"] = escape_xml(marker.type);
-                vars["marker_type_csv"] = escape_csv(marker.type);
-                vars["marker_type_css"] = escape_css_string(marker.type);
-                vars["marker_x"] = std::to_string(marker.x);
-                vars["marker_y"] = std::to_string(marker.y);
-                vars["marker_radius"] = std::to_string(marker.radius);
-                vars["marker_w"] = std::to_string(marker.w);
-                vars["marker_h"] = std::to_string(marker.h);
-                vars["marker_vertices"] = marker_vertices_to_string(marker.vertices);
-                vars["marker_vertices_json"] = marker_vertices_to_json_array(marker.vertices);
-                vars["marker_vertices_xml"] = escape_xml(vars["marker_vertices_json"]);
-                vars["marker_vertices_csv"] = escape_csv(vars["marker_vertices_json"]);
-                vars["marker_vertices_css"] = escape_css_string(vars["marker_vertices_json"]);
-                vars["marker_sprite_index"] = std::to_string(marker.sprite_index);
-                vars["marker_sprite_name"] = marker.sprite_name;
-                vars["marker_sprite_path"] = marker.sprite_path;
-                vars["marker_sprite_name_json"] = escape_json(marker.sprite_name);
-                vars["marker_sprite_name_xml"] = escape_xml(marker.sprite_name);
-                vars["marker_sprite_name_csv"] = escape_csv(marker.sprite_name);
-                vars["marker_sprite_name_css"] = escape_css_string(marker.sprite_name);
-                vars["marker_sprite_path_json"] = escape_json(marker.sprite_path);
-                vars["marker_sprite_path_xml"] = escape_xml(marker.sprite_path);
-                vars["marker_sprite_path_csv"] = escape_csv(marker.sprite_path);
-                vars["marker_sprite_path_css"] = escape_css_string(marker.sprite_path);
+                populate_marker_vars(vars, marker_items[i], i);
                 std::cout << replace_tokens(transform.markers, vars, placeholder_encoding);
             }
         }
@@ -1400,6 +1445,32 @@ int run_spratconvert(int argc, char** argv) {
         vars["sprite_markers_xml"] = escape_xml(vars["sprite_markers_json"]);
         vars["sprite_markers_csv"] = escape_csv(vars["sprite_markers_json"]);
         vars["sprite_markers_css"] = escape_css_string(vars["sprite_markers_json"]);
+
+        if (!transform.sprite_marker.empty()) {
+            std::string sprite_markers_formatted;
+            if (!sprite_markers[i].empty()) {
+                if (!transform.sprite_markers_header.empty()) {
+                    sprite_markers_formatted += replace_tokens(transform.sprite_markers_header, vars, placeholder_encoding);
+                }
+                for (size_t j = 0; j < sprite_markers[i].size(); ++j) {
+                    if (j > 0 && !transform.sprite_markers_separator.empty()) {
+                        sprite_markers_formatted += replace_tokens(transform.sprite_markers_separator, vars, placeholder_encoding);
+                    }
+                    std::map<std::string, std::string> mvars = vars;
+                    populate_marker_vars(mvars, sprite_markers[i][j], j);
+                    sprite_markers_formatted += replace_tokens(transform.sprite_marker, mvars, placeholder_encoding);
+                }
+                if (!transform.sprite_markers_footer.empty()) {
+                    sprite_markers_formatted += replace_tokens(transform.sprite_markers_footer, vars, placeholder_encoding);
+                }
+            }
+            vars["sprite_markers"] = sprite_markers_formatted;
+            vars["sprite_markers_json"] = sprite_markers_formatted;
+            vars["sprite_markers_xml"] = sprite_markers_formatted;
+            vars["sprite_markers_csv"] = sprite_markers_formatted;
+            vars["sprite_markers_css"] = sprite_markers_formatted;
+        }
+
         vars["rotation"] = s.rotated ? "90" : "0";
         vars["rotated"] = s.rotated ? "true" : "false";
 

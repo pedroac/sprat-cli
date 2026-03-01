@@ -7,6 +7,18 @@
 
 namespace sprat::core {
 
+struct Marker {
+    std::string name;
+    std::string type;
+    std::string sprite_path;
+    int x = 0;
+    int y = 0;
+    int radius = 0;
+    int w = 0;
+    int h = 0;
+    std::vector<std::pair<int, int>> vertices;
+};
+
 struct Sprite {
     std::string path;
     int x = 0;
@@ -19,6 +31,7 @@ struct Sprite {
     int trim_bottom = 0;
     bool has_trim = false;
     bool rotated = false;
+    std::vector<Marker> markers;
 };
 
 struct Layout {
@@ -27,6 +40,7 @@ struct Layout {
     double scale = 1.0;
     bool has_scale = false;
     std::vector<Sprite> sprites;
+    std::vector<Marker> global_markers;
 };
 
 bool parse_int(const std::string& token, int& out);

@@ -539,17 +539,21 @@ std::optional<fs::path> resolve_user_profiles_config_path() {
     return std::nullopt;
 }
 
-std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& cwd) {
+std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& cwd, const fs::path& exec_dir) {
     std::vector<fs::path> candidates;
     // Lookup order:
     // 1) user config (Windows: %APPDATA%\sprat\spratprofiles.cfg,
     //                 others: ~/.config/sprat/spratprofiles.cfg)
     // 2) ./spratprofiles.cfg (current directory)
-    // 3) global installed config
+    // 3) {exec_dir}/spratprofiles.cfg (beside executable)
+    // 4) global installed config
     if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
         candidates.push_back(*user_config);
     }
     candidates.push_back(cwd / k_profiles_config_filename);
+    if (exec_dir != cwd && !exec_dir.empty()) {
+        candidates.push_back(exec_dir / k_profiles_config_filename);
+    }
     candidates.emplace_back(k_global_profiles_config_path);
     return candidates;
 }
@@ -2655,7 +2659,7 @@ int run_spratlayout(int argc, char** argv) {
         }
         config_candidates.push_back(std::move(config_candidate));
     } else {
-        config_candidates = build_default_profiles_config_candidates(cwd);
+        config_candidates = build_default_profiles_config_candidates(cwd, exec_dir);
     }
 
     bool loaded_profile_file = false;

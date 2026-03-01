@@ -185,6 +185,9 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             parsed.sprites.push_back(s);
+        } else if (line.starts_with("path") || line.starts_with("- marker") || line.starts_with("- frame") || line.starts_with("animation") || line.starts_with("fps")) {
+            // Skip markers and animations, they are handled by spratconvert
+            continue;
         } else {
             error = "Unknown line: " + line;
             return false;

@@ -12,9 +12,20 @@ extension=.xml
 
 [sprites]
   [sprite]
-    <sprite index="{{index}}" name="{{name}}" path="{{path}}" x="{{x}}" y="{{y}}" w="{{w}}" h="{{h}}" trim_left="{{trim_left}}" trim_top="{{trim_top}}" trim_right="{{trim_right}}" trim_bottom="{{trim_bottom}}" marker_count="{{sprite_markers_count}}" markers_json="{{sprite_markers_json}}" rotation="{{rotation}}" />
+    <sprite index="{{index}}" name="{{name}}" path="{{path}}" x="{{x}}" y="{{y}}" w="{{w}}" h="{{h}}" trim_left="{{trim_left}}" trim_top="{{trim_top}}" trim_right="{{trim_right}}" trim_bottom="{{trim_bottom}}" marker_count="{{sprite_markers_count}}" rotation="{{rotation}}">
+      <markers>
+        {{sprite_markers_xml}}
+      </markers>
+    </sprite>
   [/sprite]
 [/sprites]
+
+[sprite_marker]
+[if marker_type="point"]<marker name="{{marker_name}}" type="{{marker_type}}" x="{{marker_x}}" y="{{marker_y}}" />[/if][if marker_type="circle"]<marker name="{{marker_name}}" type="{{marker_type}}" x="{{marker_x}}" y="{{marker_y}}" radius="{{marker_radius}}" />[/if][if marker_type="rectangle"]<marker name="{{marker_name}}" type="{{marker_type}}" x="{{marker_x}}" y="{{marker_y}}" w="{{marker_w}}" h="{{marker_h}}" />[/if][if marker_type="polygon"]<marker name="{{marker_name}}" type="{{marker_type}}"><vertices>{{marker_vertices_json}}</vertices></marker>[/if]
+[/sprite_marker]
+
+[sprite_markers_separator]
+[/sprite_markers_separator]
 
 [separator]
 [/separator]
