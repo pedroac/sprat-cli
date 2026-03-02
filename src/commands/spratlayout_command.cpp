@@ -2486,6 +2486,9 @@ int run_spratlayout(int argc, char** argv) {
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
+        } else if (arg == "--version" || arg == "-v") {
+            std::cout << "spratlayout version " << SPRAT_VERSION << "\n";
+            return 0;
         } else if (arg == "--profile" && i + 1 < argc) {
             requested_profile_name = argv[++i];
         } else if (arg == "--profiles-config" && i + 1 < argc) {

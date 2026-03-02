@@ -208,11 +208,13 @@ int run_spratpack(int argc, char** argv) {
     constexpr unsigned char DEFAULT_COLOR_ALPHA = 255;
     std::array<unsigned char, 4> line_color = {DEFAULT_COLOR_RED, 0, 0, DEFAULT_COLOR_ALPHA};
     unsigned int thread_limit = 0;
-
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
             print_usage();
+            return 0;
+        } else if (arg == "--version" || arg == "-v") {
+            std::cout << "spratpack version " << SPRAT_VERSION << "\n";
             return 0;
         } else if (arg == "--frame-lines") {
             draw_frame_lines = true;

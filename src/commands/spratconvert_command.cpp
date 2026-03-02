@@ -1253,6 +1253,9 @@ int run_spratconvert(int argc, char** argv) {
         } else if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
+        } else if (arg == "--version" || arg == "-v") {
+            std::cout << "spratconvert version " << SPRAT_VERSION << "\n";
+            return 0;
         } else {
             print_usage();
             return 1;

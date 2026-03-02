@@ -18,6 +18,29 @@ if(WIN32)
     endif()
 endif()
 
+# Version detection
+set(SPRAT_VERSION "0.0.0")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" VERSION_FROM_FILE)
+    string(STRIP "${VERSION_FROM_FILE}" SPRAT_VERSION)
+endif()
+
+# Try to get version from git tag
+execute_process(
+    COMMAND git describe --tags --always --dirty
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_VERSION
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+if(GIT_VERSION)
+    set(SPRAT_VERSION ${GIT_VERSION})
+endif()
+
+message(STATUS "Sprat version: ${SPRAT_VERSION}")
+add_definitions(-DSPRAT_VERSION="${SPRAT_VERSION}")
+
 # External headers
 set(STB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stb)
 file(MAKE_DIRECTORY ${STB_DIR})

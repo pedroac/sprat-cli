@@ -140,6 +140,9 @@ private:
     // Rectangle detection
     std::vector<Rectangle> detected_rectangles_;
     
+    bool has_detected_background_ = false;
+    Color detected_background_color_{0, 0, 0, 0};
+    
 public:
     SpriteFramesDetector(FramesConfig  config) : config_(std::move(config)) {}
     
@@ -543,16 +546,29 @@ private:
         return output_spratframes(frames);
     }
     
+    [[nodiscard]] static std::string color_to_hex(const Color& c) {
+        auto to_hex_digit = [](int v) -> char {
+            return static_cast<char>(v < 10 ? '0' + v : 'a' + (v - 10));
+        };
+        std::string s;
+        s += to_hex_digit(c.r >> 4);
+        s += to_hex_digit(c.r & 0xf);
+        s += to_hex_digit(c.g >> 4);
+        s += to_hex_digit(c.g & 0xf);
+        s += to_hex_digit(c.b >> 4);
+        s += to_hex_digit(c.b & 0xf);
+        return s;
+    }
+    
     [[nodiscard]] bool output_spratframes(const std::vector<SpriteFrame>& frames) const {
         // First line: path <filepath>
         std::cout << "path " << to_quoted(config_.input_path.string()) << "\n";
         
         // Check if we need to output background color
         if (config_.has_rectangles) {
-            std::cout << "background " 
-                << static_cast<int>(config_.rectangle_color.r) << ","
-                << static_cast<int>(config_.rectangle_color.g) << ","
-                << static_cast<int>(config_.rectangle_color.b) << "\n";
+            std::cout << "background " << color_to_hex(config_.rectangle_color) << "\n";
+        } else if (has_detected_background_) {
+            std::cout << "background " << color_to_hex(detected_background_color_) << "\n";
         }
         
         // Each frame: sprite x,y w,h
@@ -574,6 +590,8 @@ private:
         
         // If the first pixel is not transparent, make all pixels of that color transparent
         if (!first_pixel.is_transparent()) {
+            has_detected_background_ = true;
+            detected_background_color_ = first_pixel;
             // Make all pixels matching the first pixel color (within tolerance) transparent
             for (int i = 0; i < width_ * height_; ++i) {
                 size_t idx = static_cast<size_t>(i) * 4;
@@ -758,6 +776,9 @@ int run_spratframes(int argc, char** argv) {
         
         if (arg == "--help" || arg == "-h") {
             show_help = true;
+        } else if (arg == "--version" || arg == "-v") {
+            std::cout << "spratframes version " << SPRAT_VERSION << "\n";
+            return 0;
         } else if (arg == "--has-rectangles") {
             config.has_rectangles = true;
         } else if (arg == "--rectangle-color" && i + 1 < argc) {

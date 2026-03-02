@@ -711,6 +711,9 @@ int run_spratunpack(int argc, char** argv) {
         if (arg == "-h" || arg == "--help") {
             print_usage();
             return 0;
+        } else if (arg == "--version" || arg == "-v") {
+            std::cout << "spratunpack version " << SPRAT_VERSION << "\n";
+            return 0;
         } else if (arg == "-") {
             if (config.input_path.empty() && !config.input_from_stdin) {
                 config.input_from_stdin = true;
