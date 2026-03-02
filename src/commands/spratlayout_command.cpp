@@ -519,18 +519,36 @@ bool load_profiles_config_from_file(const fs::path& path,
 }
 
 std::optional<fs::path> resolve_user_profiles_config_path() {
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata != nullptr && appdata[0] != '\0') {
-        const fs::path appdata_cfg = fs::path(appdata) / "sprat" / k_profiles_config_filename;
-        std::error_code ec;
-        if (fs::exists(appdata_cfg, ec) && !ec) {
-            return appdata_cfg;
+    // 1. Windows: %APPDATA%\sprat or %LOCALAPPDATA%\sprat
+#ifdef _WIN32
+    static const char* const envs[] = {"APPDATA", "LOCALAPPDATA"};
+    for (const char* env : envs) {
+        const char* val = std::getenv(env);
+        if (val != nullptr && val[0] != '\0') {
+            const fs::path cfg = fs::path(val) / "sprat" / k_profiles_config_filename;
+            std::error_code ec;
+            if (fs::exists(cfg, ec) && !ec) {
+                return cfg;
+            }
         }
     }
+#endif
+
     const char* home = std::getenv("HOME");
     if (home == nullptr || home[0] == '\0') {
         return std::nullopt;
     }
+
+    // 2. macOS: ~/Library/Preferences/sprat/spratprofiles.cfg
+#ifdef __APPLE__
+    const fs::path mac_cfg = fs::path(home) / "Library" / "Preferences" / "sprat" / k_profiles_config_filename;
+    std::error_code ec_mac;
+    if (fs::exists(mac_cfg, ec_mac) && !ec_mac) {
+        return mac_cfg;
+    }
+#endif
+
+    // 3. Others (Linux): ~/.config/sprat/spratprofiles.cfg
     const fs::path home_cfg = fs::path(home) / k_user_profiles_config_relpath;
     std::error_code ec;
     if (fs::exists(home_cfg, ec) && !ec) {
@@ -1263,7 +1281,11 @@ fs::path default_temp_dir() {
         return fs::path(tmpdir);
     }
 
+#ifdef _WIN32
+    return fs::path(".");
+#else
     return fs::path("/tmp");
+#endif
 }
 
 fs::path cache_root_dir() {
