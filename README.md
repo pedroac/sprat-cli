@@ -15,16 +15,18 @@
 
 ## 🚀 Quick Start
 
-**Build and Install:**
+**Build:**
 
 ```sh
 sh build.sh
 ```
 
+The binaries are generated in the `build/` directory. You can run them directly from there:
+
 Generate layout first:
 
 ```sh
-./spratlayout ./frames > layout.txt
+./build/spratlayout ./frames > layout.txt
 ```
 
 Inspect layout text:
@@ -36,13 +38,13 @@ cat layout.txt
 Pack PNG from that layout:
 
 ```sh
-./spratpack < layout.txt > spritesheet.png
+./build/spratpack < layout.txt > spritesheet.png
 ```
 
 Optional one-pipe run:
 
 ```sh
-./spratlayout ./frames --trim-transparent --padding 2 | ./spratpack > spritesheet.png
+./build/spratlayout ./frames --trim-transparent --padding 2 | ./build/spratpack > spritesheet.png
 ```
 
 **New: Tar File Support**
@@ -51,12 +53,12 @@ Optional one-pipe run:
 
 ```sh
 # Regular tar file
-./spratlayout sprites.tar > layout.txt
+./build/spratlayout sprites.tar > layout.txt
 
 # Compressed tar files (gzip, bzip2, xz)
-./spratlayout sprites.tar.gz > layout.txt
-./spratlayout sprites.tar.bz2 > layout.txt
-./spratlayout sprites.tar.xz > layout.txt
+./build/spratlayout sprites.tar.gz > layout.txt
+./build/spratlayout sprites.tar.bz2 > layout.txt
+./build/spratlayout sprites.tar.xz > layout.txt
 ```
 
 The tool automatically extracts the archive to a temporary directory and processes all image files found within. Temporary directories are cleaned up automatically after processing.
@@ -64,19 +66,19 @@ The tool automatically extracts the archive to a temporary directory and process
 Convert layout to JSON/CSV/XML/CSS:
 
 ```sh
-./spratconvert --transform json < layout.txt > layout.json
+./build/spratconvert --transform json < layout.txt > layout.json
 ```
 
 Detect sprite frames in spritesheets:
 
 ```sh
-./spratframes spritesheet.png > frames.spratframes
+./build/spratframes spritesheet.png > frames.spratframes
 ```
 
 Extract sprites from spritesheets using frame coordinates:
 
 ```sh
-./spratunpack spritesheet.png --frames frames.spratframes --output output/
+./build/spratunpack spritesheet.png --frames frames.spratframes --output output/
 ```
 
 Manual page:
@@ -90,7 +92,7 @@ man ./man/sprat-cli.1
 Install binaries, man page, and global profile config:
 
 ```sh
-sudo cmake --install .
+sudo cmake --install build
 ```
 
 ## Workflow
@@ -126,19 +128,19 @@ sudo cmake --install .
 ### 1. Scanning (`spratlayout`)
 Scans a folder of images and calculates their optimal positions. It prints a **layout text** to stdout. This step is mathematical and does not process image pixels, making it extremely fast.
 ```sh
-./spratlayout ./frames > layout.txt
+./build/spratlayout ./frames > layout.txt
 ```
 
 ### 2. Packing (`spratpack`)
 Reads the layout text from stdin, loads the images, and blits them into a single PNG atlas.
 ```sh
-./spratpack < layout.txt > spritesheet.png
+./build/spratpack < layout.txt > spritesheet.png
 ```
 
 ### 3. Transforming (`spratconvert`)
 Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, etc.) for your game engine.
 ```sh
-./spratconvert --transform json < layout.txt > layout.json
+./build/spratconvert --transform json < layout.txt > layout.json
 ```
 
 ### Extra: Deconstruction (Reverse Engineering)
@@ -170,17 +172,17 @@ If you start with a monolithic spritesheet and need to recover individual frames
 
 **The One-liner (Recommended):**
 ```sh
-./spratframes sheet.png | ./spratunpack --output ./recovered_frames
+./build/spratframes sheet.png | ./build/spratunpack --output ./recovered_frames
 ```
 
 **Step-by-step (if you need to edit the layout first):**
 1.  **Detect (`spratframes`)**: Scans an existing spritesheet and prints a layout definition to stdout.
     ```sh
-    ./spratframes existing_sheet.png > frames.txt
+    ./build/spratframes existing_sheet.png > frames.txt
     ```
 2.  **Unpack (`spratunpack`)**: Takes the sheet and the detected frames to extract individual images.
     ```sh
-    ./spratunpack existing_sheet.png --frames frames.txt --output ./recovered_frames
+    ./build/spratunpack existing_sheet.png --frames frames.txt --output ./recovered_frames
     ```
 Now you can use `./recovered_frames` as the input for `spratlayout`.
 
@@ -222,8 +224,8 @@ Default behavior. Tries to keep the atlas square-ish but prioritizes width/heigh
 !Compact GPU
 
 ```sh
-./spratlayout ./frames --mode compact --optimize gpu --padding 2 > layout.txt
-./spratpack < layout.txt > compact_gpu_pad2.png
+./build/spratlayout ./frames --mode compact --optimize gpu --padding 2 > layout.txt
+./build/spratpack < layout.txt > compact_gpu_pad2.png
 ```
 ![compact gpu](README-assets/compact_gpu_pad2.png)
 
@@ -232,8 +234,8 @@ Default behavior. Tries to keep the atlas square-ish but prioritizes width/heigh
 Tries to minimize total area, regardless of aspect ratio.
 
 ```sh
-./spratlayout ./frames --mode compact --optimize space --padding 2 > layout.txt
-./spratpack < layout.txt > compact_space.png
+./build/spratlayout ./frames --mode compact --optimize space --padding 2 > layout.txt
+./build/spratpack < layout.txt > compact_space.png
 ```
 ![compact space](README-assets/compact_space_pad2.png)
 
@@ -242,8 +244,8 @@ Tries to minimize total area, regardless of aspect ratio.
 Uses a shelf packing algorithm. Much faster for huge datasets, but less efficient packing.
 
 ```sh
-./spratlayout ./frames --mode fast --padding 2 > layout.txt
-./spratpack < layout.txt > fast.png
+./build/spratlayout ./frames --mode fast --padding 2 > layout.txt
+./build/spratpack < layout.txt > fast.png
 ```
 ![fast](README-assets/fast_pad2.png)
 
@@ -252,8 +254,8 @@ Uses a shelf packing algorithm. Much faster for huge datasets, but less efficien
 Forces the output atlas to be a power of two (e.g., 512x512, 1024x512).
 
 ```sh
-./spratlayout ./frames --mode pot --padding 2 > layout.txt
-./spratpack < layout.txt > pot.png
+./build/spratlayout ./frames --mode pot --padding 2 > layout.txt
+./build/spratpack < layout.txt > pot.png
 ```
 ![pot](README-assets/pot_pad2.png)
 
@@ -262,8 +264,8 @@ Forces the output atlas to be a power of two (e.g., 512x512, 1024x512).
 Removes transparent pixels from sprite edges. `spratpack` can draw frame lines to visualize the trimmed bounds.
 
 ```sh
-./spratlayout ./frames --trim-transparent --padding 2 > layout.txt
-./spratpack --frame-lines --line-color 0,255,0 < layout.txt > trim.png
+./build/spratlayout ./frames --trim-transparent --padding 2 > layout.txt
+./build/spratpack --frame-lines --line-color 0,255,0 < layout.txt > trim.png
 ```
 ![trim](README-assets/trim_pad2_lines.png)
 
@@ -273,11 +275,11 @@ Automatically scales sprites based on a target resolution. Useful for multi-plat
 
 ```sh
 # Scale = 1920 / 3840 = 0.5
-./spratlayout ./frames \
+./build/spratlayout ./frames \
   --source-resolution 3840x2160 \
   --target-resolution 1920x1080 \
   --padding 2 > layout.txt
-./spratpack < layout.txt > resolution.png
+./build/spratpack < layout.txt > resolution.png
 ```
 ![resolutions](README-assets/res_3840x2160_1920x1080_pad2.png)
 
@@ -286,8 +288,8 @@ Automatically scales sprites based on a target resolution. Useful for multi-plat
 Allows 90-degree clockwise rotation of sprites to achieve even tighter packing.
 
 ```sh
-./spratlayout ./frames --rotate --trim-transparent > layout.txt
-./spratpack < layout.txt > rotation.png
+./build/spratlayout ./frames --rotate --trim-transparent > layout.txt
+./build/spratpack < layout.txt > rotation.png
 ```
 ![rotation](README-assets/rotation_pad2.png)
 
@@ -302,17 +304,17 @@ Trim benchmark (repeatable local comparison):
 Scale recipe (smaller output for lower resolutions):
 
 ```sh
-./spratlayout ./frames --profile mobile --scale 0.5 > layout_mobile_half.txt
-./spratpack < layout_mobile_half.txt > spritesheet_mobile_half.png
+./build/spratlayout ./frames --profile mobile --scale 0.5 > layout_mobile_half.txt
+./build/spratpack < layout_mobile_half.txt > spritesheet_mobile_half.png
 ```
 
 Resolution-aware scale recipe:
 
 ```sh
-./spratlayout ./frames --profile mobile \
+./build/spratlayout ./frames --profile mobile \
   --source-resolution 3840x2160 --target-resolution 1920x1080 --scale 0.5 \
   > layout_mobile_targeted.txt
-./spratpack < layout_mobile_targeted.txt > spritesheet_mobile_targeted.png
+./build/spratpack < layout_mobile_targeted.txt > spritesheet_mobile_targeted.png
 ```
 
 The output format is:
@@ -332,7 +334,7 @@ When `--rotate` is enabled and a sprite is packed rotated, the line ends with:
 Example output from:
 
 ```sh
-./spratlayout ./frames --trim-transparent > layout.txt
+./build/spratlayout ./frames --trim-transparent > layout.txt
 ```
 
 ```txt
@@ -351,22 +353,22 @@ The term `transform` is used because conversion is template-driven and data-orie
 List built-in transforms:
 
 ```sh
-./spratconvert --list-transforms
+./build/spratconvert --list-transforms
 ```
 
 Use a built-in transform:
 
 ```sh
-./spratconvert --transform json < layout.txt > layout.json
-./spratconvert --transform csv < layout.txt > layout.csv
-./spratconvert --transform xml < layout.txt > layout.xml
-./spratconvert --transform css < layout.txt > layout.css
+./build/spratconvert --transform json < layout.txt > layout.json
+./build/spratconvert --transform csv < layout.txt > layout.csv
+./build/spratconvert --transform xml < layout.txt > layout.xml
+./build/spratconvert --transform css < layout.txt > layout.css
 ```
 
 Optional extra data files:
 
 ```sh
-./spratconvert --transform json --markers markers.txt --animations animations.txt < layout.txt > layout.json
+./build/spratconvert --transform json --markers markers.txt --animations animations.txt < layout.txt > layout.json
 ```
 
 Built-in transform files live in `transforms/`:
@@ -477,7 +479,7 @@ done
 Run custom transform:
 
 ```sh
-./spratconvert --transform ./my.transform < layout.txt > layout.custom.txt
+./build/spratconvert --transform ./my.transform < layout.txt > layout.custom.txt
 ```
 
 Column meanings for the `sprite` line in trim mode:
@@ -492,7 +494,7 @@ Column meanings for the `sprite` line in trim mode:
 `spratpack` reads that layout from stdin and writes the final PNG spritesheet to stdout:
 
 ```sh
-./spratpack < layout.txt > spritesheet.png
+./build/spratpack < layout.txt > spritesheet.png
 ```
 
 Optional frame divider overlay:
@@ -505,7 +507,7 @@ Optional frame divider overlay:
 Example:
 
 ```sh
-./spratpack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet.png
+./build/spratpack --frame-lines --line-width 2 --line-color 0,255,0 < layout.txt > spritesheet.png
 ```
 
 ## Sprite Detection (`spratframes`)
@@ -513,7 +515,7 @@ Example:
 `spratframes` scans an image and detects individual sprite boundaries. It can use transparency-based detection (finding connected components of non-transparent pixels) or look for specific rectangle borders.
 
 ```sh
-./spratframes sheet.png > frames.spratframes
+./build/spratframes sheet.png > frames.spratframes
 ```
 
 Options:
@@ -525,7 +527,7 @@ Options:
 
 Example with magenta borders:
 ```sh
-./spratframes --has-rectangles --rectangle-color "#FF00FF" sheet.png > frames.txt
+./build/spratframes --has-rectangles --rectangle-color "#FF00FF" sheet.png > frames.txt
 ```
 
 ## Unpacking Atlases (`spratunpack`)
@@ -535,21 +537,21 @@ It can read atlas PNG from a file path, `-`, or stdin (when no atlas path is pro
 
 **Recommended One-liner:**
 ```sh
-./spratframes atlas.png | ./spratunpack --output ./extracted
+./build/spratframes atlas.png | ./build/spratunpack --output ./extracted
 ```
 When piped from `spratframes`, `spratunpack` automatically detects the atlas path from the stream.
 
 **Manual usage:**
 ```sh
-./spratunpack atlas.png --frames atlas.json --output ./extracted
+./build/spratunpack atlas.png --frames atlas.json --output ./extracted
 ```
 
 If no output directory is specified, it writes a **TAR archive** to stdout, making it easy to pipe to other tools or network transfers.
 
 ```sh
-./spratunpack atlas.png > sprites.tar
+./build/spratunpack atlas.png > sprites.tar
 # Equivalent stdin form:
-cat atlas.png | ./spratunpack --frames atlas.json > sprites.tar
+cat atlas.png | ./build/spratunpack --frames atlas.json > sprites.tar
 ```
 
 Options:
