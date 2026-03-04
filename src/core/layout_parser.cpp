@@ -39,18 +39,19 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
     std::istringstream tail(line.substr(pos));
     std::string token;
     while (tail >> token) {
-        tokens.push_back(token);
-    }
-
-    if (tokens.empty()) {
-        error = "sprite line is missing numeric fields";
-        return false;
-    }
-
-    bool rotated = false;
-    if (!tokens.empty() && tokens.back() == "rotated") {
-        rotated = true;
-        tokens.pop_back();
+        if (token == "rotated") {
+            parsed.rotated = true;
+        } else if (token == "dither") {
+            parsed.dither = true;
+        } else if (token.starts_with("colors=")) {
+            std::string val = token.substr(7);
+            if (!parse_int(val, parsed.colors) || (parsed.colors != 0 && (parsed.colors < 2 || parsed.colors > 256))) {
+                error = "invalid colors value (must be 0 or 2-256): " + val;
+                return false;
+            }
+        } else {
+            tokens.push_back(token);
+        }
     }
 
     if (tokens.empty()) {
@@ -102,7 +103,6 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         }
     }
 
-    parsed.rotated = rotated;
     out = parsed;
     return true;
 }

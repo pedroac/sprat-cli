@@ -39,6 +39,10 @@
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
 
+#ifdef SPRAT_HAS_ZOPFLI
+#include <zopflipng/zopflipng_lib.h>
+#endif
+
 namespace {
 
 constexpr size_t NUM_CHANNELS = 4;
@@ -260,10 +264,16 @@ void print_usage() {
               << "  --line-width N         Outline thickness in pixels (default: 1)\n"
               << "  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n"
               << "  --threads N            Number of worker threads\n"
+              << "  --debug                Enable detailed error reporting and debug visualization\n"
+              << "  --protect              Protect output with basic obfuscation\n"
+              << "  --zopfli               Optimize output PNG using Zopfli (very slow)\n"
               << "  --help, -h             Show this help message\n";
 }
 
 int run_spratpack(int argc, char** argv) {
+    bool debug = false;
+    bool protect = false;
+    bool use_zopfli = false;
     bool draw_frame_lines = false;
     int line_width = 1;
     constexpr unsigned char DEFAULT_COLOR_RED = 255;
@@ -282,6 +292,12 @@ int run_spratpack(int argc, char** argv) {
         } else if (arg == "--version" || arg == "-v") {
             std::cout << "spratpack version " << SPRAT_VERSION << "\n";
             return 0;
+        } else if (arg == "--debug") {
+            debug = true;
+        } else if (arg == "--protect") {
+            protect = true;
+        } else if (arg == "--zopfli") {
+            use_zopfli = true;
         } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern = argv[++i];
         } else if (arg == "--atlas-index" && i + 1 < argc) {
@@ -320,6 +336,10 @@ int run_spratpack(int argc, char** argv) {
             }
             thread_limit = static_cast<unsigned int>(parsed);
         }
+    }
+
+    if (debug) {
+        draw_frame_lines = true;
     }
 
     Layout layout;
@@ -397,6 +417,39 @@ int run_spratpack(int argc, char** argv) {
             // Use RAII for image data
             struct StbImageDeleter { void operator()(unsigned char* p) const { stbi_image_free(p); } };
             std::unique_ptr<unsigned char, StbImageDeleter> image_ptr(data);
+
+            if (s.colors > 0) {
+                auto quantize = [](unsigned char v, int levels, int x, int y, bool dither) -> unsigned char {
+                    if (levels <= 1) return 0;
+                    if (levels >= 256) return v;
+                    
+                    float val = v / 255.0f;
+                    if (dither) {
+                        static const float bayer[4][4] = {
+                            { 0.0f/16, 8.0f/16, 2.0f/16, 10.0f/16 },
+                            { 12.0f/16, 4.0f/16, 14.0f/16, 6.0f/16 },
+                            { 3.0f/16, 11.0f/16, 1.0f/16, 9.0f/16 },
+                            { 15.0f/16, 7.0f/16, 13.0f/16, 5.0f/16 }
+                        };
+                        float threshold = bayer[y % 4][x % 4];
+                        val += (threshold - 0.5f) / (levels - 1);
+                        if (val < 0.0f) val = 0.0f;
+                        if (val > 1.0f) val = 1.0f;
+                    }
+                    
+                    int level = static_cast<int>(val * (levels - 1) + 0.5f);
+                    return static_cast<unsigned char>((level * 255) / (levels - 1));
+                };
+
+                for (int y = 0; y < h; ++y) {
+                    for (int x = 0; x < w; ++x) {
+                        for (int c = 0; c < 3; ++c) { // R, G, B
+                            size_t off = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * NUM_CHANNELS + static_cast<size_t>(c);
+                            image_ptr.get()[off] = quantize(image_ptr.get()[off], s.colors, x, y, s.dither);
+                        }
+                    }
+                }
+            }
 
             const int source_x = s.has_trim ? s.src_x : 0;
             const int source_y = s.has_trim ? s.src_y : 0;
@@ -510,6 +563,28 @@ int run_spratpack(int argc, char** argv) {
         if (stbi_write_png_to_func(write_to_vec, &png_data, atlas_width, atlas_height, 4, atlas_data.data(), atlas_width * 4) == 0) {
             std::cerr << "Error: Failed to encode PNG for atlas " << atlas_idx << "\n";
             return 1;
+        }
+
+#ifdef SPRAT_HAS_ZOPFLI
+        if (use_zopfli) {
+            ZopfliPNGOptions options;
+            std::vector<unsigned char> optimized;
+            if (ZopfliPNGCompress(png_data, options, false, &optimized) == 0) {
+                png_data = std::move(optimized);
+            } else {
+                std::cerr << "Warning: Zopfli optimization failed for atlas " << atlas_idx << "\n";
+            }
+        }
+#endif
+
+        if (protect) {
+            const std::string key = "sprat";
+            std::vector<unsigned char> protected_data = {'S', 'P', 'R', 'A', 'T', '!'};
+            protected_data.reserve(png_data.size() + protected_data.size());
+            for (size_t i = 0; i < png_data.size(); ++i) {
+                protected_data.push_back(png_data[i] ^ static_cast<unsigned char>(key[i % key.size()]));
+            }
+            png_data = std::move(protected_data);
         }
 
         if (use_tar) {

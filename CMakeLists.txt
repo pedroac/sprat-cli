@@ -142,6 +142,20 @@ else()
     pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
 endif()
 
+if(PkgConfig_FOUND)
+    pkg_check_modules(ZOPFLIPNG zopflipng)
+endif()
+
+if(NOT ZOPFLIPNG_FOUND)
+    find_library(ZOPFLIPNG_LIBRARY NAMES zopflipng libzopflipng)
+    find_path(ZOPFLIPNG_INCLUDE_DIR NAMES zopflipng/zopflipng_lib.h)
+    if(ZOPFLIPNG_LIBRARY AND ZOPFLIPNG_INCLUDE_DIR)
+        set(ZOPFLIPNG_LIBRARIES ${ZOPFLIPNG_LIBRARY})
+        set(ZOPFLIPNG_INCLUDE_DIRS ${ZOPFLIPNG_INCLUDE_DIR})
+        set(ZOPFLIPNG_FOUND TRUE)
+    endif()
+endif()
+
 add_executable(spratlayout
     src/spratlayout.cpp
     src/commands/spratlayout_command.cpp
@@ -156,6 +170,11 @@ add_executable(spratpack
     src/commands/spratpack_command.cpp
 )
 target_link_libraries(spratpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
+if(ZOPFLIPNG_FOUND)
+    target_link_libraries(spratpack PRIVATE ${ZOPFLIPNG_LIBRARIES})
+    target_include_directories(spratpack PRIVATE ${ZOPFLIPNG_INCLUDE_DIRS})
+    target_compile_definitions(spratpack PRIVATE SPRAT_HAS_ZOPFLI)
+endif()
 target_include_directories(spratpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratpack SYSTEM PRIVATE ${STB_DIR})
 target_include_directories(spratpack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

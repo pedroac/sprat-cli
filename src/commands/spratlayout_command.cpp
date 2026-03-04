@@ -1367,6 +1367,7 @@ void print_usage() {
               << "  --multipack                Split into multiple atlases if they don't fit\n"
               << "  --sort name|none           Order of sprites in layout (default: name for folders)\n"
               << "  --threads N                Number of worker threads\n"
+              << "  --debug                    Enable detailed error reporting and debug visualization\n"
               << "  --help, -h                 Show this help message\n";
 }
 
@@ -1922,8 +1923,15 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
                                      double scale,
                                      int extrude,
                                      bool trim_transparent,
-                                     const std::vector<Sprite>& sprites) {
+                                     const std::vector<Sprite>& sprites,
+                                     bool debug) {
     std::ostringstream output;
+    if (debug) {
+        output << "# Sprat Layout Debug Info\n";
+        output << "# Scale: " << scale << "\n";
+        output << "# Atlases: " << atlases.size() << "\n";
+        output << "# Total Sprites: " << sprites.size() << "\n";
+    }
     output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
     if (extrude > 0) {
         output << "extrude " << extrude << "\n";
@@ -2660,6 +2668,7 @@ bool pack_atlases(
 }
 
 int run_spratlayout(int argc, char** argv) {
+    bool debug = env_flag_enabled("SPRAT_DEBUG");
     fs::path folder;
     std::string requested_profile_name;
     std::string profiles_config_path;
@@ -2709,6 +2718,8 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--version" || arg == "-v") {
             std::cout << "spratlayout version " << SPRAT_VERSION << "\n";
             return 0;
+        } else if (arg == "--debug") {
+            debug = true;
         } else if (arg == "--profile" && i + 1 < argc) {
             requested_profile_name = argv[++i];
         } else if (arg == "--profiles-config" && i + 1 < argc) {
@@ -3980,7 +3991,8 @@ int run_spratlayout(int argc, char** argv) {
                         prewarm_scale,
                         extrude,
                         prewarm_trim_transparent,
-                        prewarm_candidate.sprites
+                        prewarm_candidate.sprites,
+                        false
                     );
                     save_output_cache(
                         build_output_cache_path(cache_path, prewarm_signature),
@@ -4085,7 +4097,8 @@ int run_spratlayout(int argc, char** argv) {
         scale,
         extrude,
         trim_transparent,
-        sprites
+        sprites,
+        debug
     );
 
 #ifdef _WIN32

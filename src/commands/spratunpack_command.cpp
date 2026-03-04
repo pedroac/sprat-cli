@@ -79,6 +79,7 @@ struct Config {
     bool input_from_stdin = false;
     bool frames_from_stdin = false;
     bool stdout_mode = false;
+    bool debug = false;
     unsigned int threads = 0;
 };
 
@@ -105,41 +106,51 @@ private:
     std::vector<SpriteFrame> frames_;
 
     bool load_image() {
-        unsigned char* data = nullptr;
+        std::vector<unsigned char> buffer;
         fs::path actual_input_path = config_.input_path;
         if (actual_input_path.empty() && !config_.detected_input_path.empty()) {
             actual_input_path = config_.detected_input_path;
         }
 
         if (actual_input_path.empty() && config_.input_from_stdin) {
-            const std::vector<unsigned char> stdin_bytes{
-                std::istreambuf_iterator<char>(std::cin),
-                std::istreambuf_iterator<char>()};
-            if (stdin_bytes.empty()) {
-                std::cerr << "Error: No atlas image data received on stdin\n";
-                return false;
-            }
-            data = stbi_load_from_memory(
-                stdin_bytes.data(),
-                static_cast<int>(stdin_bytes.size()),
-                &width_,
-                &height_,
-                &channels_,
-                NUM_CHANNELS);
+            buffer.assign(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
         } else if (!actual_input_path.empty()) {
-            data = stbi_load(
-                actual_input_path.string().c_str(), &width_, &height_, &channels_, NUM_CHANNELS);
+            std::ifstream in(actual_input_path, std::ios::binary);
+            if (in) {
+                buffer.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            }
         } else {
             std::cerr << "Error: No input atlas provided.\n";
             return false;
         }
 
-        if (data == nullptr) {
-            if (actual_input_path.empty()) {
-                std::cerr << "Error: Failed to load atlas image from stdin (Reason: " << stbi_failure_reason() << ")\n";
-            } else {
-                std::cerr << "Error: Failed to load image " << to_quoted(actual_input_path.string()) << " (Reason: " << stbi_failure_reason() << ")\n";
+        if (buffer.empty()) {
+            std::cerr << "Error: No atlas image data received\n";
+            return false;
+        }
+
+        // Check for obfuscation
+        const std::string prefix = "SPRAT!";
+        const std::string key = "sprat";
+        if (buffer.size() >= prefix.size() && std::equal(prefix.begin(), prefix.end(), buffer.begin())) {
+            std::vector<unsigned char> deobfuscated;
+            deobfuscated.reserve(buffer.size() - prefix.size());
+            for (size_t i = prefix.size(); i < buffer.size(); ++i) {
+                deobfuscated.push_back(buffer[i] ^ static_cast<unsigned char>(key[(i - prefix.size()) % key.size()]));
             }
+            buffer = std::move(deobfuscated);
+        }
+
+        unsigned char* data = stbi_load_from_memory(
+            buffer.data(),
+            static_cast<int>(buffer.size()),
+            &width_,
+            &height_,
+            &channels_,
+            NUM_CHANNELS);
+
+        if (data == nullptr) {
+            std::cerr << "Error: Failed to load atlas image (Reason: " << stbi_failure_reason() << ")\n";
             return false;
         }
 
@@ -697,6 +708,7 @@ void print_usage() {
               << "  -f, --frames PATH          Frames definition file (or '-' for stdin)\n"
               << "  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n"
               << "  -j, --threads N            Number of threads to use (default: auto)\n"
+              << "  --debug                    Enable detailed error reporting\n"
               << "  -h, --help                 Show this help message\n";
 }
 
@@ -705,6 +717,7 @@ void print_usage() {
 int run_spratunpack(int argc, char** argv) {
     Config config;
     config.output_dir = "";
+    config.debug = (std::getenv("SPRAT_DEBUG") != nullptr);
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -714,6 +727,8 @@ int run_spratunpack(int argc, char** argv) {
         } else if (arg == "--version" || arg == "-v") {
             std::cout << "spratunpack version " << SPRAT_VERSION << "\n";
             return 0;
+        } else if (arg == "--debug") {
+            config.debug = true;
         } else if (arg == "-") {
             if (config.input_path.empty() && !config.input_from_stdin) {
                 config.input_from_stdin = true;

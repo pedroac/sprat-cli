@@ -32,6 +32,8 @@ struct Sprite {
     bool has_trim = false;
     bool rotated = false;
     int atlas_index = 0;
+    bool dither = false;
+    int colors = 0;
     std::vector<Marker> markers;
 };
 
