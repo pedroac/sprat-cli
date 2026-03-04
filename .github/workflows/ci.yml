@@ -194,7 +194,8 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
-          replacesExistingArtifacts: true
+          replacesArtifacts: true
+          immutableCreate: false
           tag: ${{ steps.release_tag.outputs.tag }}
           name: Release ${{ steps.release_tag.outputs.tag }}
           commit: ${{ github.sha }}
