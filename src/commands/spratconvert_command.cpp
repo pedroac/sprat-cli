@@ -1336,8 +1336,20 @@ int run_spratconvert(int argc, char** argv) {
     }
 
     std::map<std::string, std::string> global_vars;
-    global_vars["atlas_width"] = std::to_string(layout.atlas_width);
-    global_vars["atlas_height"] = std::to_string(layout.atlas_height);
+    if (!layout.atlases.empty()) {
+        global_vars["atlas_width"] = std::to_string(layout.atlases[0].width);
+        global_vars["atlas_height"] = std::to_string(layout.atlases[0].height);
+    } else {
+        global_vars["atlas_width"] = "0";
+        global_vars["atlas_height"] = "0";
+    }
+    global_vars["atlas_count"] = std::to_string(layout.atlases.size());
+    std::ostringstream atlases_json;
+    for (size_t i = 0; i < layout.atlases.size(); ++i) {
+        if (i > 0) atlases_json << ",";
+        atlases_json << "{\"width\":" << layout.atlases[i].width << ",\"height\":" << layout.atlases[i].height << "}";
+    }
+    global_vars["atlases_json"] = atlases_json.str();
     global_vars["scale"] = format_double(layout.scale);
     global_vars["sprite_count"] = std::to_string(layout.sprites.size());
     global_vars["marker_count"] = std::to_string(marker_items.size());
@@ -1421,6 +1433,11 @@ int run_spratconvert(int argc, char** argv) {
         const Sprite& s = layout.sprites[i];
         std::map<std::string, std::string> vars = global_vars;
         vars["index"] = std::to_string(i);
+        vars["atlas_index"] = std::to_string(s.atlas_index);
+        if (s.atlas_index >= 0 && static_cast<size_t>(s.atlas_index) < layout.atlases.size()) {
+            vars["atlas_width"] = std::to_string(layout.atlases[static_cast<size_t>(s.atlas_index)].width);
+            vars["atlas_height"] = std::to_string(layout.atlases[static_cast<size_t>(s.atlas_index)].height);
+        }
         vars["path"] = s.path;
         vars["name"] = sprite_names[i];
         vars["name_json"] = escape_json(sprite_names[i]);

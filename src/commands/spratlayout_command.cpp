@@ -54,6 +54,7 @@ namespace fs = std::filesystem;
 #include <archive_entry.h>
 #include "core/cli_parse.h"
 
+#include <utility>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -96,6 +97,7 @@ struct ProfileDefinition {
     std::optional<double> scale;
     std::optional<bool> trim_transparent;
     std::optional<bool> rotate;
+    std::optional<bool> multipack;
     std::optional<unsigned int> threads;
     std::optional<std::pair<int, int>> source_resolution;
     std::optional<std::pair<int, int>> target_resolution;
@@ -583,6 +585,12 @@ struct Sprite {
     int trim_left = 0, trim_top = 0;
     int trim_right = 0, trim_bottom = 0;
     bool rotated = false;
+    int atlas_index = 0;
+};
+
+struct Atlas {
+    int width = 0;
+    int height = 0;
 };
 
 struct ImageMeta {
@@ -1346,6 +1354,7 @@ void print_usage() {
               << "  --scale F                  Pre-scale factor (0 < F <= 1)\n"
               << "  --trim-transparent         Enable transparent-border trimming\n"
               << "  --rotate                   Allow 90-degree sprite rotation during packing\n"
+              << "  --multipack                Split into multiple atlases if they don't fit\n"
               << "  --threads N                Number of worker threads\n"
               << "  --help, -h                 Show this help message\n";
 }
@@ -1894,29 +1903,33 @@ bool try_apply_layout_seed(const LayoutSeedCache& seed,
     return true;
 }
 
-std::string build_layout_output_text(int atlas_width,
-                                     int atlas_height,
+std::string build_layout_output_text(const std::vector<Atlas>& atlases,
                                      double scale,
                                      bool trim_transparent,
                                      const std::vector<Sprite>& sprites) {
     std::ostringstream output;
-    output << "atlas " << atlas_width << "," << atlas_height << "\n";
     output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
-    for (const auto& s : sprites) {
-        std::string path = s.path;
-        // Standardize path separators to forward slashes for output consistency
-        std::replace(path.begin(), path.end(), '\\', '/');
-        output << "sprite " << to_quoted(path) << " "
-               << s.x << "," << s.y << " "
-               << s.w << "," << s.h;
-        if (trim_transparent) {
-            output << " " << s.trim_left << "," << s.trim_top
-                   << " " << s.trim_right << "," << s.trim_bottom;
+    for (size_t i = 0; i < atlases.size(); ++i) {
+        output << "atlas " << atlases[i].width << "," << atlases[i].height << "\n";
+        for (const auto& s : sprites) {
+            if (s.atlas_index != static_cast<int>(i)) {
+                continue;
+            }
+            std::string path = s.path;
+            // Standardize path separators to forward slashes for output consistency
+            std::replace(path.begin(), path.end(), '\\', '/');
+            output << "sprite " << to_quoted(path) << " "
+                   << s.x << "," << s.y << " "
+                   << s.w << "," << s.h;
+            if (trim_transparent) {
+                output << " " << s.trim_left << "," << s.trim_top
+                       << " " << s.trim_right << "," << s.trim_bottom;
+            }
+            if (s.rotated) {
+                output << " rotated";
+            }
+            output << "\n";
         }
-        if (s.rotated) {
-            output << " rotated";
-        }
-        output << "\n";
     }
     return output.str();
 }
@@ -2467,6 +2480,151 @@ bool pick_better_layout_candidate(
 
 } // namespace
 
+bool pack_atlases(
+    std::vector<Sprite>& sprites,
+    int max_w,
+    int max_h,
+    int padding,
+    Mode mode,
+    OptimizeTarget optimize_target,
+    bool allow_rotate,
+    std::vector<Atlas>& out_atlases
+) {
+    if (sprites.empty()) {
+        return true;
+    }
+
+    std::vector<Sprite> remaining = sprites;
+    std::vector<Sprite> all_packed;
+    int atlas_index = 0;
+
+    while (!remaining.empty()) {
+        // For each atlas, we try to pack as many as possible.
+        // We use a simplified version of the packing logic:
+        // 1. Sort remaining by area (descending)
+        // 2. Try to find the best atlas size for THESE remaining sprites within max_w/max_h
+        // 3. Pack as many as fit.
+        // 4. Move packed to all_packed, update remaining.
+
+        std::vector<Sprite> current_batch = remaining;
+        // Sort current batch for better packing
+        sort_sprites_by_mode(current_batch, SortMode::Area);
+
+        int best_w = max_w;
+        int best_h = max_h;
+        std::vector<Sprite> best_packed_in_batch;
+
+        if (mode == Mode::POT) {
+            // Find smallest POT that fits at least the first (largest) sprite
+            int min_w = next_power_of_two(std::max(1, current_batch[0].w + padding));
+            int min_h = next_power_of_two(std::max(1, current_batch[0].h + padding));
+            if (min_w > max_w || min_h > max_h) {
+                // If the largest sprite doesn't fit in max POT, we can't pack it.
+                // But we already checked this in run_spratlayout.
+                return false;
+            }
+
+            // Simple POT search for this batch:
+            // Just use max_w/max_h as the bin size and pack as many as possible.
+            // Then shrink to tight bounds.
+            std::unique_ptr<Node> root = std::make_unique<Node>(0, 0, max_w, max_h);
+            std::vector<Sprite> trial = current_batch;
+            // try_pack packs greedily and stops at the first that doesn't fit if we modify it,
+            // or we can use a version that just skips.
+            // Let's use a greedy first-fit approach for multipack.
+        }
+
+        // To keep it simple and consistent with existing logic,
+        // we'll pack into a FIXED bin of max_w x max_h using MaxRects (compact-like).
+        std::vector<Sprite> packed_batch;
+        std::vector<Sprite> still_remaining;
+        
+        std::vector<Rect> free_rects;
+        free_rects.push_back({0, 0, max_w, max_h});
+
+        int used_w = 0;
+        int used_h = 0;
+
+        for (auto& s : current_batch) {
+            int rw = s.w + padding;
+            int rh = s.h + padding;
+            int rrw = rh;
+            int rrh = rw;
+
+            int best_rect_idx = -1;
+            bool best_rotated = false;
+            int best_short_fit = std::numeric_limits<int>::max();
+
+            for (size_t i = 0; i < free_rects.size(); ++i) {
+                const Rect& fr = free_rects[i];
+                if (rw <= fr.w && rh <= fr.h) {
+                    int short_fit = std::min(fr.w - rw, fr.h - rh);
+                    if (short_fit < best_short_fit) {
+                        best_short_fit = short_fit;
+                        best_rect_idx = static_cast<int>(i);
+                        best_rotated = false;
+                    }
+                }
+                if (allow_rotate && rrw <= fr.w && rrh <= fr.h && rw != rh) {
+                    int short_fit = std::min(fr.w - rrw, fr.h - rrh);
+                    if (short_fit < best_short_fit) {
+                        best_short_fit = short_fit;
+                        best_rect_idx = static_cast<int>(i);
+                        best_rotated = true;
+                    }
+                }
+            }
+
+            if (best_rect_idx >= 0) {
+                if (best_rotated) {
+                    std::swap(s.w, s.h);
+                    s.rotated = true;
+                } else {
+                    s.rotated = false;
+                }
+                s.x = free_rects[static_cast<size_t>(best_rect_idx)].x;
+                s.y = free_rects[static_cast<size_t>(best_rect_idx)].y;
+                s.atlas_index = atlas_index;
+
+                Rect used = {s.x, s.y, s.w + padding, s.h + padding};
+                used_w = std::max(used_w, s.x + s.w);
+                used_h = std::max(used_h, s.y + s.h);
+
+                std::vector<Rect> next_free;
+                for (const auto& fr : free_rects) {
+                    split_free_rect(fr, used, next_free);
+                }
+                free_rects = std::move(next_free);
+                prune_free_rects(free_rects);
+                packed_batch.push_back(s);
+            } else {
+                still_remaining.push_back(s);
+            }
+        }
+
+        if (packed_batch.empty()) {
+            // Should not happen if max_w/max_h >= largest sprite
+            return false;
+        }
+
+        // POT adjustment if needed
+        int final_w = used_w;
+        int final_h = used_h;
+        if (mode == Mode::POT) {
+            final_w = next_power_of_two(used_w);
+            final_h = next_power_of_two(used_h);
+        }
+
+        out_atlases.push_back({final_w, final_h});
+        all_packed.insert(all_packed.end(), packed_batch.begin(), packed_batch.end());
+        remaining = still_remaining;
+        atlas_index++;
+    }
+
+    sprites = all_packed;
+    return true;
+}
+
 int run_spratlayout(int argc, char** argv) {
     fs::path folder;
     std::string requested_profile_name;
@@ -2499,6 +2657,8 @@ int run_spratlayout(int argc, char** argv) {
     bool has_trim_override = false;
     bool allow_rotate = false;
     bool has_rotate_override = false;
+    bool multipack = false;
+    bool has_multipack_override = false;
     unsigned int thread_limit = 0;
     bool has_threads_override = false;
 
@@ -2606,7 +2766,10 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--rotate") {
             allow_rotate = true;
             has_rotate_override = true;
-        } else if (arg == "--threads" && i + 1 < argc) {
+        } else if (arg == "--multipack") {
+            multipack = true;
+            has_multipack_override = true;
+        } else if (arg == "--threads") {
             std::string value = argv[++i];
             if (!parse_positive_uint(value, thread_limit)) {
                 std::cerr << "Invalid thread count: " << value << "\n";
@@ -2781,11 +2944,14 @@ int run_spratlayout(int argc, char** argv) {
         if (!has_trim_override && selected_profile.trim_transparent) {
             trim_transparent = *selected_profile.trim_transparent;
         }
-        if (!has_threads_override && selected_profile.threads) {
-            thread_limit = *selected_profile.threads;
-        }
         if (!has_rotate_override && selected_profile.rotate) {
             allow_rotate = *selected_profile.rotate;
+        }
+        if (!has_multipack_override && selected_profile.multipack) {
+            multipack = *selected_profile.multipack;
+        }
+        if (!has_threads_override && selected_profile.threads) {
+            thread_limit = *selected_profile.threads;
         }
         if (!has_source_resolution && selected_profile.source_resolution) {
             source_resolution_width = selected_profile.source_resolution->first;
@@ -3168,7 +3334,16 @@ int run_spratlayout(int argc, char** argv) {
         }
     }
 
-    if (!reused_layout_seed) {
+    std::vector<Atlas> atlases;
+    if (reused_layout_seed) {
+        atlases.push_back({atlas_width, atlas_height});
+        for (auto& s : sprites) { s.atlas_index = 0; }
+    } else if (multipack) {
+        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, atlases)) {
+            std::cerr << "Error: failed to compute multipack layout\n";
+            return 1;
+        }
+    } else {
         std::unique_ptr<Node> root;
         const std::array<SortMode, k_sort_mode_count> sort_modes = {
             SortMode::Area,
@@ -3183,117 +3358,119 @@ int run_spratlayout(int argc, char** argv) {
             RectHeuristic::BottomLeft
         };
 
-    if (mode == Mode::POT) {
-        int min_pot_width = next_power_of_two(max_width);
-        int min_pot_height = next_power_of_two(max_height);
-        if (min_pot_width <= 0 || min_pot_height <= 0) {
-            std::cerr << "Error: dimensions are too large\n";
-            return 1;
-        }
-
-        // First, find an upper bound that can pack, then search all POT
-        // rectangles up to that area and pick the least wasteful successful fit.
-        int side = std::max(min_pot_width, min_pot_height);
-        std::vector<Sprite> best_sprites = sprites;
-        int best_w = 0;
-        int best_h = 0;
-        size_t best_area = 0;
-        size_t max_candidate_area = 0;
-        bool have_best = false;
-
-        while (true) {
-            if (max_width_limit > 0 && side > max_width_limit) {
-                std::cerr << "Error: no POT layout fits within max width\n";
+        if (mode == Mode::POT) {
+            int min_pot_width = next_power_of_two(max_width);
+            int min_pot_height = next_power_of_two(max_height);
+            if (min_pot_width <= 0 || min_pot_height <= 0) {
+                std::cerr << "Error: dimensions are too large\n";
                 return 1;
             }
-            if (max_height_limit > 0 && side > max_height_limit) {
-                std::cerr << "Error: no POT layout fits within max height\n";
-                return 1;
-            }
-            for (SortMode sort_mode : sort_modes) {
-                std::vector<Sprite> trial_sprites = sprites;
-                sort_sprites_by_mode(trial_sprites, sort_mode);
-                root = std::make_unique<Node>(0, 0, side, side);
-                if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
-                    continue;
-                }
-                size_t area = static_cast<size_t>(side) * static_cast<size_t>(side);
-                best_sprites = std::move(trial_sprites);
-                best_w = side;
-                best_h = side;
-                best_area = area;
-                max_candidate_area = area;
-                have_best = true;
-                break;
-            }
-            if (have_best) {
-                break;
-            }
-            if (side > std::numeric_limits<int>::max() / 2) {
-                std::cerr << "Error: atlas dimensions overflow\n";
-                return 1;
-            }
-            side *= 2;
-        }
 
-        std::vector<int> pot_widths;
-        std::vector<int> pot_heights;
-        for (int w = min_pot_width; w > 0 && std::cmp_less_equal(w, best_area); w *= 2) {
-            pot_widths.push_back(w);
-            if (w > std::numeric_limits<int>::max() / 2) {
-                break;
-            }
-        }
-        for (int h = min_pot_height; h > 0 && std::cmp_less_equal(h, best_area); h *= 2) {
-            pot_heights.push_back(h);
-            if (h > std::numeric_limits<int>::max() / 2) {
-                break;
-            }
-        }
+            // First, find an upper bound that can pack, then search all POT
+            // rectangles up to that area and pick the least wasteful successful fit.
+            int side = std::max(min_pot_width, min_pot_height);
+            std::vector<Sprite> best_sprites = sprites;
+            int best_w = 0;
+            int best_h = 0;
+            size_t best_area = 0;
+            size_t max_candidate_area = 0;
+            bool have_best = false;
 
-        for (int w : pot_widths) {
-            for (int h : pot_heights) {
-                size_t area = static_cast<size_t>(w) * static_cast<size_t>(h);
-                if (area > max_candidate_area) {
-                    continue;
+            while (true) {
+                if (max_width_limit > 0 && side > max_width_limit) {
+                    std::cerr << "Error: no POT layout fits within max width\n";
+                    return 1;
                 }
-                if (max_width_limit > 0 && w > max_width_limit) {
-                    continue;
+                if (max_height_limit > 0 && side > max_height_limit) {
+                    std::cerr << "Error: no POT layout fits within max height\n";
+                    return 1;
                 }
-                if (max_height_limit > 0 && h > max_height_limit) {
-                    continue;
-                }
-                if (!pick_better_layout_candidate(area, w, h, have_best, best_area, best_w, best_h, optimize_target)) {
-                    continue;
-                }
-
                 for (SortMode sort_mode : sort_modes) {
                     std::vector<Sprite> trial_sprites = sprites;
                     sort_sprites_by_mode(trial_sprites, sort_mode);
-                    root = std::make_unique<Node>(0, 0, w, h);
+                    root = std::make_unique<Node>(0, 0, side, side);
                     if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
                         continue;
                     }
-
+                    size_t area = static_cast<size_t>(side) * static_cast<size_t>(side);
                     best_sprites = std::move(trial_sprites);
-                    best_w = w;
-                    best_h = h;
+                    best_w = side;
+                    best_h = side;
                     best_area = area;
+                    max_candidate_area = area;
                     have_best = true;
                     break;
                 }
+                if (have_best) {
+                    break;
+                }
+                if (side > std::numeric_limits<int>::max() / 2) {
+                    std::cerr << "Error: atlas dimensions overflow\n";
+                    return 1;
+                }
+                side *= 2;
             }
-        }
 
-        if (!have_best) {
-            std::cerr << "Error: failed to compute pot layout\n";
-            return 1;
-        }
+            std::vector<int> pot_widths;
+            std::vector<int> pot_heights;
+            for (int w = min_pot_width; w > 0 && std::cmp_less_equal(w, best_area); w *= 2) {
+                pot_widths.push_back(w);
+                if (w > std::numeric_limits<int>::max() / 2) {
+                    break;
+                }
+            }
+            for (int h = min_pot_height; h > 0 && std::cmp_less_equal(h, best_area); h *= 2) {
+                pot_heights.push_back(h);
+                if (h > std::numeric_limits<int>::max() / 2) {
+                    break;
+                }
+            }
 
-        sprites = std::move(best_sprites);
-        atlas_width = best_w;
-        atlas_height = best_h;
-    } else if (mode == Mode::COMPACT) {
+            for (int w : pot_widths) {
+                for (int h : pot_heights) {
+                    size_t area = static_cast<size_t>(w) * static_cast<size_t>(h);
+                    if (area > max_candidate_area) {
+                        continue;
+                    }
+                    if (max_width_limit > 0 && w > max_width_limit) {
+                        continue;
+                    }
+                    if (max_height_limit > 0 && h > max_height_limit) {
+                        continue;
+                    }
+                    if (!pick_better_layout_candidate(area, w, h, have_best, best_area, best_w, best_h, optimize_target)) {
+                        continue;
+                    }
+
+                    for (SortMode sort_mode : sort_modes) {
+                        std::vector<Sprite> trial_sprites = sprites;
+                        sort_sprites_by_mode(trial_sprites, sort_mode);
+                        root = std::make_unique<Node>(0, 0, w, h);
+                        if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
+                            continue;
+                        }
+
+                        best_sprites = std::move(trial_sprites);
+                        best_w = w;
+                        best_h = h;
+                        best_area = area;
+                        have_best = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!have_best) {
+                std::cerr << "Error: failed to compute pot layout\n";
+                return 1;
+            }
+
+            sprites = std::move(best_sprites);
+            atlas_width = best_w;
+            atlas_height = best_h;
+            atlases.push_back({atlas_width, atlas_height});
+            for (auto& s : sprites) { s.atlas_index = 0; }
+        } else if (mode == Mode::COMPACT) {
         if (sum_width <= 0 || sum_height <= 0) {
             std::cerr << "Error: compact bounds are invalid\n";
             return 1;
@@ -3412,418 +3589,428 @@ int run_spratlayout(int argc, char** argv) {
             return 1;
         }
 
-        // Guided compact search (no brute-force width scan):
-        // start from fast/seed anchors, then probe a small nearby window.
-        int fast_target_width = max_width;
-        if (total_area > 0) {
-            long double area_root = std::sqrt(static_cast<long double>(total_area));
-            if (area_root <= static_cast<long double>(std::numeric_limits<int>::max())) {
-                int candidate = static_cast<int>(std::ceil(area_root));
-                fast_target_width = std::max(candidate, fast_target_width);
-            }
-        }
-        fast_target_width = std::min(fast_target_width, width_upper_bound);
-        fast_target_width = std::max(fast_target_width, max_width);
-
-        std::unordered_set<int> seen_widths;
-        std::vector<int> width_candidates;
-        auto add_width_candidate = [&](int width) {
-            if (width < max_width || width > width_upper_bound) {
-                return;
-            }
-            if (seen_widths.insert(width).second) {
-                width_candidates.push_back(width);
-            }
-        };
-
-        add_width_candidate(seed_width);
-        add_width_candidate(fast_target_width);
-        if (have_layout_seed) {
-            int seed_hint_width = seed_cache.atlas_width;
-            if (padding > seed_cache.padding) {
-                int expanded = 0;
-                if (checked_add_int(seed_hint_width, padding - seed_cache.padding, expanded)) {
-                    seed_hint_width = expanded;
+            // Guided compact search (no brute-force width scan):
+            // start from fast/seed anchors, then probe a small nearby window.
+            int fast_target_width = max_width;
+            if (total_area > 0) {
+                long double area_root = std::sqrt(static_cast<long double>(total_area));
+                if (area_root <= static_cast<long double>(std::numeric_limits<int>::max())) {
+                    int candidate = static_cast<int>(std::ceil(area_root));
+                    fast_target_width = std::max(candidate, fast_target_width);
                 }
             }
-            add_width_candidate(seed_hint_width);
-        }
+            fast_target_width = std::min(fast_target_width, width_upper_bound);
+            fast_target_width = std::max(fast_target_width, max_width);
 
-        const int range = std::max(0, width_upper_bound - fast_target_width);
-        const int step = std::max(k_search_step_min, range / k_search_step_divisor);
-        const std::array<int, k_guided_offsets_count> offsets = k_guided_search_offsets;
-        const std::array<int, k_guided_anchor_count> anchor_widths = {seed_width, fast_target_width, max_width};
-        for (int anchor : anchor_widths) {
-            for (int mul : offsets) {
-                const long long width_ll =
-                    static_cast<long long>(anchor) +
-                    (static_cast<long long>(mul) * static_cast<long long>(step));
-                if (width_ll < static_cast<long long>(std::numeric_limits<int>::min()) ||
-                    width_ll > static_cast<long long>(std::numeric_limits<int>::max())) {
-                    continue;
+            std::unordered_set<int> seen_widths;
+            std::vector<int> width_candidates;
+            auto add_width_candidate = [&](int width) {
+                if (width < max_width || width > width_upper_bound) {
+                    return;
                 }
-                add_width_candidate(static_cast<int>(width_ll));
+                if (seen_widths.insert(width).second) {
+                    width_candidates.push_back(width);
+                }
+            };
+
+            add_width_candidate(seed_width);
+            add_width_candidate(fast_target_width);
+            if (have_layout_seed) {
+                int seed_hint_width = seed_cache.atlas_width;
+                if (padding > seed_cache.padding) {
+                    int expanded = 0;
+                    if (checked_add_int(seed_hint_width, padding - seed_cache.padding, expanded)) {
+                        seed_hint_width = expanded;
+                    }
+                }
+                add_width_candidate(seed_hint_width);
             }
-        }
-        std::ranges::sort(width_candidates);
 
-        if (!budget_exhausted && !width_candidates.empty()) {
-            worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
-            std::vector<LayoutCandidate> worker_gpu(worker_count);
-            std::vector<LayoutCandidate> worker_space(worker_count);
-            std::vector<std::thread> workers;
-            workers.reserve(worker_count);
-            for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
-                workers.emplace_back([&, worker_index]() {
-                    const size_t begin = (width_candidates.size() * worker_index) / worker_count;
-                    const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
+            const int range = std::max(0, width_upper_bound - fast_target_width);
+            const int step = std::max(k_search_step_min, range / k_search_step_divisor);
+            const std::array<int, k_guided_offsets_count> offsets = k_guided_search_offsets;
+            const std::array<int, k_guided_anchor_count> anchor_widths = {seed_width, fast_target_width, max_width};
+            for (int anchor : anchor_widths) {
+                for (int mul : offsets) {
+                    const long long width_ll =
+                        static_cast<long long>(anchor) +
+                        (static_cast<long long>(mul) * static_cast<long long>(step));
+                    if (width_ll < static_cast<long long>(std::numeric_limits<int>::min()) ||
+                        width_ll > static_cast<long long>(std::numeric_limits<int>::max())) {
+                        continue;
+                    }
+                    add_width_candidate(static_cast<int>(width_ll));
+                }
+            }
+            std::ranges::sort(width_candidates);
 
-                    LayoutCandidate local_best_gpu;
-                    LayoutCandidate local_best_space;
-                    auto consider_local = [&](LayoutCandidate&& candidate) {
-                        if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
-                            return;
-                        }
-                        const bool better_gpu =
-                            !local_best_gpu.valid ||
-                            pick_better_layout_candidate(
-                                candidate.area, candidate.w, candidate.h, true,
-                                local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
-                                OptimizeTarget::GPU);
-                        const bool better_space =
-                            !local_best_space.valid ||
-                            pick_better_layout_candidate(
-                                candidate.area, candidate.w, candidate.h, true,
-                                local_best_space.area, local_best_space.w, local_best_space.h,
-                                OptimizeTarget::SPACE);
-                        if (!better_gpu && !better_space) {
-                            return;
-                        }
-                        if (better_gpu && better_space) {
-                            local_best_gpu = candidate;
-                            local_best_space = std::move(candidate);
-                            return;
-                        }
-                        if (better_gpu) {
-                            local_best_gpu = std::move(candidate);
-                            return;
-                        }
-                        local_best_space = std::move(candidate);
-                    };
+            if (!budget_exhausted && !width_candidates.empty()) {
+                worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
+                std::vector<LayoutCandidate> worker_gpu(worker_count);
+                std::vector<LayoutCandidate> worker_space(worker_count);
+                std::vector<std::thread> workers;
+                workers.reserve(worker_count);
+                for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
+                    workers.emplace_back([&, worker_index]() {
+                        const size_t begin = (width_candidates.size() * worker_index) / worker_count;
+                        const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
 
-                    bool local_budget_exhausted = false;
-                    for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
-                        const int width = width_candidates[width_index];
-                        for (size_t sort_idx : k_guided_sort_indices) {
-                            if (local_budget_exhausted) {
-                                break;
+                        LayoutCandidate local_best_gpu;
+                        LayoutCandidate local_best_space;
+                        auto consider_local = [&](LayoutCandidate&& candidate) {
+                            if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
+                                return;
                             }
-                            for (RectHeuristic rect_heuristic : k_guided_heuristics) {
+                            const bool better_gpu =
+                                !local_best_gpu.valid ||
+                                pick_better_layout_candidate(
+                                    candidate.area, candidate.w, candidate.h, true,
+                                    local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
+                                    OptimizeTarget::GPU);
+                            const bool better_space =
+                                !local_best_space.valid ||
+                                pick_better_layout_candidate(
+                                    candidate.area, candidate.w, candidate.h, true,
+                                    local_best_space.area, local_best_space.w, local_best_space.h,
+                                    OptimizeTarget::SPACE);
+                            if (!better_gpu && !better_space) {
+                                return;
+                            }
+                            if (better_gpu && better_space) {
+                                local_best_gpu = candidate;
+                                local_best_space = std::move(candidate);
+                                return;
+                            }
+                            if (better_gpu) {
+                                local_best_gpu = std::move(candidate);
+                                return;
+                            }
+                            local_best_space = std::move(candidate);
+                        };
+
+                        bool local_budget_exhausted = false;
+                        for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
+                            const int width = width_candidates[width_index];
+                            for (size_t sort_idx : k_guided_sort_indices) {
+                                if (local_budget_exhausted) {
+                                    break;
+                                }
+                                for (RectHeuristic rect_heuristic : k_guided_heuristics) {
+                                    if (!consume_combination_budget()) {
+                                        local_budget_exhausted = true;
+                                        break;
+                                    }
+                                    std::vector<Sprite> trial_sprites = sorted_sprites_by_mode[sort_idx];
+                                    int used_w = 0;
+                                    int used_h = 0;
+                                    if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, allow_rotate, used_w, used_h)) {
+                                        continue;
+                                    }
+                                    size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
+                                    LayoutCandidate candidate;
+                                    candidate.valid = true;
+                                    candidate.area = area;
+                                    candidate.w = used_w;
+                                    candidate.h = used_h;
+                                    candidate.sprites = std::move(trial_sprites);
+                                    consider_local(std::move(candidate));
+                                }
+                            }
+                        }
+
+                        worker_gpu[worker_index] = std::move(local_best_gpu);
+                        worker_space[worker_index] = std::move(local_best_space);
+                    });
+                }
+                for (auto& worker : workers) {
+                    worker.join();
+                }
+                for (unsigned int i = 0; i < worker_count; ++i) {
+                    if (worker_gpu[i].valid) {
+                        consider_candidate(std::move(worker_gpu[i]));
+                    }
+                    if (worker_space[i].valid) {
+                        consider_candidate(std::move(worker_space[i]));
+                    }
+                }
+
+                budget_exhausted = (combination_budget != std::numeric_limits<size_t>::max()) &&
+                                   (combinations_tested.load(std::memory_order_relaxed) >= combination_budget);
+            }
+
+            // Include shelf candidates from same guided widths as a cheap fallback.
+            if (!budget_exhausted && !width_candidates.empty()) {
+                worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
+                std::vector<LayoutCandidate> worker_gpu(worker_count);
+                std::vector<LayoutCandidate> worker_space(worker_count);
+                std::vector<std::thread> workers;
+                workers.reserve(worker_count);
+                for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
+                    workers.emplace_back([&, worker_index]() {
+                        const size_t begin = (width_candidates.size() * worker_index) / worker_count;
+                        const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
+
+                        LayoutCandidate local_best_gpu;
+                        LayoutCandidate local_best_space;
+                        auto consider_local = [&](LayoutCandidate&& candidate) {
+                            if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
+                                return;
+                            }
+                            const bool better_gpu =
+                                !local_best_gpu.valid ||
+                                pick_better_layout_candidate(
+                                    candidate.area, candidate.w, candidate.h, true,
+                                    local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
+                                    OptimizeTarget::GPU);
+                            const bool better_space =
+                                !local_best_space.valid ||
+                                pick_better_layout_candidate(
+                                    candidate.area, candidate.w, candidate.h, true,
+                                    local_best_space.area, local_best_space.w, local_best_space.h,
+                                    OptimizeTarget::SPACE);
+                            if (!better_gpu && !better_space) {
+                                return;
+                            }
+                            if (better_gpu && better_space) {
+                                local_best_gpu = candidate;
+                                local_best_space = std::move(candidate);
+                                return;
+                            }
+                            if (better_gpu) {
+                                local_best_gpu = std::move(candidate);
+                                return;
+                            }
+                            local_best_space = std::move(candidate);
+                        };
+
+                        bool local_budget_exhausted = false;
+                        for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
+                            const int width = width_candidates[width_index];
+                            for (size_t sort_idx : k_guided_sort_indices) {
                                 if (!consume_combination_budget()) {
                                     local_budget_exhausted = true;
                                     break;
                                 }
-                                std::vector<Sprite> trial_sprites = sorted_sprites_by_mode[sort_idx];
-                                int used_w = 0;
-                                int used_h = 0;
-                                if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, allow_rotate, used_w, used_h)) {
+                                std::vector<Sprite> shelf_sprites = sorted_sprites_by_mode[sort_idx];
+                                int shelf_w = 0;
+                                int shelf_h = 0;
+                                if (!pack_fast_shelf(shelf_sprites, width, padding, allow_rotate, shelf_w, shelf_h)) {
                                     continue;
                                 }
-                                size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
-                                LayoutCandidate candidate;
-                                candidate.valid = true;
-                                candidate.area = area;
-                                candidate.w = used_w;
-                                candidate.h = used_h;
-                                candidate.sprites = std::move(trial_sprites);
-                                consider_local(std::move(candidate));
+                                if (shelf_h > height_upper_bound) {
+                                    continue;
+                                }
+                                size_t shelf_area = static_cast<size_t>(shelf_w) * static_cast<size_t>(shelf_h);
+                                LayoutCandidate shelf_candidate;
+                                shelf_candidate.valid = true;
+                                shelf_candidate.area = shelf_area;
+                                shelf_candidate.w = shelf_w;
+                                shelf_candidate.h = shelf_h;
+                                shelf_candidate.sprites = std::move(shelf_sprites);
+                                consider_local(std::move(shelf_candidate));
                             }
                         }
+
+                        worker_gpu[worker_index] = std::move(local_best_gpu);
+                        worker_space[worker_index] = std::move(local_best_space);
+                    });
+                }
+                for (auto& worker : workers) {
+                    worker.join();
+                }
+                for (unsigned int i = 0; i < worker_count; ++i) {
+                    if (worker_gpu[i].valid) {
+                        consider_candidate(std::move(worker_gpu[i]));
                     }
-
-                    worker_gpu[worker_index] = std::move(local_best_gpu);
-                    worker_space[worker_index] = std::move(local_best_space);
-                });
-            }
-            for (auto& worker : workers) {
-                worker.join();
-            }
-            for (unsigned int i = 0; i < worker_count; ++i) {
-                if (worker_gpu[i].valid) {
-                    consider_candidate(std::move(worker_gpu[i]));
-                }
-                if (worker_space[i].valid) {
-                    consider_candidate(std::move(worker_space[i]));
-                }
-            }
-
-            budget_exhausted = (combination_budget != std::numeric_limits<size_t>::max()) &&
-                               (combinations_tested.load(std::memory_order_relaxed) >= combination_budget);
-        }
-
-        // Include shelf candidates from same guided widths as a cheap fallback.
-        if (!budget_exhausted && !width_candidates.empty()) {
-            worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
-            std::vector<LayoutCandidate> worker_gpu(worker_count);
-            std::vector<LayoutCandidate> worker_space(worker_count);
-            std::vector<std::thread> workers;
-            workers.reserve(worker_count);
-            for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
-                workers.emplace_back([&, worker_index]() {
-                    const size_t begin = (width_candidates.size() * worker_index) / worker_count;
-                    const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
-
-                    LayoutCandidate local_best_gpu;
-                    LayoutCandidate local_best_space;
-                    auto consider_local = [&](LayoutCandidate&& candidate) {
-                        if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
-                            return;
-                        }
-                        const bool better_gpu =
-                            !local_best_gpu.valid ||
-                            pick_better_layout_candidate(
-                                candidate.area, candidate.w, candidate.h, true,
-                                local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
-                                OptimizeTarget::GPU);
-                        const bool better_space =
-                            !local_best_space.valid ||
-                            pick_better_layout_candidate(
-                                candidate.area, candidate.w, candidate.h, true,
-                                local_best_space.area, local_best_space.w, local_best_space.h,
-                                OptimizeTarget::SPACE);
-                        if (!better_gpu && !better_space) {
-                            return;
-                        }
-                        if (better_gpu && better_space) {
-                            local_best_gpu = candidate;
-                            local_best_space = std::move(candidate);
-                            return;
-                        }
-                        if (better_gpu) {
-                            local_best_gpu = std::move(candidate);
-                            return;
-                        }
-                        local_best_space = std::move(candidate);
-                    };
-
-                    bool local_budget_exhausted = false;
-                    for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
-                        const int width = width_candidates[width_index];
-                        for (size_t sort_idx : k_guided_sort_indices) {
-                            if (!consume_combination_budget()) {
-                                local_budget_exhausted = true;
-                                break;
-                            }
-                            std::vector<Sprite> shelf_sprites = sorted_sprites_by_mode[sort_idx];
-                            int shelf_w = 0;
-                            int shelf_h = 0;
-                            if (!pack_fast_shelf(shelf_sprites, width, padding, allow_rotate, shelf_w, shelf_h)) {
-                                continue;
-                            }
-                            if (shelf_h > height_upper_bound) {
-                                continue;
-                            }
-                            size_t shelf_area = static_cast<size_t>(shelf_w) * static_cast<size_t>(shelf_h);
-                            LayoutCandidate shelf_candidate;
-                            shelf_candidate.valid = true;
-                            shelf_candidate.area = shelf_area;
-                            shelf_candidate.w = shelf_w;
-                            shelf_candidate.h = shelf_h;
-                            shelf_candidate.sprites = std::move(shelf_sprites);
-                            consider_local(std::move(shelf_candidate));
-                        }
+                    if (worker_space[i].valid) {
+                        consider_candidate(std::move(worker_space[i]));
                     }
-
-                    worker_gpu[worker_index] = std::move(local_best_gpu);
-                    worker_space[worker_index] = std::move(local_best_space);
-                });
-            }
-            for (auto& worker : workers) {
-                worker.join();
-            }
-            for (unsigned int i = 0; i < worker_count; ++i) {
-                if (worker_gpu[i].valid) {
-                    consider_candidate(std::move(worker_gpu[i]));
-                }
-                if (worker_space[i].valid) {
-                    consider_candidate(std::move(worker_space[i]));
                 }
             }
-        }
 
-        const LayoutCandidate* selected_candidate = nullptr;
-        if (optimize_target == OptimizeTarget::GPU) {
-            selected_candidate = best_gpu_candidate.valid ? &best_gpu_candidate : &best_space_candidate;
-        } else {
-            selected_candidate = best_space_candidate.valid ? &best_space_candidate : &best_gpu_candidate;
-        }
-        if ((selected_candidate == nullptr) || !selected_candidate->valid) {
-            std::cerr << "Error: failed to compute compact layout\n";
-            return 1;
-        }
-
-        sprites = selected_candidate->sprites;
-        atlas_width = selected_candidate->w;
-        atlas_height = selected_candidate->h;
-
-        if (best_gpu_candidate.valid && best_space_candidate.valid) {
-            for (const char* profile_name : k_compact_prewarm_profiles) {
-                auto prewarm_it = profile_map.find(profile_name);
-                if (prewarm_it == profile_map.end()) {
-                    continue;
-                }
-                const ProfileDefinition& compact_profile = prewarm_it->second;
-                const Mode prewarm_mode =
-                    has_mode_override ? mode_override : compact_profile.mode;
-                const OptimizeTarget prewarm_optimize_target =
-                    has_optimize_override ? optimize_override : compact_profile.optimize_target;
-                if (prewarm_mode != Mode::COMPACT) {
-                    continue;
-                }
-                const int prewarm_max_width =
-                    has_max_width_limit
-                        ? max_width_limit
-                        : (compact_profile.max_width ? *compact_profile.max_width : 0);
-                const int prewarm_max_height =
-                    has_max_height_limit
-                        ? max_height_limit
-                        : (compact_profile.max_height ? *compact_profile.max_height : 0);
-                const int prewarm_padding =
-                    has_padding_override
-                        ? padding
-                        : (compact_profile.padding ? *compact_profile.padding : 0);
-                const int prewarm_max_combinations =
-                    has_max_combinations_override
-                        ? max_combinations
-                        : (compact_profile.max_combinations ? *compact_profile.max_combinations : 0);
-                const double prewarm_scale =
-                    has_scale_override
-                        ? scale
-                        : (compact_profile.scale ? *compact_profile.scale : 1.0);
-                const bool prewarm_trim_transparent =
-                    has_trim_override
-                        ? trim_transparent
-                        : (compact_profile.trim_transparent ? *compact_profile.trim_transparent : false);
-                const std::string prewarm_signature = build_layout_signature(
-                    compact_profile.name,
-                    prewarm_mode,
-                    prewarm_optimize_target,
-                    prewarm_max_width,
-                    prewarm_max_height,
-                    prewarm_padding,
-                    prewarm_max_combinations,
-                    prewarm_scale,
-                    prewarm_trim_transparent,
-                    allow_rotate,
-                    is_file,
-                    sources
-                );
-                if (prewarm_signature == layout_signature) {
-                    continue;
-                }
-
-                const LayoutCandidate& prewarm_candidate =
-                    prewarm_optimize_target == OptimizeTarget::GPU
-                        ? best_gpu_candidate
-                        : best_space_candidate;
-                const std::string prewarm_output = build_layout_output_text(
-                    prewarm_candidate.w,
-                    prewarm_candidate.h,
-                    prewarm_scale,
-                    prewarm_trim_transparent,
-                    prewarm_candidate.sprites
-                );
-                save_output_cache(
-                    build_output_cache_path(cache_path, prewarm_signature),
-                    prewarm_signature,
-                    prewarm_output
-                );
+            const LayoutCandidate* selected_candidate = nullptr;
+            if (optimize_target == OptimizeTarget::GPU) {
+                selected_candidate = best_gpu_candidate.valid ? &best_gpu_candidate : &best_space_candidate;
+            } else {
+                selected_candidate = best_space_candidate.valid ? &best_space_candidate : &best_gpu_candidate;
             }
-        }
-    } else {
-        int target_width = max_width;
-        if (total_area > 0) {
-            long double area_root = std::sqrt(static_cast<long double>(total_area));
-            if (area_root > static_cast<long double>(std::numeric_limits<int>::max())) {
-                std::cerr << "Error: fast width is too large\n";
+            if ((selected_candidate == nullptr) || !selected_candidate->valid) {
+                std::cerr << "Error: failed to compute compact layout\n";
                 return 1;
             }
-            int candidate = static_cast<int>(std::ceil(area_root));
-            target_width = std::max(candidate, target_width);
-        }
-        target_width = std::min(target_width, width_upper_bound);
-        if (have_layout_seed) {
-            int seed_hint_width = seed_cache.atlas_width;
-            if (padding > seed_cache.padding) {
-                int expanded = 0;
-                if (checked_add_int(seed_hint_width, padding - seed_cache.padding, expanded)) {
-                    seed_hint_width = expanded;
+
+            sprites = selected_candidate->sprites;
+            atlas_width = selected_candidate->w;
+            atlas_height = selected_candidate->h;
+
+            if (best_gpu_candidate.valid && best_space_candidate.valid) {
+                for (const char* profile_name : k_compact_prewarm_profiles) {
+                    auto prewarm_it = profile_map.find(profile_name);
+                    if (prewarm_it == profile_map.end()) {
+                        continue;
+                    }
+                    const ProfileDefinition& compact_profile = prewarm_it->second;
+                    const Mode prewarm_mode =
+                        has_mode_override ? mode_override : compact_profile.mode;
+                    const OptimizeTarget prewarm_optimize_target =
+                        has_optimize_override ? optimize_override : compact_profile.optimize_target;
+                    if (prewarm_mode != Mode::COMPACT) {
+                        continue;
+                    }
+                    const int prewarm_max_width =
+                        has_max_width_limit
+                            ? max_width_limit
+                            : (compact_profile.max_width ? *compact_profile.max_width : 0);
+                    const int prewarm_max_height =
+                        has_max_height_limit
+                            ? max_height_limit
+                            : (compact_profile.max_height ? *compact_profile.max_height : 0);
+                    const int prewarm_padding =
+                        has_padding_override
+                            ? padding
+                            : (compact_profile.padding ? *compact_profile.padding : 0);
+                    const int prewarm_max_combinations =
+                        has_max_combinations_override
+                            ? max_combinations
+                            : (compact_profile.max_combinations ? *compact_profile.max_combinations : 0);
+                    const double prewarm_scale =
+                        has_scale_override
+                            ? scale
+                            : (compact_profile.scale ? *compact_profile.scale : 1.0);
+                    const bool prewarm_trim_transparent =
+                        has_trim_override
+                            ? trim_transparent
+                            : (compact_profile.trim_transparent ? *compact_profile.trim_transparent : false);
+                    const std::string prewarm_signature = build_layout_signature(
+                        compact_profile.name,
+                        prewarm_mode,
+                        prewarm_optimize_target,
+                        prewarm_max_width,
+                        prewarm_max_height,
+                        prewarm_padding,
+                        prewarm_max_combinations,
+                        prewarm_scale,
+                        prewarm_trim_transparent,
+                        allow_rotate,
+                        is_file,
+                        sources
+                    );
+                    if (prewarm_signature == layout_signature) {
+                        continue;
+                    }
+
+                    const LayoutCandidate& prewarm_candidate =
+                        prewarm_optimize_target == OptimizeTarget::GPU
+                            ? best_gpu_candidate
+                            : best_space_candidate;
+                    std::vector<Atlas> prewarm_atlases;
+                    prewarm_atlases.push_back({prewarm_candidate.w, prewarm_candidate.h});
+                    const std::string prewarm_output = build_layout_output_text(
+                        prewarm_atlases,
+                        prewarm_scale,
+                        prewarm_trim_transparent,
+                        prewarm_candidate.sprites
+                    );
+                    save_output_cache(
+                        build_output_cache_path(cache_path, prewarm_signature),
+                        prewarm_signature,
+                        prewarm_output
+                    );
                 }
             }
-            if (seed_hint_width > target_width && seed_hint_width <= width_upper_bound) {
-                target_width = seed_hint_width;
+            atlases.push_back({atlas_width, atlas_height});
+            for (auto& s : sprites) { s.atlas_index = 0; }
+        } else {
+            int target_width = max_width;
+            if (total_area > 0) {
+                long double area_root = std::sqrt(static_cast<long double>(total_area));
+                if (area_root > static_cast<long double>(std::numeric_limits<int>::max())) {
+                    std::cerr << "Error: fast width is too large\n";
+                    return 1;
+                }
+                int candidate = static_cast<int>(std::ceil(area_root));
+                target_width = std::max(candidate, target_width);
             }
-        }
+            target_width = std::min(target_width, width_upper_bound);
+            if (have_layout_seed) {
+                int seed_hint_width = seed_cache.atlas_width;
+                if (padding > seed_cache.padding) {
+                    int expanded = 0;
+                    if (checked_add_int(seed_hint_width, padding - seed_cache.padding, expanded)) {
+                        seed_hint_width = expanded;
+                    }
+                }
+                if (seed_hint_width > target_width && seed_hint_width <= width_upper_bound) {
+                    target_width = seed_hint_width;
+                }
+            }
 
-        std::vector<Sprite> sorted_sprites = sprites;
-        sort_sprites_by_mode(sorted_sprites, SortMode::Height);
+            std::vector<Sprite> sorted_sprites = sprites;
+            sort_sprites_by_mode(sorted_sprites, SortMode::Height);
 
-        bool packed = false;
-        for (int width = target_width; width <= width_upper_bound; ++width) {
-            std::vector<Sprite> trial_sprites = sorted_sprites;
-            int packed_width = 0;
-            int packed_height = 0;
-            if (!pack_fast_shelf(trial_sprites, width, padding, allow_rotate, packed_width, packed_height)) {
-                continue;
+            bool packed = false;
+            for (int width = target_width; width <= width_upper_bound; ++width) {
+                std::vector<Sprite> trial_sprites = sorted_sprites;
+                int packed_width = 0;
+                int packed_height = 0;
+                if (!pack_fast_shelf(trial_sprites, width, padding, allow_rotate, packed_width, packed_height)) {
+                    continue;
+                }
+                if (packed_height > height_upper_bound) {
+                    continue;
+                }
+                sprites = std::move(trial_sprites);
+                atlas_width = packed_width;
+                atlas_height = packed_height;
+                packed = true;
+                break;
             }
-            if (packed_height > height_upper_bound) {
-                continue;
+            if (!packed) {
+                std::cerr << "Error: failed to compute fast layout\n";
+                return 1;
             }
-            sprites = std::move(trial_sprites);
-            atlas_width = packed_width;
-            atlas_height = packed_height;
-            packed = true;
-            break;
-        }
-        if (!packed) {
-            std::cerr << "Error: failed to compute fast layout\n";
-            return 1;
+            atlases.push_back({atlas_width, atlas_height});
+            for (auto& s : sprites) { s.atlas_index = 0; }
         }
     }
-    }
 
-    if (padding > 0) {
+    if (padding > 0 && !multipack) {
         if (!compute_tight_atlas_bounds(sprites, atlas_width, atlas_height)) {
             std::cerr << "Error: failed to compute final atlas bounds\n";
             return 1;
         }
+        if (!atlases.empty()) {
+            atlases[0].width = atlas_width;
+            atlases[0].height = atlas_height;
+        }
     }
 
-    LayoutSeedCache next_seed;
-    next_seed.signature = layout_seed_signature;
-    next_seed.padding = padding;
-    next_seed.atlas_width = atlas_width;
-    next_seed.atlas_height = atlas_height;
-    next_seed.entries.reserve(sprites.size());
-    for (const auto& s : sprites) {
-        LayoutSeedEntry entry;
-        entry.path = s.path;
-        entry.x = s.x;
-        entry.y = s.y;
-        entry.w = s.w;
-        entry.h = s.h;
-        entry.trim_left = s.trim_left;
-        entry.trim_top = s.trim_top;
-        entry.trim_right = s.trim_right;
-        entry.trim_bottom = s.trim_bottom;
-        entry.rotated = s.rotated;
-        next_seed.entries.push_back(std::move(entry));
+    if (!multipack) {
+        LayoutSeedCache next_seed;
+        next_seed.signature = layout_seed_signature;
+        next_seed.padding = padding;
+        next_seed.atlas_width = atlas_width;
+        next_seed.atlas_height = atlas_height;
+        next_seed.entries.reserve(sprites.size());
+        for (const auto& s : sprites) {
+            LayoutSeedEntry entry;
+            entry.path = s.path;
+            entry.x = s.x;
+            entry.y = s.y;
+            entry.w = s.w;
+            entry.h = s.h;
+            entry.trim_left = s.trim_left;
+            entry.trim_top = s.trim_top;
+            entry.trim_right = s.trim_right;
+            entry.trim_bottom = s.trim_bottom;
+            entry.rotated = s.rotated;
+            next_seed.entries.push_back(std::move(entry));
+        }
+        save_layout_seed_cache(seed_cache_path, next_seed);
     }
-    save_layout_seed_cache(seed_cache_path, next_seed);
 
     const std::string output_text = build_layout_output_text(
-        atlas_width,
-        atlas_height,
+        atlases,
         scale,
         trim_transparent,
         sprites
@@ -3836,7 +4023,9 @@ int run_spratlayout(int argc, char** argv) {
 #endif
 
     std::cout << output_text;
-    save_output_cache(output_cache_path, layout_signature, output_text);
+    if (!multipack) {
+        save_output_cache(output_cache_path, layout_signature, output_text);
+    }
     prune_cache_family(cache_path, k_cache_max_age_seconds, k_cache_max_layout_files, k_cache_max_seed_files);
 
     // Cleanup temporary directories for tar files

@@ -1,6 +1,8 @@
-// spratpack.cpp
-// MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++17 -O2 src/spratpack.cpp -o spratpack
+#include <utility>
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image.h>
+#include <stb_image_write.h>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -19,6 +21,7 @@
 #define _setmode setmode
 #endif
 #endif
+
 #include <algorithm>
 #include <iostream>
 #include <vector>
@@ -30,12 +33,11 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#include <fstream>
+#include <archive.h>
+#include <archive_entry.h>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
 
 namespace {
 
@@ -186,14 +188,17 @@ bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
     return false;
 }
 
+
 } // namespace
 
 void print_usage() {
     std::cout << "Usage: spratpack [OPTIONS]\n"
               << "\n"
-              << "Read layout text from stdin and write a PNG atlas to stdout.\n"
+              << "Read layout text from stdin and write one or more PNG atlases.\n"
               << "\n"
               << "Options:\n"
+              << "  -o, --output PATTERN   Output filename pattern (e.g. atlas_%d.png)\n"
+              << "  --atlas-index N        Pick a specific atlas index to output\n"
               << "  --frame-lines          Draw rectangle outlines for each sprite\n"
               << "  --line-width N         Outline thickness in pixels (default: 1)\n"
               << "  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n"
@@ -208,6 +213,8 @@ int run_spratpack(int argc, char** argv) {
     constexpr unsigned char DEFAULT_COLOR_ALPHA = 255;
     std::array<unsigned char, 4> line_color = {DEFAULT_COLOR_RED, 0, 0, DEFAULT_COLOR_ALPHA};
     unsigned int thread_limit = 0;
+    std::string output_pattern;
+    int requested_atlas_index = -1;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -216,6 +223,14 @@ int run_spratpack(int argc, char** argv) {
         } else if (arg == "--version" || arg == "-v") {
             std::cout << "spratpack version " << SPRAT_VERSION << "\n";
             return 0;
+        } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
+            output_pattern = argv[++i];
+        } else if (arg == "--atlas-index" && i + 1 < argc) {
+            std::string value = argv[++i];
+            if (!parse_int(value, requested_atlas_index) || requested_atlas_index < 0) {
+                std::cerr << "Invalid atlas index: " << value << "\n";
+                return 1;
+            }
         } else if (arg == "--frame-lines") {
             draw_frame_lines = true;
         } else if (arg == "--line-width" && i + 1 < argc) {
@@ -228,7 +243,6 @@ int run_spratpack(int argc, char** argv) {
             std::string value = argv[++i];
             if (!parse_line_color(value, line_color)) {
                 std::cerr << "Invalid line color: " << value << "\n";
-                std::cerr << "Expected format: R,G,B or R,G,B,A with 0-" << MAX_CHANNEL_VALUE << " channels\n";
                 return 1;
             }
         } else if (arg == "--threads" && i + 1 < argc) {
@@ -239,9 +253,6 @@ int run_spratpack(int argc, char** argv) {
                 return 1;
             }
             thread_limit = static_cast<unsigned int>(parsed);
-        } else {
-            print_usage();
-            return 1;
         }
     }
 
@@ -251,244 +262,222 @@ int run_spratpack(int argc, char** argv) {
         std::cerr << parse_error << "\n";
         return 1;
     }
-    int atlas_width = layout.atlas_width;
-    int atlas_height = layout.atlas_height;
-    double layout_scale = layout.scale;
-    std::vector<Sprite>& sprites = layout.sprites;
 
-    size_t pixel_count = 0;
-    size_t byte_count = 0;
-    if (!checked_mul_size_t(static_cast<size_t>(atlas_width), static_cast<size_t>(atlas_height), pixel_count)
-        || !checked_mul_size_t(pixel_count, NUM_CHANNELS, byte_count)) {
-        std::cerr << "Atlas size is too large\n";
+    if (requested_atlas_index >= 0 && static_cast<size_t>(requested_atlas_index) >= layout.atlases.size()) {
+        std::cerr << "Error: requested atlas index " << requested_atlas_index << " out of range (total: " << layout.atlases.size() << ")\n";
         return 1;
     }
 
-    std::vector<unsigned char> atlas(byte_count, 0);
+    const bool output_to_stdout = output_pattern.empty();
+    const bool use_tar = output_to_stdout && layout.atlases.size() > 1 && requested_atlas_index < 0;
 
-    for (const auto& s : sprites) {
-        if (s.x < 0 || s.y < 0 || s.w <= 0 || s.h <= 0 || s.src_x < 0 || s.src_y < 0
-            || s.trim_right < 0 || s.trim_bottom < 0) {
-            std::cerr << "Invalid sprite bounds: " << to_quoted(s.path) << "\n";
+    struct ArchiveDeleter {
+        void operator()(struct archive* a) const {
+            if (a) {
+                archive_write_close(a);
+                archive_write_free(a);
+            }
+        }
+    };
+    std::unique_ptr<struct archive, ArchiveDeleter> a;
+
+    if (use_tar) {
+        a.reset(archive_write_new());
+        archive_write_set_format_pax_restricted(a.get());
+#ifdef _WIN32
+        if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+            std::cerr << "Failed to set stdout to binary mode\n";
             return 1;
         }
-        if (s.w > atlas_width || s.h > atlas_height
-            || s.x > atlas_width - s.w || s.y > atlas_height - s.h) {
-            std::cerr << "Sprite out of atlas bounds: " << to_quoted(s.path) << "\n";
+#endif
+        if (archive_write_open_FILE(a.get(), stdout) != ARCHIVE_OK) {
+            std::cerr << "Failed to open TAR stream on stdout: " << archive_error_string(a.get()) << "\n";
             return 1;
         }
     }
 
-    auto blit_sprite = [&](const Sprite& s, std::string& error_out) -> bool {
-        int w = 0;
-        int h = 0;
-        int channels = 0;
-        unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
-        if (!data) {
-            error_out = "Failed to load: " + to_quoted(s.path) + " (Reason: " + stbi_failure_reason() + ")";
-            return false;
-        }
-        int source_x = s.has_trim ? s.src_x : 0;
-        int source_y = s.has_trim ? s.src_y : 0;
-        int source_w = s.has_trim ? (w - s.src_x - s.trim_right) : w;
-        int source_h = s.has_trim ? (h - s.src_y - s.trim_bottom) : h;
-
-        if (source_x < 0 || source_y < 0 || source_w <= 0 || source_h <= 0) {
-            error_out = "Crop out of bounds: " + to_quoted(s.path);
-            stbi_image_free(data);
-            return false;
-        }
-        if (source_x > w - source_w || source_y > h - source_h) {
-            error_out = "Trim offsets out of bounds: " + to_quoted(s.path);
-            stbi_image_free(data);
-            return false;
+    for (size_t atlas_idx = 0; atlas_idx < layout.atlases.size(); ++atlas_idx) {
+        if (requested_atlas_index >= 0 && static_cast<size_t>(requested_atlas_index) != atlas_idx) {
+            continue;
         }
 
-        auto scaled_source_w = static_cast<size_t>(s.w);
-        auto scaled_source_h = static_cast<size_t>(s.h);
-        if (layout_scale > 0.0 && layout_scale != 1.0) {
-            // Validate that scaled destination dimensions are plausible for the
-            // declared source crop rectangle to guard malformed inputs.
-            if (source_w == 0 || source_h == 0) {
-                error_out = "Invalid scaled source crop: " + to_quoted(s.path);
-                stbi_image_free(data);
+        const int atlas_width = layout.atlases[atlas_idx].width;
+        const int atlas_height = layout.atlases[atlas_idx].height;
+        std::vector<Sprite> atlas_sprites;
+        for (const auto& s : layout.sprites) {
+            if (s.atlas_index == static_cast<int>(atlas_idx)) {
+                atlas_sprites.push_back(s);
+            }
+        }
+
+        size_t pixel_count = 0;
+        size_t byte_count = 0;
+        if (!checked_mul_size_t(static_cast<size_t>(atlas_width), static_cast<size_t>(atlas_height), pixel_count)
+            || !checked_mul_size_t(pixel_count, NUM_CHANNELS, byte_count)) {
+            std::cerr << "Error: Atlas " << atlas_idx << " dimensions are too large for memory allocation\n";
+            return 1;
+        }
+
+        std::vector<unsigned char> atlas_data(byte_count, 0);
+
+        auto blit_sprite = [&](const Sprite& s, std::string& error_out) -> bool {
+            int w = 0, h = 0, channels = 0;
+            unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
+            if (!data) {
+                // stbi_failure_reason() is global, but since we are stopping on first error, it's acceptable here.
+                error_out = "Failed to load image: " + to_quoted(s.path) + " (Reason: " + stbi_failure_reason() + ")";
                 return false;
             }
-        }
+            // Use RAII for image data
+            struct StbImageDeleter { void operator()(unsigned char* p) const { stbi_image_free(p); } };
+            std::unique_ptr<unsigned char, StbImageDeleter> image_ptr(data);
 
-        if (scaled_source_w == 0 || scaled_source_h == 0) {
-            error_out = "Invalid destination sprite size: " + to_quoted(s.path);
-            stbi_image_free(data);
-            return false;
-        }
+            const int source_x = s.has_trim ? s.src_x : 0;
+            const int source_y = s.has_trim ? s.src_y : 0;
+            const int source_w = s.has_trim ? (w - s.src_x - s.trim_right) : w;
+            const int source_h = s.has_trim ? (h - s.src_y - s.trim_bottom) : h;
 
-        size_t source_pixels = 0;
-        size_t source_bytes = 0;
-        if (!checked_mul_size_t(static_cast<size_t>(w), static_cast<size_t>(h), source_pixels)
-            || !checked_mul_size_t(source_pixels, NUM_CHANNELS, source_bytes)) {
-            error_out = "Source image is too large: " + to_quoted(s.path);
-            stbi_image_free(data);
-            return false;
-        }
+            if (source_x < 0 || source_y < 0 || source_w <= 0 || source_h <= 0 ||
+                source_x > w - source_w || source_y > h - source_h) {
+                error_out = "Error: Crop/Trim out of bounds for " + to_quoted(s.path);
+                return false;
+            }
 
-        const bool copy_rows_direct = !s.rotated && (source_w == s.w && source_h == s.h);
-        if (copy_rows_direct) {
-            const size_t row_bytes = static_cast<size_t>(s.w) * NUM_CHANNELS;
-            for (int row = 0; row < s.h; ++row) {
-                size_t dest_pixels = 0;
-                size_t dest_offset = 0;
-                if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels)
-                    || !checked_add_size_t(dest_pixels, static_cast<size_t>(s.x), dest_pixels)
-                    || !checked_mul_size_t(dest_pixels, NUM_CHANNELS, dest_offset)
-                    || dest_offset > atlas.size()
-                    || row_bytes > atlas.size() - dest_offset) {
-                    error_out = "Atlas indexing out of bounds: " + to_quoted(s.path);
-                    stbi_image_free(data);
-                    return false;
+            const bool copy_rows_direct = !s.rotated && (source_w == s.w && source_h == s.h);
+            if (copy_rows_direct) {
+                const size_t row_bytes = static_cast<size_t>(s.w) * NUM_CHANNELS;
+                for (int row = 0; row < s.h; ++row) {
+                    const size_t dest_pixels = static_cast<size_t>(s.y + row) * atlas_width + s.x;
+                    const size_t dest_offset = dest_pixels * NUM_CHANNELS;
+                    const size_t src_pixels = static_cast<size_t>(source_y + row) * w + source_x;
+                    const size_t src_offset = src_pixels * NUM_CHANNELS;
+                    std::memcpy(atlas_data.data() + dest_offset, image_ptr.get() + src_offset, row_bytes);
                 }
-
-                size_t src_pixels = 0;
-                size_t src_offset = 0;
-                if (!checked_mul_size_t(static_cast<size_t>(source_y + row), static_cast<size_t>(w), src_pixels)
-                    || !checked_add_size_t(src_pixels, static_cast<size_t>(source_x), src_pixels)
-                    || !checked_mul_size_t(src_pixels, NUM_CHANNELS, src_offset)
-                    || src_offset > source_bytes
-                    || row_bytes > source_bytes - src_offset) {
-                    error_out = "Source indexing overflow: " + to_quoted(s.path);
-                    stbi_image_free(data);
-                    return false;
+            } else {
+                for (int row = 0; row < s.h; ++row) {
+                    for (int col = 0; col < s.w; ++col) {
+                        int sample_x, sample_y;
+                        if (!s.rotated) {
+                            sample_x = source_x + ((col * source_w) / s.w);
+                            sample_y = source_y + ((row * source_h) / s.h);
+                        } else {
+                            sample_x = source_x + ((row * source_w) / s.h);
+                            sample_y = source_y + (source_h - 1 - ((col * source_h) / s.w));
+                        }
+                        const size_t dest_pixels = static_cast<size_t>(s.y + row) * atlas_width + (s.x + col);
+                        const size_t dest_offset = dest_pixels * NUM_CHANNELS;
+                        const size_t src_pixels = static_cast<size_t>(sample_y) * w + sample_x;
+                        const size_t src_offset = src_pixels * NUM_CHANNELS;
+                        std::memcpy(atlas_data.data() + dest_offset, image_ptr.get() + src_offset, NUM_CHANNELS);
+                    }
                 }
-                std::memcpy(atlas.data() + dest_offset, data + src_offset, row_bytes);
+            }
+            return true;
+        };
+
+        unsigned int atlas_worker_count = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
+        if (atlas_worker_count == 0) atlas_worker_count = 1;
+        atlas_worker_count = std::min<unsigned int>(atlas_worker_count, static_cast<unsigned int>(std::max<size_t>(1, atlas_sprites.size())));
+
+        const bool can_parallel = (atlas_worker_count > 1) && !sprites_have_overlap(atlas_sprites);
+        if (!can_parallel) {
+            for (const auto& s : atlas_sprites) {
+                std::string error;
+                if (!blit_sprite(s, error)) { std::cerr << error << "\n"; return 1; }
             }
         } else {
-            for (int row = 0; row < s.h; ++row) {
-                for (int col = 0; col < s.w; ++col) {
-                    int sample_x = 0;
-                    int sample_y = 0;
-                    if (!s.rotated) {
-                        sample_x = source_x + ((col * source_w) / s.w);
-                        sample_y = source_y + ((row * source_h) / s.h);
-                    } else {
-                        // Rotate source pixels 90 degrees clockwise while copying to atlas.
-                        sample_x = source_x + ((row * source_w) / s.h);
-                        sample_y = source_y + (source_h - 1 - ((col * source_h) / s.w));
-                    }
-
-                    size_t dest_pixels = 0;
-                    size_t dest_offset = 0;
-                    if (!checked_mul_size_t(static_cast<size_t>(s.y + row), static_cast<size_t>(atlas_width), dest_pixels)) {
-                        error_out = "Atlas indexing overflow: " + to_quoted(s.path);
-                        stbi_image_free(data);
-                        return false;
-                    }
-                    dest_pixels += static_cast<size_t>(s.x + col);
-                    if (!checked_mul_size_t(dest_pixels, NUM_CHANNELS, dest_offset)
-                        || dest_offset > atlas.size()
-                        || NUM_CHANNELS > atlas.size() - dest_offset) {
-                        error_out = "Atlas indexing out of bounds: " + to_quoted(s.path);
-                        stbi_image_free(data);
-                        return false;
-                    }
-
-                    size_t src_pixels = 0;
-                    size_t src_offset = 0;
-                    if (!checked_mul_size_t(static_cast<size_t>(sample_y), static_cast<size_t>(w), src_pixels)
-                        || !checked_add_size_t(src_pixels, static_cast<size_t>(sample_x), src_pixels)
-                        || !checked_mul_size_t(src_pixels, NUM_CHANNELS, src_offset)
-                        || src_offset > source_bytes
-                        || NUM_CHANNELS > source_bytes - src_offset) {
-                        error_out = "Source indexing overflow: " + to_quoted(s.path);
-                        stbi_image_free(data);
-                        return false;
-                    }
-
-                    atlas[dest_offset + CHANNEL_R] = data[src_offset + CHANNEL_R];
-                    atlas[dest_offset + CHANNEL_G] = data[src_offset + CHANNEL_G];
-                    atlas[dest_offset + CHANNEL_B] = data[src_offset + CHANNEL_B];
-                    atlas[dest_offset + CHANNEL_A] = data[src_offset + CHANNEL_A];
-                }
-            }
-        }
-
-        stbi_image_free(data);
-        return true;
-    };
-
-    unsigned int worker_count = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
-    if (worker_count == 0) {
-        worker_count = 1;
-    }
-    worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(std::max<size_t>(1, sprites.size())));
-
-    const bool can_parallel_blit = (worker_count > 1) && !sprites_have_overlap(sprites);
-    if (!can_parallel_blit) {
-        for (const auto& s : sprites) {
-            std::string error;
-            if (!blit_sprite(s, error)) {
-                std::cerr << error << "\n";
-                return 1;
-            }
-        }
-    } else {
-        std::atomic<size_t> next_index{0};
-        std::atomic<bool> failed{false};
-        std::mutex error_mutex;
-        std::string first_error;
-        std::vector<std::thread> workers;
-        workers.reserve(worker_count);
-        for (unsigned int i = 0; i < worker_count; ++i) {
-            workers.emplace_back([&]() {
-                while (!failed.load(std::memory_order_relaxed)) {
-                    size_t idx = next_index.fetch_add(1, std::memory_order_relaxed);
-                    if (idx >= sprites.size()) {
-                        break;
-                    }
-                    std::string error;
-                    if (!blit_sprite(sprites[idx], error)) {
-                        {
-                            std::scoped_lock lock(error_mutex);
-                            if (first_error.empty()) {
-                                first_error = std::move(error);
-                            }
+            std::atomic<size_t> next_idx{0};
+            std::atomic<bool> failed{false};
+            std::mutex err_mtx;
+            std::string first_err;
+            std::vector<std::thread> workers;
+            for (unsigned int i = 0; i < atlas_worker_count; ++i) {
+                workers.emplace_back([&]() {
+                    while (!failed.load(std::memory_order_relaxed)) {
+                        size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
+                        if (idx >= atlas_sprites.size()) break;
+                        std::string error;
+                        if (!blit_sprite(atlas_sprites[idx], error)) {
+                            std::scoped_lock lock(err_mtx);
+                            if (first_err.empty()) first_err = std::move(error);
+                            failed.store(true, std::memory_order_relaxed);
+                            break;
                         }
-                        failed.store(true, std::memory_order_relaxed);
-                        break;
                     }
-                }
-            });
+                });
+            }
+            for (auto& w : workers) w.join();
+            if (failed.load(std::memory_order_relaxed)) { std::cerr << first_err << "\n"; return 1; }
         }
-        for (auto& worker : workers) {
-            worker.join();
+
+        if (draw_frame_lines) {
+            for (const auto& s : atlas_sprites) {
+                draw_sprite_outline(atlas_data, atlas_width, atlas_height, s, line_width, line_color);
+            }
         }
-        if (failed.load(std::memory_order_relaxed)) {
-            std::cerr << (first_error.empty() ? "Failed to process sprite" : first_error) << "\n";
+
+        std::vector<unsigned char> png_data;
+        auto write_to_vec = [](void* context, void* data, int size) {
+            auto* vec = static_cast<std::vector<unsigned char>*>(context);
+            const auto* bytes = static_cast<const unsigned char*>(data);
+            vec->insert(vec->end(), bytes, bytes + size);
+        };
+
+        if (stbi_write_png_to_func(write_to_vec, &png_data, atlas_width, atlas_height, 4, atlas_data.data(), atlas_width * 4) == 0) {
+            std::cerr << "Error: Failed to encode PNG for atlas " << atlas_idx << "\n";
             return 1;
         }
-    }
 
-    if (draw_frame_lines) {
-        for (const auto& s : sprites) {
-            draw_sprite_outline(atlas, atlas_width, atlas_height, s, line_width, line_color);
-        }
-    }
-
+        if (use_tar) {
+            std::string filename = "atlas_" + std::to_string(atlas_idx) + ".png";
+            struct archive_entry* entry = archive_entry_new();
+            if (!entry) {
+                std::cerr << "Error: Failed to create TAR entry\n";
+                return 1;
+            }
+            archive_entry_set_pathname(entry, filename.c_str());
+            archive_entry_set_size(entry, static_cast<la_int64_t>(png_data.size()));
+            archive_entry_set_filetype(entry, AE_IFREG);
+            archive_entry_set_perm(entry, 0644);
+            
+            if (archive_write_header(a.get(), entry) != ARCHIVE_OK) {
+                std::cerr << "Error: Failed to write TAR header: " << archive_error_string(a.get()) << "\n";
+                archive_entry_free(entry);
+                return 1;
+            }
+            if (archive_write_data(a.get(), png_data.data(), png_data.size()) < 0) {
+                std::cerr << "Error: Failed to write TAR data: " << archive_error_string(a.get()) << "\n";
+                archive_entry_free(entry);
+                return 1;
+            }
+            archive_entry_free(entry);
+        } else if (output_pattern.empty()) {
 #ifdef _WIN32
-    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-        std::cerr << "Failed to set stdout to binary mode\n";
-        return 1;
-    }
+            if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+                std::cerr << "Failed to set stdout to binary mode\n";
+                return 1;
+            }
 #endif
-
-    auto write_callback = [](void* context, void* data, int size) {
-        auto* out = static_cast<std::ostream*>(context);
-        out->write(static_cast<char*>(data), size);
-    };
-
-    if (stbi_write_png_to_func(write_callback, &std::cout,
-                                atlas_width, atlas_height, static_cast<int>(NUM_CHANNELS),
-                                atlas.data(), atlas_width * static_cast<int>(NUM_CHANNELS)) == 0) {
-        std::cerr << "Failed to write PNG\n";
-        return 1;
+            std::cout.write(reinterpret_cast<const char*>(png_data.data()), static_cast<std::streamsize>(png_data.size()));
+        } else {
+            char filename_buf[1024];
+            int written = 0;
+#ifdef _WIN32
+            written = _snprintf(filename_buf, sizeof(filename_buf), output_pattern.c_str(), static_cast<int>(atlas_idx));
+#else
+            written = snprintf(filename_buf, sizeof(filename_buf), output_pattern.c_str(), static_cast<int>(atlas_idx));
+#endif
+            if (written < 0 || static_cast<size_t>(written) >= sizeof(filename_buf)) {
+                std::cerr << "Error: Output filename pattern resulted in a path too long or invalid\n";
+                return 1;
+            }
+            std::ofstream out_file(filename_buf, std::ios::binary);
+            if (!out_file) {
+                std::cerr << "Error: Failed to open output file: " << filename_buf << "\n";
+                return 1;
+            }
+            out_file.write(reinterpret_cast<const char*>(png_data.data()), static_cast<std::streamsize>(png_data.size()));
+        }
     }
 
     return 0;

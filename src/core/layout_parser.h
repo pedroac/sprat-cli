@@ -31,12 +31,17 @@ struct Sprite {
     int trim_bottom = 0;
     bool has_trim = false;
     bool rotated = false;
+    int atlas_index = 0;
     std::vector<Marker> markers;
 };
 
+struct Atlas {
+    int width = 0;
+    int height = 0;
+};
+
 struct Layout {
-    int atlas_width = 0;
-    int atlas_height = 0;
+    std::vector<Atlas> atlases;
     double scale = 1.0;
     bool has_scale = false;
     std::vector<Sprite> sprites;

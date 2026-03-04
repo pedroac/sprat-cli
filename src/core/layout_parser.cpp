@@ -163,10 +163,12 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
         }
 
         if (line.starts_with("atlas")) {
-            if (!parse_atlas_line(line, parsed.atlas_width, parsed.atlas_height)) {
+            int w = 0, h = 0;
+            if (!parse_atlas_line(line, w, h)) {
                 error = "Invalid atlas line: " + line;
                 return false;
             }
+            parsed.atlases.push_back({w, h});
         } else if (line.starts_with("scale")) {
             if (parsed.has_scale) {
                 error = "Duplicate scale line";
@@ -184,6 +186,11 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 error = "Invalid sprite line: " + sprite_error;
                 return false;
             }
+            if (parsed.atlases.empty()) {
+                error = "Sprite defined before any atlas";
+                return false;
+            }
+            s.atlas_index = static_cast<int>(parsed.atlases.size()) - 1;
             parsed.sprites.push_back(s);
         } else if (line.starts_with("path") || line.starts_with("- marker") || line.starts_with("- frame") || line.starts_with("animation") || line.starts_with("fps")) {
             // Skip markers and animations, they are handled by spratconvert
@@ -194,8 +201,8 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
         }
     }
 
-    if (parsed.atlas_width <= 0 || parsed.atlas_height <= 0) {
-        error = "Invalid atlas size";
+    if (parsed.atlases.empty()) {
+        error = "No atlas defined in layout";
         return false;
     }
 

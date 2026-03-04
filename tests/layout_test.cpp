@@ -57,7 +57,8 @@ void test_parse_layout() {
     sprat::core::Layout layout;
     std::string error;
     assert(sprat::core::parse_layout(iss, layout, error));
-    assert(layout.atlas_width == 512 && layout.atlas_height == 512);
+    assert(layout.atlases.size() == 1);
+    assert(layout.atlases[0].width == 512 && layout.atlases[0].height == 512);
     assert(layout.has_scale && layout.scale == 2.0);
     assert(layout.sprites.size() == 2);
     assert(layout.sprites[0].path == "a.png");

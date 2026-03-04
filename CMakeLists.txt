@@ -155,7 +155,8 @@ add_executable(spratpack
     src/spratpack.cpp
     src/commands/spratpack_command.cpp
 )
-target_link_libraries(spratpack PRIVATE spratcore)
+target_link_libraries(spratpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
+target_include_directories(spratpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratpack SYSTEM PRIVATE ${STB_DIR})
 target_include_directories(spratpack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 

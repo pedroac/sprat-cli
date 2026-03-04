@@ -47,7 +47,7 @@ for fmt in json csv xml css; do
 done
 
 "$convert_bin" --transform json < "$layout_file" > "$tmp_dir/out.json"
-grep -q '"atlas": {"width": 64, "height": 32}' "$tmp_dir/out.json"
+grep -q '"atlases": \[{"width":64,"height":32}\]' "$tmp_dir/out.json"
 grep -q '"path": "./frames/b.png"' "$tmp_dir/out.json"
 
 "$convert_bin" --transform csv < "$layout_file" > "$tmp_dir/out.csv"
