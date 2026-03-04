@@ -20,12 +20,8 @@ endif()
 
 # Version detection
 set(SPRAT_VERSION "0.0.0")
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt")
-    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" VERSION_FROM_FILE)
-    string(STRIP "${VERSION_FROM_FILE}" SPRAT_VERSION)
-endif()
 
-# Try to get version from git tag
+# Try to get version from git tag first
 execute_process(
     COMMAND git describe --tags --always --dirty
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -35,7 +31,25 @@ execute_process(
 )
 
 if(GIT_VERSION)
+    string(REPLACE "\n" " " GIT_VERSION "${GIT_VERSION}")
+    string(STRIP "${GIT_VERSION}" GIT_VERSION)
+    # Take only the first word in case of multiple lines
+    string(REPLACE " " ";" GIT_VERSION_LIST "${GIT_VERSION}")
+    list(GET GIT_VERSION_LIST 0 GIT_VERSION)
     set(SPRAT_VERSION ${GIT_VERSION})
+endif()
+
+# Override with VERSION if it exists and is not empty (e.g. from build.sh)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VERSION_FROM_FILE)
+    string(REPLACE "\n" " " VERSION_FROM_FILE "${VERSION_FROM_FILE}")
+    string(STRIP "${VERSION_FROM_FILE}" VERSION_FROM_FILE_STRIP)
+    if(NOT VERSION_FROM_FILE_STRIP STREQUAL "")
+        # Take only the first word/line
+        string(REPLACE " " ";" VERSION_LIST "${VERSION_FROM_FILE_STRIP}")
+        list(GET VERSION_LIST 0 VERSION_FIRST)
+        set(SPRAT_VERSION ${VERSION_FIRST})
+    endif()
 endif()
 
 message(STATUS "Sprat version: ${SPRAT_VERSION}")
