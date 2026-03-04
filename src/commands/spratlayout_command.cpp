@@ -1355,6 +1355,7 @@ void print_usage() {
               << "  --trim-transparent         Enable transparent-border trimming\n"
               << "  --rotate                   Allow 90-degree sprite rotation during packing\n"
               << "  --multipack                Split into multiple atlases if they don't fit\n"
+              << "  --sort name|none           Order of sprites in layout (default: name for folders)\n"
               << "  --threads N                Number of worker threads\n"
               << "  --help, -h                 Show this help message\n";
 }
@@ -2032,6 +2033,21 @@ bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int pad
     return true;
 }
 
+enum class FrameSort : std::uint8_t { Name, None };
+
+bool parse_frame_sort_from_string(const std::string& value, FrameSort& out) {
+    std::string lower = to_lower_copy(value);
+    if (lower == "name") {
+        out = FrameSort::Name;
+        return true;
+    }
+    if (lower == "none") {
+        out = FrameSort::None;
+        return true;
+    }
+    return false;
+}
+
 enum class SortMode : std::uint8_t {
     Height,
     Width,
@@ -2659,6 +2675,8 @@ int run_spratlayout(int argc, char** argv) {
     bool has_rotate_override = false;
     bool multipack = false;
     bool has_multipack_override = false;
+    FrameSort frame_sort = FrameSort::Name;
+    bool has_frame_sort_override = false;
     unsigned int thread_limit = 0;
     bool has_threads_override = false;
 
@@ -2769,6 +2787,13 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--multipack") {
             multipack = true;
             has_multipack_override = true;
+        } else if (arg == "--sort" && i + 1 < argc) {
+            std::string value = argv[++i];
+            if (!parse_frame_sort_from_string(value, frame_sort)) {
+                std::cerr << "Invalid sort value: " << value << "\n";
+                return 1;
+            }
+            has_frame_sort_override = true;
         } else if (arg == "--threads") {
             std::string value = argv[++i];
             if (!parse_positive_uint(value, thread_limit)) {
@@ -3110,9 +3135,16 @@ int run_spratlayout(int argc, char** argv) {
         }
     }
 
-    const bool preserve_source_order =
+    const bool is_stdin_or_list =
         (input_context.type == InputType::ListFile || input_context.type == InputType::StdinTar);
-    if (!preserve_source_order) {
+    bool do_sort = false;
+    if (has_frame_sort_override) {
+        do_sort = (frame_sort == FrameSort::Name);
+    } else {
+        do_sort = !is_stdin_or_list;
+    }
+
+    if (do_sort) {
         std::ranges::sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
             if (lhs.path != rhs.path) {
                 return lhs.path < rhs.path;
@@ -3129,7 +3161,7 @@ int run_spratlayout(int argc, char** argv) {
         return 1;
     }
 
-    const bool is_file = preserve_source_order;
+    const bool is_file = !do_sort;
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         padding, max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);

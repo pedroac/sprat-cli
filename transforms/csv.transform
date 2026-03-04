@@ -5,13 +5,13 @@ extension=.csv
 [/meta]
 
 [header]
-index,name,path,x,y,w,h,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json,rotation
+index,name,path,x,y,w,h,pivot_x,pivot_y,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json,rotation
 
 [/header]
 
 [sprites]
   [sprite]
-{{index}},{{name}},{{path}},{{x}},{{y}},{{w}},{{h}},{{trim_left}},{{trim_top}},{{trim_right}},{{trim_bottom}},{{sprite_markers_count}},{{sprite_markers_json}},{{rotation}}
+{{index}},{{name}},{{path}},{{x}},{{y}},{{w}},{{h}},{{pivot_x}},{{pivot_y}},{{trim_left}},{{trim_top}},{{trim_right}},{{trim_bottom}},{{sprite_markers_count}},{{sprite_markers_json}},{{rotation}}
 
   [/sprite]
 

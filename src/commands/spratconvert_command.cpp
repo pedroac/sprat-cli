@@ -630,9 +630,6 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
             if (!(liss >> subcmd) || subcmd != "marker") {
                 continue;
             }
-            if (current_sprite_index < 0) {
-                continue;
-            }
 
             size_t pos = trimmed.find("marker");
             if (pos == std::string::npos) {
@@ -665,8 +662,10 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
             MarkerItem item;
             item.index = markers.size();
             item.sprite_index = current_sprite_index;
-            item.sprite_name = sprite_names[static_cast<size_t>(current_sprite_index)];
-            item.sprite_path = layout.sprites[static_cast<size_t>(current_sprite_index)].path;
+            if (current_sprite_index >= 0) {
+                item.sprite_name = sprite_names[static_cast<size_t>(current_sprite_index)];
+                item.sprite_path = layout.sprites[static_cast<size_t>(current_sprite_index)].path;
+            }
             item.name = name;
             item.type = type;
 
@@ -707,7 +706,9 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
                 continue;
             }
 
-            sprite_markers[static_cast<size_t>(current_sprite_index)].push_back(item);
+            if (current_sprite_index >= 0) {
+                sprite_markers[static_cast<size_t>(current_sprite_index)].push_back(item);
+            }
             markers.push_back(std::move(item));
         }
     }
@@ -1214,6 +1215,21 @@ void list_transforms() {
     }
 }
 
+bool is_digit(char c) { return c >= '0' && c <= '9'; }
+
+std::string get_animation_name(const std::string& name) {
+    std::string anim_name = name;
+    while (!anim_name.empty()) {
+        char back = anim_name.back();
+        if (is_digit(back) || back == '_' || back == '-' || back == ' ' || back == '.' || back == '(' || back == ')') {
+            anim_name.pop_back();
+        } else {
+            break;
+        }
+    }
+    return anim_name;
+}
+
 void print_usage() {
     std::cout << "Usage: spratconvert [OPTIONS]\n"
               << "\n"
@@ -1225,6 +1241,7 @@ void print_usage() {
               << "  --list-transforms          Print available transforms and exit\n"
               << "  --markers PATH             Load external markers file\n"
               << "  --animations PATH          Load external animations file\n"
+              << "  --auto-animations          Group frames into animations by name pattern\n"
               << "  --help, -h                 Show this help message\n";
 }
 } // namespace
@@ -1239,6 +1256,7 @@ int run_spratconvert(int argc, char** argv) {
     std::string markers_path_arg;
     std::string animations_path_arg;
     bool list_only = false;
+    bool auto_animations = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -1248,6 +1266,8 @@ int run_spratconvert(int argc, char** argv) {
             markers_path_arg = argv[++i];
         } else if (arg == "--animations" && i + 1 < argc) {
             animations_path_arg = argv[++i];
+        } else if (arg == "--auto-animations") {
+            auto_animations = true;
         } else if (arg == "--list-transforms") {
             list_only = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -1320,8 +1340,30 @@ int run_spratconvert(int argc, char** argv) {
     const std::vector<MarkerItem> marker_items =
         parse_markers_data(markers_text, layout, sprite_index_by_path, sprite_index_by_name, sprite_names, sprite_markers);
     int animation_fps = -1;
-    const std::vector<AnimationItem> animation_items =
+    std::vector<AnimationItem> animation_items =
         parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name, animation_fps);
+
+    if (auto_animations) {
+        std::map<std::string, std::vector<int>> grouped;
+        for (size_t i = 0; i < sprite_names.size(); ++i) {
+            std::string anim_name = get_animation_name(sprite_names[i]);
+            if (anim_name.empty()) {
+                continue;
+            }
+            grouped[anim_name].push_back(static_cast<int>(i));
+        }
+        for (auto const& [name, frames] : grouped) {
+            if (frames.size() > 1) {
+                AnimationItem anim;
+                anim.index = animation_items.size();
+                anim.name = name;
+                anim.sprite_indexes = frames;
+                anim.fps = (animation_fps > 0 ? animation_fps : DEFAULT_ANIMATION_FPS);
+                animation_items.push_back(std::move(anim));
+            }
+        }
+    }
+
     const int sprite_count_limit = static_cast<int>(layout.sprites.size());
     std::vector<AnimationItem> normalized_animation_items = animation_items;
     for (AnimationItem& item : normalized_animation_items) {
@@ -1333,6 +1375,18 @@ int run_spratconvert(int argc, char** argv) {
             }
         }
         item.sprite_indexes = std::move(filtered);
+    }
+
+    int global_pivot_x = 0;
+    int global_pivot_y = 0;
+    bool has_global_pivot = false;
+    for (const auto& marker : marker_items) {
+        if (marker.sprite_index < 0 && marker.name == "pivot" && marker.type == "point") {
+            global_pivot_x = marker.x;
+            global_pivot_y = marker.y;
+            has_global_pivot = true;
+            break;
+        }
     }
 
     std::map<std::string, std::string> global_vars;
@@ -1452,6 +1506,15 @@ int run_spratconvert(int argc, char** argv) {
         vars["y"] = std::to_string(s.y);
         vars["w"] = std::to_string(s.w);
         vars["h"] = std::to_string(s.h);
+        vars["pivot_x"] = has_global_pivot ? std::to_string(global_pivot_x) : "0";
+        vars["pivot_y"] = has_global_pivot ? std::to_string(global_pivot_y) : "0";
+        for (const auto& marker : sprite_markers[i]) {
+            if (marker.name == "pivot" && marker.type == "point") {
+                vars["pivot_x"] = std::to_string(marker.x);
+                vars["pivot_y"] = std::to_string(marker.y);
+                break;
+            }
+        }
         vars["src_x"] = std::to_string(s.src_x);
         vars["src_y"] = std::to_string(s.src_y);
         vars["trim_left"] = std::to_string(s.src_x);

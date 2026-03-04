@@ -13,7 +13,7 @@ extension=.json
 
 [sprites]
   [sprite]
-    {"name": "{{name}}", "path": "{{path}}", "atlas_index": {{atlas_index}}, "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": [{{sprite_markers_json}}], "rotation": {{rotation}}}
+    {"name": "{{name}}", "path": "{{path}}", "atlas_index": {{atlas_index}}, "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "pivot_x": {{pivot_x}}, "pivot_y": {{pivot_y}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": [{{sprite_markers_json}}], "rotation": {{rotation}}}
   [/sprite]
 [/sprites]
 
