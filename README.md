@@ -208,11 +208,37 @@ Profile definitions are searched in:
 - `--extrude N`: Repeat edge pixels N times (requires padding >= extrude * 2).
 - `--trim-transparent`: Remove empty borders to save space.
 - `--rotate`: Allow 90-degree rotation during packing for tighter layouts.
+- `--multipack`: Split into multiple atlases if sprites don't fit within max width/height.
+- `--sort name|none`: Order of sprites in layout (default: `name` for folders, `none` for stdin).
 - `--scale F`: Pre-scale images (0.0 to 1.0).
 - `--threads N`: Parallelize the packing search.
+- `--debug`: Enable detailed error reporting and debug visualization.
 
 ### Layout Caching
 `spratlayout` automatically caches image metadata in the system temp directory. If your source images haven't changed, subsequent runs will be nearly instantaneous. Entries older than one hour are pruned automatically.
+
+---
+
+## Multipacking
+
+When sprites cannot fit into a single atlas of the maximum allowed size, use `--multipack` to automatically split them across multiple atlases.
+
+```sh
+# Force small atlases to trigger multipack
+./build/spratlayout ./frames --max-width 512 --max-height 512 --multipack > layout.txt
+```
+
+The layout file will contain multiple `atlas` lines. `spratpack` can then generate multiple PNG files:
+
+```sh
+# Output atlas_0.png, atlas_1.png, etc.
+./build/spratpack -o atlas_%d.png < layout.txt
+```
+
+You can also extract a specific atlas index:
+```sh
+./build/spratpack --atlas-index 1 < layout.txt > second_atlas.png
+```
 
 ---
 
@@ -294,57 +320,30 @@ Allows 90-degree clockwise rotation of sprites to achieve even tighter packing.
 ```
 ![rotation](README-assets/rotation_pad2.png)
 
-## Benchmarking
+## Advanced Packing (`spratpack`)
 
-Trim benchmark (repeatable local comparison):
-
+### Zopfli Compression
+Produce smaller PNGs using the Zopfli algorithm. It is significantly slower but provides better compression than standard deflate.
 ```sh
-./scripts/benchmark-trim.sh ./build/spratlayout ./frames 5
+./build/spratpack --zopfli < layout.txt > optimized.png
 ```
 
-Scale recipe (smaller output for lower resolutions):
-
+### Protection & Obfuscation
+Protect your assets with basic XOR-based obfuscation.
 ```sh
-./build/spratlayout ./frames --profile mobile --scale 0.5 > layout_mobile_half.txt
-./build/spratpack < layout_mobile_half.txt > spritesheet_mobile_half.png
+./build/spratpack --protect < layout.txt > protected.png
 ```
+`spratunpack` and other tools in the suite automatically handle de-obfuscation when they detect the "SPRAT!" signature.
 
-Resolution-aware scale recipe:
+### Per-sprite Dithering & Quantization
+Advanced users can manually edit `layout.txt` to apply per-sprite effects.
+- `dither`: Enables ordered dithering for the sprite.
+- `colors=N`: Quantizes the sprite to N colors (2-256).
 
-```sh
-./build/spratlayout ./frames --profile mobile \
-  --source-resolution 3840x2160 --target-resolution 1920x1080 --scale 0.5 \
-  > layout_mobile_targeted.txt
-./build/spratpack < layout_mobile_targeted.txt > spritesheet_mobile_targeted.png
-```
+Example layout line:
+`sprite "./frames/robot.png" 0,0 128,128 dither colors=16`
 
-The output format is:
-
-- `atlas <width>,<height>`
-- `scale <factor>`
-- `sprite "<path>" <x>,<y> <w>,<h>`
-
-When `--trim-transparent` is enabled, sprite lines include crop offsets:
-
-- `sprite "<path>" <x>,<y> <w>,<h> <left>,<top> <right>,<bottom>`
-
-When `--rotate` is enabled and a sprite is packed rotated, the line ends with:
-
-- `rotated`
-
-Example output from:
-
-```sh
-./build/spratlayout ./frames --trim-transparent > layout.txt
-```
-
-```txt
-atlas 1631,1963
-scale 1
-sprite "./tests/png/Run (6).png" 0,0 335,495 109,54 123,7
-sprite "./tests/png/RunShoot (6).png" 345,0 373,495 109,54 85,7
-sprite "./tests/png/RunShoot (2).png" 728,0 362,492 121,54 84,10
-```
+---
 
 ## Layout transforms (`spratconvert`)
 
@@ -361,9 +360,28 @@ Use a built-in transform:
 
 ```sh
 ./build/spratconvert --transform json < layout.txt > layout.json
-./build/spratconvert --transform csv < layout.txt > layout.csv
-./build/spratconvert --transform xml < layout.txt > layout.xml
-./build/spratconvert --transform css < layout.txt > layout.css
+```
+
+### Automatic Animations
+Automatically group sprites into animations based on their filenames (e.g., `hero_walk_01.png`, `hero_walk_02.png` -> animation `hero_walk`).
+```sh
+./build/spratconvert --transform json --auto-animations < layout.txt > layout.json
+```
+
+### Pivot Points
+You can define pivot points (anchors) for your sprites using markers.
+1.  **Per-sprite pivot**: Add a marker named `pivot` of type `point` to a specific sprite.
+2.  **Global pivot**: Add a marker named `pivot` of type `point` without a `path` (or at the top level).
+`spratconvert` will automatically populate `{{pivot_x}}` and `{{pivot_y}}` placeholders using these markers.
+
+Example `markers.txt`:
+```txt
+# Global default pivot
+- marker "pivot" point 16,16
+
+path "./frames/hero.png"
+# Specific pivot for hero
+- marker "pivot" point 32,64
 ```
 
 Optional extra data files:
@@ -395,6 +413,7 @@ Common placeholders:
 
 - `{{atlas_width}}`, `{{atlas_height}}`, `{{scale}}`, `{{sprite_count}}`
 - `{{index}}`, `{{name}}`, `{{path}}`, `{{x}}`, `{{y}}`, `{{w}}`, `{{h}}`
+- `{{pivot_x}}`, `{{pivot_y}}` (resolved from "pivot" markers)
 - `{{src_x}}`, `{{src_y}}`, `{{trim_left}}`, `{{trim_top}}`, `{{trim_right}}`, `{{trim_bottom}}`
 - `{{rotation}}` (numeric degrees; `0` when unrotated, `90` when rotated clockwise; built-in transforms use this field)
 - `[rotated]...[/rotated]` sections inside sprite templates emit their contents only for rotated sprites; non-rotated sprites have the block removed automatically.

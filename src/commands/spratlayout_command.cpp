@@ -474,6 +474,13 @@ bool parse_profiles_config(std::istream& input,
                 return false;
             }
             current->threads = parsed_threads;
+        } else if (lower_key == "multipack") {
+            bool parsed_multipack = false;
+            if (!parse_bool_value(value, parsed_multipack)) {
+                error = "invalid multipack '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->multipack = parsed_multipack;
         } else if (lower_key == "source_resolution") {
             int w = 0;
             int h = 0;
