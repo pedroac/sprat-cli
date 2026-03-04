@@ -112,9 +112,9 @@ private:
         }
 
         if (actual_input_path.empty() && config_.input_from_stdin) {
-            const std::vector<unsigned char> stdin_bytes(
+            const std::vector<unsigned char> stdin_bytes{
                 std::istreambuf_iterator<char>(std::cin),
-                std::istreambuf_iterator<char>());
+                std::istreambuf_iterator<char>()};
             if (stdin_bytes.empty()) {
                 std::cerr << "Error: No atlas image data received on stdin\n";
                 return false;
