@@ -129,6 +129,8 @@ jobs:
           cp build/spratframes "$out_dir/"
           cp build/spratunpack "$out_dir/"
           cp spratprofiles.cfg "$out_dir/"
+          cp -r transforms/ "$out_dir/"
+          cp -r man/ "$out_dir/"
           tar -C dist -czf dist/sprat-cli-linux-x64.tar.gz sprat-cli-linux-x64
 
       - name: Package macOS (.dmg)
@@ -143,6 +145,8 @@ jobs:
           cp build/spratframes "$out_dir/"
           cp build/spratunpack "$out_dir/"
           cp spratprofiles.cfg "$out_dir/"
+          cp -r transforms/ "$out_dir/"
+          cp -r man/ "$out_dir/"
           hdiutil create \
             -volname "sprat-cli" \
             -srcfolder "$out_dir" \
@@ -162,6 +166,7 @@ jobs:
           Copy-Item -Path build/Release/spratframes.exe -Destination $outDir -Force
           Copy-Item -Path build/Release/spratunpack.exe -Destination $outDir -Force
           Copy-Item -Path spratprofiles.cfg -Destination $outDir -Force
+          Copy-Item -Path transforms -Destination $outDir -Recurse -Force
           Compress-Archive -Path "$outDir/*" -DestinationPath "dist/sprat-cli-windows-x64.zip" -Force
 
       - name: Upload packaged artifact

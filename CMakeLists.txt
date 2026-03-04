@@ -216,12 +216,20 @@ foreach(target spratlayout spratpack spratconvert spratframes spratunpack)
             $<TARGET_FILE_DIR:${target}>/spratprofiles.cfg
         COMMENT "Copying spratprofiles.cfg to $<TARGET_FILE_DIR:${target}>"
         VERBATIM)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/transforms
+            $<TARGET_FILE_DIR:${target}>/transforms
+        COMMENT "Copying transforms/ to $<TARGET_FILE_DIR:${target}>"
+        VERBATIM)
 endforeach()
 
-install(TARGETS spratlayout spratpack spratconvert
+install(TARGETS spratlayout spratpack spratconvert spratframes spratunpack
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES spratprofiles.cfg
     DESTINATION ${CMAKE_INSTALL_DATADIR}/sprat)
+install(DIRECTORY transforms/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/sprat/transforms)
 install(FILES man/sprat-cli.1
     DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
