@@ -285,7 +285,7 @@ int run_spratpack(int argc, char** argv) {
         int channels = 0;
         unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
         if (!data) {
-            error_out = "Failed to load: " + to_quoted(s.path);
+            error_out = "Failed to load: " + to_quoted(s.path) + " (Reason: " + stbi_failure_reason() + ")";
             return false;
         }
         int source_x = s.has_trim ? s.src_x : 0;

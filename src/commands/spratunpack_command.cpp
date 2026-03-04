@@ -136,9 +136,9 @@ private:
 
         if (data == nullptr) {
             if (actual_input_path.empty()) {
-                std::cerr << "Error: Failed to load atlas image from stdin\n";
+                std::cerr << "Error: Failed to load atlas image from stdin (Reason: " << stbi_failure_reason() << ")\n";
             } else {
-                std::cerr << "Error: Failed to load image " << to_quoted(actual_input_path.string()) << "\n";
+                std::cerr << "Error: Failed to load image " << to_quoted(actual_input_path.string()) << " (Reason: " << stbi_failure_reason() << ")\n";
             }
             return false;
         }

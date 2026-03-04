@@ -3042,6 +3042,7 @@ int run_spratlayout(int argc, char** argv) {
         int channels = 0;
         unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
         if (data == nullptr) {
+            std::cerr << "Warning: Failed to load sprite " << to_quoted(path) << " (Reason: " << stbi_failure_reason() << ")\n";
             continue;
         }
 

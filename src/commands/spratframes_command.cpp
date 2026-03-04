@@ -153,7 +153,8 @@ public:
         unsigned char* data = stbi_load(config_.input_path.string().c_str(), &width_, &height_, &channels_, req_channels);
         
         if (data == nullptr) {
-            std::cerr << "Error: Failed to load image: " << to_quoted(config_.input_path.string()) << '\n';
+            std::cerr << "Error: Failed to load image: " << to_quoted(config_.input_path.string()) 
+                      << " (Reason: " << stbi_failure_reason() << ")" << '\n';
             return false;
         }
         

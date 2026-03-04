@@ -48,11 +48,11 @@ if command -v convert >/dev/null 2>&1; then
 elif command -v magick >/dev/null 2>&1; then
     magick -size 4x4 xc:transparent -fill red -draw "rectangle 1,1 2,2" "magic.png"
 else
-    png_b64_2='iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH6AMCFREpUunZFAAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLm3VAAAAF0lEQVQI12P8//8/AwMDA8P//xADDAwAFRMDf9m96ecAAAAASUVORK5CYII='
+    png_b64_2='iVBORw0KGgoAAAANSUhEUgAAAAQAAAAEAgMAAADUn3btAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAJUExURQAAAP8AAP///2cZZB4AAAABdFJOUwBA5thmAAAAAWJLR0QCZgt8ZAAAAAd0SU1FB+oDBAIGN16qqSQAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDMtMDRUMDI6MDY6NTUrMDA6MDB+kBKTAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTAzLTA0VDAyOjA2OjU1KzAwOjAwD82qLwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0wNFQwMjowNjo1NSswMDowMFjYi/AAAAAOSURBVAjXY2BgEAFCBgAAqAApRmN0bwAAAABJRU5ErkJggg=='
     if base64 --decode >/dev/null 2>&1 <<<'AA=='; then
-        echo "$png_b64_2" | base64 --decode > "magic.png"
+        printf '%s' "$png_b64_2" | base64 --decode > "magic.png"
     else
-        echo "$png_b64_2" | base64 -D > "magic.png"
+        printf '%s' "$png_b64_2" | base64 -D > "magic.png"
     fi
 fi
 
