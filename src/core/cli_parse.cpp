@@ -145,4 +145,8 @@ std::string to_quoted(const std::string& s) {
     return result;
 }
 
+std::string to_quoted(const std::filesystem::path& p) {
+    return to_quoted(p.string());
+}
+
 } // namespace sprat::core

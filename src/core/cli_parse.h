@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <filesystem>
 
 namespace sprat::core {
 
@@ -17,5 +18,6 @@ bool parse_pair(const std::string& token, int& a, int& b);
 bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::string& error);
 
 std::string to_quoted(const std::string& s);
+std::string to_quoted(const std::filesystem::path& p);
 
 } // namespace sprat::core

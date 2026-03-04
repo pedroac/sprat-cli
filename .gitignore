@@ -49,6 +49,8 @@ vcpkg_installed/
 **/Makefile
 **/build/
 **/build-win/
+**/build_debug
+**/build_release
 **/Testing
 stb/*
 layout.*
