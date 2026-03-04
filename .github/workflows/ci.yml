@@ -71,7 +71,9 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install pkg-config libarchive
+          # Use brew list to check if already installed and avoid warnings
+          brew list pkg-config > /dev/null 2>&1 || brew install pkg-config
+          brew list libarchive > /dev/null 2>&1 || brew install libarchive
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Configure
@@ -191,8 +193,11 @@ jobs:
       - name: Publish GitHub Release
         uses: ncipollo/release-action@v1
         with:
+          allowUpdates: true
+          replacesExistingArtifacts: true
           tag: ${{ steps.release_tag.outputs.tag }}
           name: Release ${{ steps.release_tag.outputs.tag }}
           commit: ${{ github.sha }}
           generateReleaseNotes: true
           artifacts: "dist/*.tar.gz,dist/*.dmg,dist/*.zip"
+          token: ${{ secrets.GITHUB_TOKEN }}
