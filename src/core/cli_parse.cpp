@@ -145,6 +145,10 @@ std::string to_quoted(const std::string& s) {
     return result;
 }
 
+std::string to_quoted(const char* s) {
+    return to_quoted(std::string(s));
+}
+
 std::string to_quoted(const std::filesystem::path& p) {
     return to_quoted(p.string());
 }
