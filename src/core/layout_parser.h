@@ -44,6 +44,8 @@ struct Layout {
     std::vector<Atlas> atlases;
     double scale = 1.0;
     bool has_scale = false;
+    int extrude = 0;
+    bool has_extrude = false;
     std::vector<Sprite> sprites;
     std::vector<Marker> global_markers;
 };
@@ -55,6 +57,7 @@ bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::st
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error);
 bool parse_atlas_line(const std::string& line, int& width, int& height);
 bool parse_scale_line(const std::string& line, double& scale);
+bool parse_extrude_line(const std::string& line, int& extrude);
 bool parse_layout(std::istream& in, Layout& out, std::string& error);
 
 } // namespace sprat::core

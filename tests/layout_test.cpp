@@ -48,9 +48,21 @@ void test_parse_sprite_line() {
     std::cout << "test_parse_sprite_line passed" << std::endl;
 }
 
+void test_parse_extrude_line() {
+    int extrude;
+    assert(sprat::core::parse_extrude_line("extrude 2", extrude));
+    assert(extrude == 2);
+    
+    assert(!sprat::core::parse_extrude_line("notextrude 2", extrude));
+    assert(!sprat::core::parse_extrude_line("extrude", extrude));
+    assert(!sprat::core::parse_extrude_line("extrude -1", extrude));
+    std::cout << "test_parse_extrude_line passed" << std::endl;
+}
+
 void test_parse_layout() {
     std::string data = "atlas 512,512\n"
                        "scale 2.0\n"
+                       "extrude 3\n"
                        "sprite \"a.png\" 0,0 10,10\n"
                        "sprite \"b.png\" 10,10 20,20 rotated\n";
     std::istringstream iss(data);
@@ -60,6 +72,7 @@ void test_parse_layout() {
     assert(layout.atlases.size() == 1);
     assert(layout.atlases[0].width == 512 && layout.atlases[0].height == 512);
     assert(layout.has_scale && layout.scale == 2.0);
+    assert(layout.has_extrude && layout.extrude == 3);
     assert(layout.sprites.size() == 2);
     assert(layout.sprites[0].path == "a.png");
     assert(layout.sprites[1].path == "b.png");
@@ -70,6 +83,7 @@ void test_parse_layout() {
 int main() {
     test_parse_atlas_line();
     test_parse_sprite_line();
+    test_parse_extrude_line();
     test_parse_layout();
     std::cout << "All layout tests passed!" << std::endl;
     return 0;

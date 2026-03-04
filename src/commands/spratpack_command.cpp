@@ -189,6 +189,62 @@ bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
 }
 
 
+void extrude_atlas(
+    std::vector<unsigned char>& atlas,
+    int atlas_width,
+    int atlas_height,
+    const std::vector<Sprite>& sprites,
+    int extrude
+) {
+    if (extrude <= 0) {
+        return;
+    }
+
+    auto set_pixel = [&](int dx, int dy, int sx, int sy) {
+        if (dx < 0 || dy < 0 || dx >= atlas_width || dy >= atlas_height ||
+            sx < 0 || sy < 0 || sx >= atlas_width || sy >= atlas_height) {
+            return;
+        }
+        size_t dest_offset = (static_cast<size_t>(dy) * atlas_width + dx) * NUM_CHANNELS;
+        size_t src_offset = (static_cast<size_t>(sy) * atlas_width + sx) * NUM_CHANNELS;
+        std::memcpy(&atlas[dest_offset], &atlas[src_offset], NUM_CHANNELS);
+    };
+
+    for (const auto& s : sprites) {
+        if (s.w <= 0 || s.h <= 0) {
+            continue;
+        }
+        // Extrude sides
+        for (int e = 1; e <= extrude; ++e) {
+            // Left & Right sides
+            for (int y = 0; y < s.h; ++y) {
+                set_pixel(s.x - e, s.y + y, s.x, s.y + y);
+                set_pixel(s.x + s.w - 1 + e, s.y + y, s.x + s.w - 1, s.y + y);
+            }
+            // Top & Bottom sides
+            for (int x = 0; x < s.w; ++x) {
+                set_pixel(s.x + x, s.y - e, s.x + x, s.y);
+                set_pixel(s.x + x, s.y + s.h - 1 + e, s.x + x, s.y + s.h - 1);
+            }
+        }
+
+        // Extrude corners
+        for (int ey = 1; ey <= extrude; ++ey) {
+            for (int ex = 1; ex <= extrude; ++ex) {
+                // Top-Left
+                set_pixel(s.x - ex, s.y - ey, s.x, s.y);
+                // Top-Right
+                set_pixel(s.x + s.w - 1 + ex, s.y - ey, s.x + s.w - 1, s.y);
+                // Bottom-Left
+                set_pixel(s.x - ex, s.y + s.h - 1 + ey, s.x, s.y + s.h - 1);
+                // Bottom-Right
+                set_pixel(s.x + s.w - 1 + ex, s.y + s.h - 1 + ey, s.x + s.w - 1, s.y + s.h - 1);
+            }
+        }
+    }
+}
+
+
 } // namespace
 
 void print_usage() {
@@ -199,6 +255,7 @@ void print_usage() {
               << "Options:\n"
               << "  -o, --output PATTERN   Output filename pattern (e.g. atlas_%d.png)\n"
               << "  --atlas-index N        Pick a specific atlas index to output\n"
+              << "  --extrude N            Repeat edge pixels N times (overrides layout)\n"
               << "  --frame-lines          Draw rectangle outlines for each sprite\n"
               << "  --line-width N         Outline thickness in pixels (default: 1)\n"
               << "  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n"
@@ -215,6 +272,8 @@ int run_spratpack(int argc, char** argv) {
     unsigned int thread_limit = 0;
     std::string output_pattern;
     int requested_atlas_index = -1;
+    int extrude = 0;
+    bool has_extrude_override = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -231,6 +290,13 @@ int run_spratpack(int argc, char** argv) {
                 std::cerr << "Invalid atlas index: " << value << "\n";
                 return 1;
             }
+        } else if (arg == "--extrude" && i + 1 < argc) {
+            std::string value = argv[++i];
+            if (!parse_int(value, extrude) || extrude < 0) {
+                std::cerr << "Invalid extrude value: " << value << "\n";
+                return 1;
+            }
+            has_extrude_override = true;
         } else if (arg == "--frame-lines") {
             draw_frame_lines = true;
         } else if (arg == "--line-width" && i + 1 < argc) {
@@ -410,9 +476,27 @@ int run_spratpack(int argc, char** argv) {
             if (failed.load(std::memory_order_relaxed)) { std::cerr << first_err << "\n"; return 1; }
         }
 
+        const int active_extrude = has_extrude_override ? extrude : layout.extrude;
+        if (active_extrude > 0) {
+            extrude_atlas(atlas_data, atlas_width, atlas_height, atlas_sprites, active_extrude);
+        }
+
         if (draw_frame_lines) {
             for (const auto& s : atlas_sprites) {
                 draw_sprite_outline(atlas_data, atlas_width, atlas_height, s, line_width, line_color);
+            }
+        }
+
+        if (std::getenv("SPRAT_PACK_DEBUG") && atlas_width <= 16) {
+            for (int y = 0; y < atlas_height; ++y) {
+                for (int x = 0; x < atlas_width; ++x) {
+                    size_t off = (static_cast<size_t>(y) * atlas_width + x) * NUM_CHANNELS;
+                    if (atlas_data[off+3] != 0) {
+                        std::cerr << "[pixel-debug] x=" << x << " y=" << y << " RGBA=" 
+                                  << (int)atlas_data[off] << "," << (int)atlas_data[off+1] << "," 
+                                  << (int)atlas_data[off+2] << "," << (int)atlas_data[off+3] << "\n";
+                    }
+                }
             }
         }
 

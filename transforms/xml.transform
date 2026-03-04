@@ -6,7 +6,7 @@ extension=.xml
 
 [header]
 <?xml version="1.0" encoding="UTF-8"?>
-<atlas width="{{atlas_width}}" height="{{atlas_height}}" scale="{{scale}}">
+<atlas width="{{atlas_width}}" height="{{atlas_height}}" scale="{{scale}}" extrude="{{extrude}}">
   <sprites>
 [/header]
 

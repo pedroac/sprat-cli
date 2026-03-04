@@ -28,6 +28,13 @@ add_test(
 )
 
 add_test(
+    NAME extrude
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/extrude_test.sh
+            $<TARGET_FILE:spratlayout>
+            $<TARGET_FILE:spratpack>
+)
+
+add_test(
     NAME multipack
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/multipack_test.sh
             $<TARGET_FILE:spratlayout>

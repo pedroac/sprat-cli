@@ -1405,6 +1405,7 @@ int run_spratconvert(int argc, char** argv) {
     }
     global_vars["atlases_json"] = atlases_json.str();
     global_vars["scale"] = format_double(layout.scale);
+    global_vars["extrude"] = std::to_string(layout.extrude);
     global_vars["sprite_count"] = std::to_string(layout.sprites.size());
     global_vars["marker_count"] = std::to_string(marker_items.size());
     global_vars["animation_count"] = std::to_string(normalized_animation_items.size());

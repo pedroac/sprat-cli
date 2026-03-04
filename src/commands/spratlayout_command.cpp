@@ -93,6 +93,7 @@ struct ProfileDefinition {
     std::optional<int> max_width;
     std::optional<int> max_height;
     std::optional<int> padding;
+    std::optional<int> extrude;
     std::optional<int> max_combinations;
     std::optional<double> scale;
     std::optional<bool> trim_transparent;
@@ -111,6 +112,7 @@ constexpr const char k_default_profile_name[] = "fast";
 constexpr Mode k_default_mode = Mode::FAST;
 constexpr OptimizeTarget k_default_optimize_target = OptimizeTarget::GPU;
 constexpr int k_default_padding = 0;
+constexpr int k_default_extrude = 0;
 constexpr int k_default_max_combinations = 0;
 constexpr double k_default_scale = 1.0;
 constexpr bool k_default_trim_transparent = false;
@@ -430,6 +432,13 @@ bool parse_profiles_config(std::istream& input,
                 return false;
             }
             current->padding = parsed_padding;
+        } else if (lower_key == "extrude") {
+            int parsed_extrude = 0;
+            if (!parse_non_negative_int(value, parsed_extrude)) {
+                error = "invalid extrude '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            current->extrude = parsed_extrude;
         } else if (lower_key == "max_combinations") {
             int parsed_max_combinations = 0;
             if (!parse_non_negative_int(value, parsed_max_combinations)) {
@@ -1347,6 +1356,7 @@ void print_usage() {
               << "  --max-width N              Maximum atlas width\n"
               << "  --max-height N             Maximum atlas height\n"
               << "  --padding N                Extra pixels between packed sprites\n"
+              << "  --extrude N                Repeat edge pixels N times (padding should be >= extrude * 2)\n"
               << "  --max-combinations N       Max combinations for compact search (0=auto)\n"
               << "  --source-resolution WxH    Source design resolution baseline\n"
               << "  --target-resolution WxH    Target output resolution\n"
@@ -1386,6 +1396,7 @@ std::string build_layout_signature(const std::string& profile_name,
                                    int max_width_limit,
                                    int max_height_limit,
                                    int padding,
+                                   int extrude,
                                    int max_combinations,
                                    double scale,
                                    bool trim_transparent,
@@ -1410,6 +1421,7 @@ std::string build_layout_signature(const std::string& profile_name,
         << max_width_limit << "|"
         << max_height_limit << "|"
         << padding << "|"
+        << extrude << "|"
         << max_combinations << "|"
         << std::setprecision(k_floating_point_precision) << scale << "|"
         << (trim_transparent ? 1 : 0) << "|"
@@ -1426,6 +1438,7 @@ std::string build_layout_seed_signature(const std::string& profile_name,
                                         OptimizeTarget optimize_target,
                                         int max_width_limit,
                                         int max_height_limit,
+                                        int extrude,
                                         int max_combinations,
                                         double scale,
                                         bool trim_transparent,
@@ -1449,6 +1462,7 @@ std::string build_layout_seed_signature(const std::string& profile_name,
         << static_cast<int>(optimize_target) << "|"
         << max_width_limit << "|"
         << max_height_limit << "|"
+        << extrude << "|"
         << max_combinations << "|"
         << std::setprecision(k_floating_point_precision) << scale << "|"
         << (trim_transparent ? 1 : 0) << "|"
@@ -1906,10 +1920,14 @@ bool try_apply_layout_seed(const LayoutSeedCache& seed,
 
 std::string build_layout_output_text(const std::vector<Atlas>& atlases,
                                      double scale,
+                                     int extrude,
                                      bool trim_transparent,
                                      const std::vector<Sprite>& sprites) {
     std::ostringstream output;
     output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
+    if (extrude > 0) {
+        output << "extrude " << extrude << "\n";
+    }
     for (size_t i = 0; i < atlases.size(); ++i) {
         output << "atlas " << atlases[i].width << "," << atlases[i].height << "\n";
         for (const auto& s : sprites) {
@@ -2657,6 +2675,8 @@ int run_spratlayout(int argc, char** argv) {
     bool has_max_height_limit = false;
     int padding = 0;
     bool has_padding_override = false;
+    int extrude = 0;
+    bool has_extrude_override = false;
     int max_combinations = 0;
     bool has_max_combinations_override = false;
     int source_resolution_width = 0;
@@ -2738,6 +2758,13 @@ int run_spratlayout(int argc, char** argv) {
             }
             padding = std::max(padding, 0);
             has_padding_override = true;
+        } else if (arg == "--extrude" && i + 1 < argc) {
+            std::string value = argv[++i];
+            if (!parse_non_negative_int(value, extrude)) {
+                std::cerr << "Invalid extrude value: " << value << "\n";
+                return 1;
+            }
+            has_extrude_override = true;
         } else if (arg == "--max-combinations" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_non_negative_int(value, max_combinations)) {
@@ -2839,6 +2866,9 @@ int run_spratlayout(int argc, char** argv) {
     }
     if (!has_padding_override) {
         padding = k_default_padding;
+    }
+    if (!has_extrude_override) {
+        extrude = k_default_extrude;
     }
     if (!has_max_combinations_override) {
         max_combinations = k_default_max_combinations;
@@ -2960,6 +2990,9 @@ int run_spratlayout(int argc, char** argv) {
         if (!has_padding_override && selected_profile.padding) {
             padding = *selected_profile.padding;
         }
+        if (!has_extrude_override && selected_profile.extrude) {
+            extrude = *selected_profile.extrude;
+        }
         if (!has_max_combinations_override && selected_profile.max_combinations) {
             max_combinations = *selected_profile.max_combinations;
         }
@@ -3030,6 +3063,10 @@ int run_spratlayout(int argc, char** argv) {
                 ? std::max(scale_x, scale_y)
                 : std::min(scale_x, scale_y);
         scale *= resolution_scale;
+    }
+
+    if (padding < extrude * 2) {
+        padding = extrude * 2;
     }
 
     InputContext input_context;
@@ -3164,10 +3201,10 @@ int run_spratlayout(int argc, char** argv) {
     const bool is_file = !do_sort;
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        padding, max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);
+        padding, extrude, max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);
     const std::string layout_seed_signature = build_layout_seed_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);
+        extrude, max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);
     const fs::path output_cache_path = build_output_cache_path(cache_path, layout_signature);
     const fs::path seed_cache_path = build_seed_cache_path(cache_path, layout_seed_signature);
     if (!is_file_older_than_seconds(output_cache_path, k_cache_max_age_seconds)) {
@@ -3920,6 +3957,7 @@ int run_spratlayout(int argc, char** argv) {
                         prewarm_max_width,
                         prewarm_max_height,
                         prewarm_padding,
+                        extrude,
                         prewarm_max_combinations,
                         prewarm_scale,
                         prewarm_trim_transparent,
@@ -3940,6 +3978,7 @@ int run_spratlayout(int argc, char** argv) {
                     const std::string prewarm_output = build_layout_output_text(
                         prewarm_atlases,
                         prewarm_scale,
+                        extrude,
                         prewarm_trim_transparent,
                         prewarm_candidate.sprites
                     );
@@ -4044,6 +4083,7 @@ int run_spratlayout(int argc, char** argv) {
     const std::string output_text = build_layout_output_text(
         atlases,
         scale,
+        extrude,
         trim_transparent,
         sprites
     );

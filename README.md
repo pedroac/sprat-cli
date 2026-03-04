@@ -205,6 +205,7 @@ Profile definitions are searched in:
 - `--mode compact|pot|fast`: Packing algorithm choice.
 - `--optimize gpu|space`: Prioritize GPU-friendly dimensions or minimum area.
 - `--padding N`: Pixels between sprites to prevent texture bleeding.
+- `--extrude N`: Repeat edge pixels N times (requires padding >= extrude * 2).
 - `--trim-transparent`: Remove empty borders to save space.
 - `--rotate`: Allow 90-degree rotation during packing for tighter layouts.
 - `--scale F`: Pre-scale images (0.0 to 1.0).
@@ -261,11 +262,11 @@ Forces the output atlas to be a power of two (e.g., 512x512, 1024x512).
 
 ### Trimming Transparency
 
-Removes transparent pixels from sprite edges. `spratpack` can draw frame lines to visualize the trimmed bounds.
+Removes transparent pixels from sprite edges. `spratpack` can draw frame lines to visualize the trimmed bounds or apply `--extrude` to avoid sampling artifacts on edges.
 
 ```sh
-./build/spratlayout ./frames --trim-transparent --padding 2 > layout.txt
-./build/spratpack --frame-lines --line-color 0,255,0 < layout.txt > trim.png
+./build/spratlayout ./frames --trim-transparent --padding 2 --extrude 1 > layout.txt
+./build/spratpack < layout.txt > spritesheet.png
 ```
 ![trim](README-assets/trim_pad2_lines.png)
 
@@ -497,8 +498,9 @@ Column meanings for the `sprite` line in trim mode:
 ./build/spratpack < layout.txt > spritesheet.png
 ```
 
-Optional frame divider overlay:
+Optional frame divider overlay and extrusion:
 
+- `--extrude N` (repeat edge pixels N times, overrides layout)
 - `--frame-lines` (draw sprite rectangle outlines)
 - `--line-width N` (default: `1`)
 - `--line-color R,G,B[,A]` (default: `255,0,0,255`)

@@ -153,6 +153,27 @@ bool parse_scale_line(const std::string& line, double& scale) {
     return true;
 }
 
+bool parse_extrude_line(const std::string& line, int& extrude) {
+    std::istringstream iss(line);
+    std::string tag;
+    std::string value_token;
+    std::string extra;
+
+    if (!(iss >> tag >> value_token)) {
+        return false;
+    }
+    if (tag != "extrude") {
+        return false;
+    }
+    if (!parse_int(value_token, extrude) || extrude < 0) {
+        return false;
+    }
+    if (iss >> extra) {
+        return false;
+    }
+    return true;
+}
+
 bool parse_layout(std::istream& in, Layout& out, std::string& error) {
     Layout parsed;
     std::string line;
@@ -179,6 +200,16 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             parsed.has_scale = true;
+        } else if (line.starts_with("extrude")) {
+            if (parsed.has_extrude) {
+                error = "Duplicate extrude line";
+                return false;
+            }
+            if (!parse_extrude_line(line, parsed.extrude)) {
+                error = "Invalid extrude line: " + line;
+                return false;
+            }
+            parsed.has_extrude = true;
         } else if (line.starts_with("sprite")) {
             Sprite s;
             std::string sprite_error;

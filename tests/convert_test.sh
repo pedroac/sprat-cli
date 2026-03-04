@@ -48,6 +48,7 @@ done
 
 "$convert_bin" --transform json < "$layout_file" > "$tmp_dir/out.json"
 grep -q '"atlases": \[{"width":64,"height":32}\]' "$tmp_dir/out.json"
+grep -q '"extrude": 0' "$tmp_dir/out.json"
 grep -q '"path": "./frames/b.png"' "$tmp_dir/out.json"
 
 "$convert_bin" --transform csv < "$layout_file" > "$tmp_dir/out.csv"
@@ -55,7 +56,7 @@ grep -q '^index,name,path,x,y,w,h,pivot_x,pivot_y,trim_left,trim_top,trim_right,
 grep -q '^1,b,./frames/b.png,16,0,8,8,0,0,1,2,3,4,0,\[\],90$' "$tmp_dir/out.csv"
 
 "$convert_bin" --transform xml < "$layout_file" > "$tmp_dir/out.xml"
-grep -q '^<atlas width="64" height="32" scale="1">$' "$tmp_dir/out.xml"
+grep -q '^<atlas width="64" height="32" scale="1" extrude="0">$' "$tmp_dir/out.xml"
 grep -q 'trim_left="1" trim_top="2" trim_right="3" trim_bottom="4"' "$tmp_dir/out.xml"
 
 "$convert_bin" --transform css < "$layout_file" > "$tmp_dir/out.css"

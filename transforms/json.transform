@@ -8,6 +8,7 @@ extension=.json
 {
   "atlases": [{{atlases_json}}],
   "scale": {{scale}},
+  "extrude": {{extrude}},
   "sprites": [
 [/header]
 
