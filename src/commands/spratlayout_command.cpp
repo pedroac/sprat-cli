@@ -143,12 +143,13 @@ constexpr size_t k_guided_offsets_count = 11;
 constexpr std::array<int, k_guided_offsets_count> k_guided_search_offsets = {
     0, -1, 1, -2, 2, -4, 4, -8, 8, -12, 12
 };
-constexpr size_t k_sort_mode_count = 5;
+constexpr size_t k_sort_mode_count = 6;
 constexpr size_t k_sort_mode_index_area = 0;
 constexpr size_t k_sort_mode_index_maxside = 1;
 constexpr size_t k_sort_mode_index_height = 2;
 constexpr size_t k_sort_mode_index_width = 3;
 constexpr size_t k_sort_mode_index_perimeter = 4;
+constexpr size_t k_sort_mode_index_none = 5;
 
 enum class RectHeuristic : std::uint8_t {
     BestShortSideFit,
@@ -158,11 +159,12 @@ enum class RectHeuristic : std::uint8_t {
 
 constexpr size_t k_rect_heuristic_count = 3;
 constexpr size_t k_guided_anchor_count = 3;
-constexpr size_t k_guided_sort_mode_count = 3;
+constexpr size_t k_guided_sort_mode_count = 4;
 constexpr std::array<size_t, k_guided_sort_mode_count> k_guided_sort_indices = {
     k_sort_mode_index_height,
     k_sort_mode_index_area,
-    k_sort_mode_index_maxside
+    k_sort_mode_index_maxside,
+    k_sort_mode_index_none
 };
 constexpr size_t k_guided_heuristic_count = 2;
 constexpr std::array<RectHeuristic, k_guided_heuristic_count> k_guided_heuristics = {
@@ -2086,7 +2088,8 @@ enum class SortMode : std::uint8_t {
     Width,
     Area,
     MaxSide,
-    Perimeter
+    Perimeter,
+    None
 };
 
 bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
@@ -2143,6 +2146,8 @@ bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
             return true;
         case SortMode::Perimeter:
             std::ranges::sort(sprites, cmp_perimeter);
+            return true;
+        case SortMode::None:
             return true;
     }
     return false;
@@ -2537,6 +2542,7 @@ bool pack_atlases(
     Mode mode,
     OptimizeTarget optimize_target,
     bool allow_rotate,
+    bool enforce_sort_order,
     std::vector<Atlas>& out_atlases
 ) {
     if (sprites.empty()) {
@@ -2556,8 +2562,10 @@ bool pack_atlases(
         // 4. Move packed to all_packed, update remaining.
 
         std::vector<Sprite> current_batch = remaining;
-        // Sort current batch for better packing
-        sort_sprites_by_mode(current_batch, SortMode::Area);
+        // Sort current batch for better packing unless enforced
+        if (!enforce_sort_order) {
+            sort_sprites_by_mode(current_batch, SortMode::Area);
+        }
 
         int best_w = max_w;
         int best_h = max_h;
@@ -3426,7 +3434,7 @@ int run_spratlayout(int argc, char** argv) {
         atlases.push_back({atlas_width, atlas_height});
         for (auto& s : sprites) { s.atlas_index = 0; }
     } else if (multipack) {
-        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, atlases)) {
+        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, has_frame_sort_override, atlases)) {
             std::cerr << "Error: failed to compute multipack layout\n";
             return 1;
         }
@@ -3437,7 +3445,8 @@ int run_spratlayout(int argc, char** argv) {
             SortMode::MaxSide,
             SortMode::Height,
             SortMode::Width,
-            SortMode::Perimeter
+            SortMode::Perimeter,
+            SortMode::None
         };
         const std::array<RectHeuristic, k_rect_heuristic_count> rect_heuristics = {
             RectHeuristic::BestShortSideFit,
@@ -3473,6 +3482,9 @@ int run_spratlayout(int argc, char** argv) {
                     return 1;
                 }
                 for (SortMode sort_mode : sort_modes) {
+                    if (has_frame_sort_override && sort_mode != SortMode::None) {
+                        continue;
+                    }
                     std::vector<Sprite> trial_sprites = sprites;
                     sort_sprites_by_mode(trial_sprites, sort_mode);
                     root = std::make_unique<Node>(0, 0, side, side);
@@ -3530,6 +3542,9 @@ int run_spratlayout(int argc, char** argv) {
                     }
 
                     for (SortMode sort_mode : sort_modes) {
+                        if (has_frame_sort_override && sort_mode != SortMode::None) {
+                            continue;
+                        }
                         std::vector<Sprite> trial_sprites = sprites;
                         sort_sprites_by_mode(trial_sprites, sort_mode);
                         root = std::make_unique<Node>(0, 0, w, h);
@@ -3582,8 +3597,13 @@ int run_spratlayout(int argc, char** argv) {
         std::array<std::vector<Sprite>, k_sort_mode_count> sorted_sprites_by_mode;
         int sort_idx = 0;
         for (SortMode sm : sort_modes) {
-            sorted_sprites_by_mode[sort_idx] = sprites;
-            sort_sprites_by_mode(sorted_sprites_by_mode[sort_idx], sm);
+            if (has_frame_sort_override && sm != SortMode::None) {
+                // We must still populate the index for the array, but we can skip sorting
+                sorted_sprites_by_mode[sort_idx] = sprites;
+            } else {
+                sorted_sprites_by_mode[sort_idx] = sprites;
+                sort_sprites_by_mode(sorted_sprites_by_mode[sort_idx], sm);
+            }
             ++sort_idx;
         }
 
@@ -3649,6 +3669,9 @@ int run_spratlayout(int argc, char** argv) {
 
         bool budget_exhausted = false;
         for (size_t sort_idx = 0; sort_idx < sort_modes.size() && !budget_exhausted; ++sort_idx) {
+            if (has_frame_sort_override && sort_modes[sort_idx] != SortMode::None) {
+                continue;
+            }
             for (RectHeuristic rect_heuristic : rect_heuristics) {
                 if (!consume_combination_budget()) {
                     budget_exhausted = true;
@@ -3779,6 +3802,9 @@ int run_spratlayout(int argc, char** argv) {
                         for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                             const int width = width_candidates[width_index];
                             for (size_t sort_idx : k_guided_sort_indices) {
+                                if (has_frame_sort_override && sort_idx != k_sort_mode_index_none) {
+                                    continue;
+                                }
                                 if (local_budget_exhausted) {
                                     break;
                                 }
@@ -3874,6 +3900,9 @@ int run_spratlayout(int argc, char** argv) {
                         for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                             const int width = width_candidates[width_index];
                             for (size_t sort_idx : k_guided_sort_indices) {
+                                if (has_frame_sort_override && sort_idx != k_sort_mode_index_none) {
+                                    continue;
+                                }
                                 if (!consume_combination_budget()) {
                                     local_budget_exhausted = true;
                                     break;
@@ -4036,7 +4065,11 @@ int run_spratlayout(int argc, char** argv) {
             }
 
             std::vector<Sprite> sorted_sprites = sprites;
-            sort_sprites_by_mode(sorted_sprites, SortMode::Height);
+            if (do_sort) {
+                sort_sprites_by_mode(sorted_sprites, SortMode::None);
+            } else {
+                sort_sprites_by_mode(sorted_sprites, SortMode::Height);
+            }
 
             bool packed = false;
             for (int width = target_width; width <= width_upper_bound; ++width) {
