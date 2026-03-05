@@ -255,6 +255,8 @@ void print_usage() {
     std::cout << "Usage: spratpack [OPTIONS]\n"
               << "\n"
               << "Read layout text from stdin and write one or more PNG atlases.\n"
+              << "If multiple atlases are generated and writing to stdout, output is a TAR.\n"
+              << "Multipack layouts also trigger TAR output by default when writing to stdout.\n"
               << "\n"
               << "Options:\n"
               << "  -o, --output PATTERN   Output filename pattern (e.g. atlas_%d.png)\n"
@@ -355,7 +357,7 @@ int run_spratpack(int argc, char** argv) {
     }
 
     const bool output_to_stdout = output_pattern.empty();
-    const bool use_tar = output_to_stdout && layout.atlases.size() > 1 && requested_atlas_index < 0;
+    const bool use_tar = output_to_stdout && (layout.atlases.size() > 1 || layout.multipack) && requested_atlas_index < 0;
 
     struct ArchiveDeleter {
         void operator()(struct archive* a) const {

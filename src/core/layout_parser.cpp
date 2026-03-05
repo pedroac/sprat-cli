@@ -174,6 +174,31 @@ bool parse_extrude_line(const std::string& line, int& extrude) {
     return true;
 }
 
+bool parse_multipack_line(const std::string& line, bool& multipack) {
+    std::istringstream iss(line);
+    std::string tag;
+    std::string value_token;
+    std::string extra;
+
+    if (!(iss >> tag >> value_token)) {
+        return false;
+    }
+    if (tag != "multipack") {
+        return false;
+    }
+    if (value_token == "true" || value_token == "1") {
+        multipack = true;
+    } else if (value_token == "false" || value_token == "0") {
+        multipack = false;
+    } else {
+        return false;
+    }
+    if (iss >> extra) {
+        return false;
+    }
+    return true;
+}
+
 bool parse_layout(std::istream& in, Layout& out, std::string& error) {
     Layout parsed;
     std::string line;
@@ -210,6 +235,16 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             parsed.has_extrude = true;
+        } else if (line.starts_with("multipack")) {
+            if (parsed.has_multipack) {
+                error = "Duplicate multipack line";
+                return false;
+            }
+            if (!parse_multipack_line(line, parsed.multipack)) {
+                error = "Invalid multipack line: " + line;
+                return false;
+            }
+            parsed.has_multipack = true;
         } else if (line.starts_with("sprite")) {
             Sprite s;
             std::string sprite_error;

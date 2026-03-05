@@ -1398,6 +1398,7 @@ int run_spratconvert(int argc, char** argv) {
         global_vars["atlas_height"] = "0";
     }
     global_vars["atlas_count"] = std::to_string(layout.atlases.size());
+    global_vars["multipack"] = layout.multipack ? "true" : "false";
     std::ostringstream atlases_json;
     for (size_t i = 0; i < layout.atlases.size(); ++i) {
         if (i > 0) atlases_json << ",";

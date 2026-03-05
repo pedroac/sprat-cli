@@ -7,6 +7,7 @@ extension=.json
 [header]
 {
   "atlases": [{{atlases_json}}],
+  "multipack": {{multipack}},
   "scale": {{scale}},
   "extrude": {{extrude}},
   "sprites": [

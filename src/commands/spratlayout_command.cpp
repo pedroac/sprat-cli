@@ -1932,6 +1932,7 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
                                      double scale,
                                      int extrude,
                                      bool trim_transparent,
+                                     bool multipack,
                                      const std::vector<Sprite>& sprites,
                                      bool debug) {
     std::ostringstream output;
@@ -1940,10 +1941,14 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
         output << "# Scale: " << scale << "\n";
         output << "# Atlases: " << atlases.size() << "\n";
         output << "# Total Sprites: " << sprites.size() << "\n";
+        output << "# Multipack: " << (multipack ? "true" : "false") << "\n";
     }
     output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
     if (extrude > 0) {
         output << "extrude " << extrude << "\n";
+    }
+    if (multipack) {
+        output << "multipack true\n";
     }
     for (size_t i = 0; i < atlases.size(); ++i) {
         output << "atlas " << atlases[i].width << "," << atlases[i].height << "\n";
@@ -4027,6 +4032,7 @@ int run_spratlayout(int argc, char** argv) {
                         prewarm_scale,
                         extrude,
                         prewarm_trim_transparent,
+                        false,
                         prewarm_candidate.sprites,
                         false
                     );
@@ -4137,6 +4143,7 @@ int run_spratlayout(int argc, char** argv) {
         scale,
         extrude,
         trim_transparent,
+        multipack,
         sprites,
         debug
     );

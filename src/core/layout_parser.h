@@ -48,6 +48,8 @@ struct Layout {
     bool has_scale = false;
     int extrude = 0;
     bool has_extrude = false;
+    bool multipack = false;
+    bool has_multipack = false;
     std::vector<Sprite> sprites;
     std::vector<Marker> global_markers;
 };
@@ -60,6 +62,7 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
 bool parse_atlas_line(const std::string& line, int& width, int& height);
 bool parse_scale_line(const std::string& line, double& scale);
 bool parse_extrude_line(const std::string& line, int& extrude);
+bool parse_multipack_line(const std::string& line, bool& multipack);
 bool parse_layout(std::istream& in, Layout& out, std::string& error);
 
 } // namespace sprat::core
