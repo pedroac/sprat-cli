@@ -21,4 +21,6 @@ std::string to_quoted(const std::string& s);
 std::string to_quoted(const char* s);
 std::string to_quoted(const std::filesystem::path& p);
 
+int compare_natural(std::string_view a, std::string_view b);
+
 } // namespace sprat::core

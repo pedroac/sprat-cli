@@ -1364,6 +1364,8 @@ void print_usage() {
               << "  --optimize TARGET          Optimization target: gpu or space\n"
               << "  --max-width N              Maximum atlas width\n"
               << "  --max-height N             Maximum atlas height\n"
+              << "  --no-max-width             Disable width limit (even if profile sets one)\n"
+              << "  --no-max-height            Disable height limit (even if profile sets one)\n"
               << "  --padding N                Extra pixels between packed sprites\n"
               << "  --extrude N                Repeat edge pixels N times (padding should be >= extrude * 2)\n"
               << "  --max-combinations N       Max combinations for compact search (0=auto)\n"
@@ -2369,6 +2371,152 @@ bool pack_compact_maxrects(
     return out_width > 0 && out_height > 0;
 }
 
+struct PartialPackResult {
+    std::vector<Sprite> packed;
+    std::vector<Sprite> remaining;
+    int used_w = 0;
+    int used_h = 0;
+    size_t packed_area = 0;
+};
+
+bool pack_compact_maxrects_partial(
+    const std::vector<Sprite>& sprites,
+    int width_limit,
+    int max_height,
+    int padding,
+    RectHeuristic heuristic,
+    bool allow_rotate,
+    PartialPackResult& out
+) {
+    out = {};
+    if (width_limit <= 0 || max_height <= 0) {
+        return false;
+    }
+
+    std::vector<Rect> free_rects;
+    free_rects.push_back({0, 0, width_limit, max_height});
+
+    for (const auto& src : sprites) {
+        Sprite s = src;
+        int rw = 0;
+        int rh = 0;
+        if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
+            return false;
+        }
+        const int rrw = rh;
+        const int rrh = rw;
+        if (rw <= 0 || rh <= 0) {
+            out.remaining.push_back(src);
+            continue;
+        }
+
+        int best_index = -1;
+        int best_short_fit = std::numeric_limits<int>::max();
+        int best_long_fit = std::numeric_limits<int>::max();
+        int best_area_fit = std::numeric_limits<int>::max();
+        int best_top = std::numeric_limits<int>::max();
+        int best_left = std::numeric_limits<int>::max();
+        bool best_rotated = false;
+
+        for (size_t i = 0; i < free_rects.size(); ++i) {
+            const Rect& fr = free_rects[i];
+            auto consider_orientation = [&](int cand_w, int cand_h, bool rotated) {
+                if (cand_w <= 0 || cand_h <= 0 || cand_w > fr.w || cand_h > fr.h) {
+                    return;
+                }
+                int leftover_h = fr.h - cand_h;
+                int leftover_w = fr.w - cand_w;
+                int short_fit = std::min(leftover_h, leftover_w);
+                int long_fit = std::max(leftover_h, leftover_w);
+                int area_fit = leftover_h * leftover_w;
+
+                bool better = false;
+                switch (heuristic) {
+                    case RectHeuristic::BestShortSideFit:
+                        better = short_fit < best_short_fit ||
+                                 (short_fit == best_short_fit && long_fit < best_long_fit) ||
+                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
+                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
+                        break;
+                    case RectHeuristic::BestAreaFit:
+                        better = area_fit < best_area_fit ||
+                                 (area_fit == best_area_fit && short_fit < best_short_fit) ||
+                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y < best_top) ||
+                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y == best_top && fr.x < best_left);
+                        break;
+                    case RectHeuristic::BottomLeft:
+                        better = fr.y < best_top || (fr.y == best_top && fr.x < best_left) ||
+                                 (fr.y == best_top && fr.x == best_left && short_fit < best_short_fit);
+                        break;
+                }
+                if (!better) {
+                    return;
+                }
+                best_index = static_cast<int>(i);
+                best_short_fit = short_fit;
+                best_long_fit = long_fit;
+                best_area_fit = area_fit;
+                best_top = fr.y;
+                best_left = fr.x;
+                best_rotated = rotated;
+            };
+
+            consider_orientation(rw, rh, false);
+            if (allow_rotate && s.w != s.h) {
+                consider_orientation(rrw, rrh, true);
+            }
+        }
+
+        if (best_index < 0) {
+            out.remaining.push_back(src);
+            continue;
+        }
+
+        int used_w_dim = rw;
+        int used_h_dim = rh;
+        if (best_rotated) {
+            std::swap(s.w, s.h);
+            std::swap(used_w_dim, used_h_dim);
+        }
+        s.rotated = best_rotated;
+
+        Rect used = {.x=free_rects[static_cast<size_t>(best_index)].x,
+                     .y=free_rects[static_cast<size_t>(best_index)].y,
+                     .w=used_w_dim, .h=used_h_dim};
+        s.x = used.x;
+        s.y = used.y;
+
+        out.used_w = std::max(out.used_w, used.x + used.w);
+        out.used_h = std::max(out.used_h, used.y + used.h);
+
+        size_t sprite_area = 0;
+        if (!checked_mul_size_t(static_cast<size_t>(s.w), static_cast<size_t>(s.h), sprite_area) ||
+            sprite_area > std::numeric_limits<size_t>::max() - out.packed_area) {
+            return false;
+        }
+        out.packed_area += sprite_area;
+
+        std::vector<Rect> next_free;
+        next_free.reserve(free_rects.size() * 2);
+        for (const auto& fr : free_rects) {
+            if (!split_free_rect(fr, used, next_free)) {
+                return false;
+            }
+        }
+        free_rects.clear();
+        free_rects.reserve(next_free.size());
+        for (const auto& r : next_free) {
+            if (r.w > 0 && r.h > 0) {
+                free_rects.push_back(r);
+            }
+        }
+        prune_free_rects(free_rects);
+        out.packed.push_back(s);
+    }
+
+    return !out.packed.empty() && out.used_w > 0 && out.used_h > 0;
+}
+
 bool pack_fast_shelf(
     std::vector<Sprite>& sprites,
     int max_row_width,
@@ -2557,129 +2705,175 @@ bool pack_atlases(
     std::vector<Sprite> remaining = sprites;
     std::vector<Sprite> all_packed;
     int atlas_index = 0;
+    const std::array<SortMode, k_sort_mode_count> sort_modes = {
+        SortMode::Area,
+        SortMode::MaxSide,
+        SortMode::Height,
+        SortMode::Width,
+        SortMode::Perimeter,
+        SortMode::None
+    };
+    const std::array<RectHeuristic, k_rect_heuristic_count> rect_heuristics = {
+        RectHeuristic::BestShortSideFit,
+        RectHeuristic::BestAreaFit,
+        RectHeuristic::BottomLeft
+    };
 
     while (!remaining.empty()) {
-        // For each atlas, we try to pack as many as possible.
-        // We use a simplified version of the packing logic:
-        // 1. Sort remaining by area (descending)
-        // 2. Try to find the best atlas size for THESE remaining sprites within max_w/max_h
-        // 3. Pack as many as fit.
-        // 4. Move packed to all_packed, update remaining.
-
-        std::vector<Sprite> current_batch = remaining;
-        // Sort current batch for better packing unless enforced
-        if (!enforce_sort_order) {
-            sort_sprites_by_mode(current_batch, SortMode::Area);
-        }
-
-        int best_w = max_w;
-        int best_h = max_h;
-        std::vector<Sprite> best_packed_in_batch;
-
-        if (mode == Mode::POT) {
-            // Find smallest POT that fits at least the first (largest) sprite
-            int min_w = next_power_of_two(std::max(1, current_batch[0].w + padding));
-            int min_h = next_power_of_two(std::max(1, current_batch[0].h + padding));
-            if (min_w > max_w || min_h > max_h) {
-                // If the largest sprite doesn't fit in max POT, we can't pack it.
-                // But we already checked this in run_spratlayout.
+        int min_width = std::numeric_limits<int>::max();
+        size_t remaining_area = 0;
+        for (const auto& s : remaining) {
+            int rw = 0;
+            int rh = 0;
+            if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
                 return false;
             }
-
-            // Simple POT search for this batch:
-            // Just use max_w/max_h as the bin size and pack as many as possible.
-            // Then shrink to tight bounds.
-            std::unique_ptr<Node> root = std::make_unique<Node>(0, 0, max_w, max_h);
-            std::vector<Sprite> trial = current_batch;
-            // try_pack packs greedily and stops at the first that doesn't fit if we modify it,
-            // or we can use a version that just skips.
-            // Let's use a greedy first-fit approach for multipack.
-        }
-
-        // To keep it simple and consistent with existing logic,
-        // we'll pack into a FIXED bin of max_w x max_h using MaxRects (compact-like).
-        std::vector<Sprite> packed_batch;
-        std::vector<Sprite> still_remaining;
-        
-        std::vector<Rect> free_rects;
-        free_rects.push_back({0, 0, max_w, max_h});
-
-        int used_w = 0;
-        int used_h = 0;
-
-        for (auto& s : current_batch) {
-            int rw = s.w + padding;
-            int rh = s.h + padding;
-            int rrw = rh;
-            int rrh = rw;
-
-            int best_rect_idx = -1;
-            bool best_rotated = false;
-            int best_short_fit = std::numeric_limits<int>::max();
-
-            for (size_t i = 0; i < free_rects.size(); ++i) {
-                const Rect& fr = free_rects[i];
-                if (rw <= fr.w && rh <= fr.h) {
-                    int short_fit = std::min(fr.w - rw, fr.h - rh);
-                    if (short_fit < best_short_fit) {
-                        best_short_fit = short_fit;
-                        best_rect_idx = static_cast<int>(i);
-                        best_rotated = false;
-                    }
-                }
-                if (allow_rotate && rrw <= fr.w && rrh <= fr.h && rw != rh) {
-                    int short_fit = std::min(fr.w - rrw, fr.h - rrh);
-                    if (short_fit < best_short_fit) {
-                        best_short_fit = short_fit;
-                        best_rect_idx = static_cast<int>(i);
-                        best_rotated = true;
-                    }
-                }
+            min_width = std::min(min_width, rw);
+            size_t sprite_area = 0;
+            if (!checked_mul_size_t(static_cast<size_t>(s.w), static_cast<size_t>(s.h), sprite_area) ||
+                sprite_area > std::numeric_limits<size_t>::max() - remaining_area) {
+                return false;
             }
-
-            if (best_rect_idx >= 0) {
-                if (best_rotated) {
-                    std::swap(s.w, s.h);
-                    s.rotated = true;
-                } else {
-                    s.rotated = false;
-                }
-                s.x = free_rects[static_cast<size_t>(best_rect_idx)].x;
-                s.y = free_rects[static_cast<size_t>(best_rect_idx)].y;
-                s.atlas_index = atlas_index;
-
-                Rect used = {s.x, s.y, s.w + padding, s.h + padding};
-                used_w = std::max(used_w, s.x + s.w);
-                used_h = std::max(used_h, s.y + s.h);
-
-                std::vector<Rect> next_free;
-                for (const auto& fr : free_rects) {
-                    split_free_rect(fr, used, next_free);
-                }
-                free_rects = std::move(next_free);
-                prune_free_rects(free_rects);
-                packed_batch.push_back(s);
-            } else {
-                still_remaining.push_back(s);
-            }
+            remaining_area += sprite_area;
         }
-
-        if (packed_batch.empty()) {
-            // Should not happen if max_w/max_h >= largest sprite
+        if (min_width <= 0 || min_width > max_w) {
             return false;
         }
 
-        // POT adjustment if needed
-        int final_w = used_w;
-        int final_h = used_h;
-        if (mode == Mode::POT) {
-            final_w = next_power_of_two(used_w);
-            final_h = next_power_of_two(used_h);
+        std::unordered_set<int> seen_widths;
+        std::vector<int> width_candidates;
+        auto add_width_candidate = [&](int width) {
+            if (width < min_width || width > max_w) {
+                return;
+            }
+            if (mode == Mode::POT) {
+                width = next_power_of_two(width);
+                if (width <= 0 || width < min_width || width > max_w) {
+                    return;
+                }
+            }
+            if (seen_widths.insert(width).second) {
+                width_candidates.push_back(width);
+            }
+        };
+        add_width_candidate(min_width);
+        add_width_candidate(max_w);
+        if (remaining_area > 0) {
+            const long double root = std::sqrt(static_cast<long double>(remaining_area));
+            if (root <= static_cast<long double>(std::numeric_limits<int>::max())) {
+                add_width_candidate(static_cast<int>(std::ceil(root)));
+            }
+        }
+        const int range = std::max(0, max_w - min_width);
+        const int step = std::max(k_search_step_min, range / k_search_step_divisor);
+        for (int mul : k_guided_search_offsets) {
+            const long long w_ll =
+                static_cast<long long>(min_width) +
+                (static_cast<long long>(mul) * static_cast<long long>(step));
+            if (w_ll < static_cast<long long>(std::numeric_limits<int>::min()) ||
+                w_ll > static_cast<long long>(std::numeric_limits<int>::max())) {
+                continue;
+            }
+            add_width_candidate(static_cast<int>(w_ll));
+        }
+        std::ranges::sort(width_candidates);
+
+        struct MultipackCandidate {
+            bool valid = false;
+            int used_w = 0;
+            int used_h = 0;
+            size_t area = 0;
+            size_t packed_area = 0;
+            int packed_count = 0;
+            std::vector<Sprite> packed;
+            std::vector<Sprite> left;
+        };
+        auto better_multipack_candidate = [&](const MultipackCandidate& candidate,
+                                              const MultipackCandidate& best) {
+            if (!best.valid) {
+                return true;
+            }
+            if (optimize_target == OptimizeTarget::GPU) {
+                if (candidate.packed_count != best.packed_count) {
+                    return candidate.packed_count > best.packed_count;
+                }
+                return pick_better_layout_candidate(
+                    candidate.area, candidate.used_w, candidate.used_h, true,
+                    best.area, best.used_w, best.used_h,
+                    OptimizeTarget::GPU);
+            }
+
+            // For SPACE in multipack, avoid over-fragmenting into tiny dense atlases:
+            // prioritize packing more content this round, then prefer lower area.
+            if (candidate.packed_area != best.packed_area) {
+                return candidate.packed_area > best.packed_area;
+            }
+            if (candidate.packed_count != best.packed_count) {
+                return candidate.packed_count > best.packed_count;
+            }
+            if (candidate.area != best.area) {
+                return candidate.area < best.area;
+            }
+            return pick_better_layout_candidate(
+                candidate.area, candidate.used_w, candidate.used_h, true,
+                best.area, best.used_w, best.used_h,
+                OptimizeTarget::SPACE);
+        };
+
+        MultipackCandidate best_candidate;
+        for (SortMode sort_mode : sort_modes) {
+            if (enforce_sort_order && sort_mode != SortMode::None) {
+                continue;
+            }
+            std::vector<Sprite> sorted = remaining;
+            if (!sort_sprites_by_mode(sorted, sort_mode)) {
+                continue;
+            }
+            for (int width : width_candidates) {
+                for (RectHeuristic heuristic : rect_heuristics) {
+                    PartialPackResult trial;
+                    if (!pack_compact_maxrects_partial(
+                            sorted, width, max_h, padding, heuristic, allow_rotate, trial)) {
+                        continue;
+                    }
+                    int final_w = trial.used_w;
+                    int final_h = trial.used_h;
+                    if (mode == Mode::POT) {
+                        final_w = next_power_of_two(final_w);
+                        final_h = next_power_of_two(final_h);
+                        if (final_w <= 0 || final_h <= 0 || final_w > max_w || final_h > max_h) {
+                            continue;
+                        }
+                    }
+                    size_t final_area = 0;
+                    if (!checked_mul_size_t(static_cast<size_t>(final_w), static_cast<size_t>(final_h), final_area)) {
+                        continue;
+                    }
+                    MultipackCandidate candidate;
+                    candidate.valid = true;
+                    candidate.used_w = final_w;
+                    candidate.used_h = final_h;
+                    candidate.area = final_area;
+                    candidate.packed_area = trial.packed_area;
+                    candidate.packed_count = static_cast<int>(trial.packed.size());
+                    candidate.packed = std::move(trial.packed);
+                    candidate.left = std::move(trial.remaining);
+                    if (better_multipack_candidate(candidate, best_candidate)) {
+                        best_candidate = std::move(candidate);
+                    }
+                }
+            }
         }
 
-        out_atlases.push_back({final_w, final_h});
-        all_packed.insert(all_packed.end(), packed_batch.begin(), packed_batch.end());
-        remaining = still_remaining;
+        if (!best_candidate.valid || best_candidate.packed.empty()) {
+            return false;
+        }
+        for (auto& s : best_candidate.packed) {
+            s.atlas_index = atlas_index;
+        }
+        out_atlases.push_back({best_candidate.used_w, best_candidate.used_h});
+        all_packed.insert(all_packed.end(), best_candidate.packed.begin(), best_candidate.packed.end());
+        remaining = std::move(best_candidate.left);
         atlas_index++;
     }
 
@@ -2773,6 +2967,12 @@ int run_spratlayout(int argc, char** argv) {
                 std::cerr << "Invalid max height value: " << value << "\n";
                 return 1;
             }
+            has_max_height_limit = true;
+        } else if (arg == "--no-max-width") {
+            max_width_limit = 0;
+            has_max_width_limit = true;
+        } else if (arg == "--no-max-height") {
+            max_height_limit = 0;
             has_max_height_limit = true;
         } else if (arg == "--padding" && i + 1 < argc) {
             std::string value = argv[++i];
@@ -3212,10 +3412,13 @@ int run_spratlayout(int argc, char** argv) {
         do_sort = !is_stdin_or_list;
     }
 
+    const bool enforce_name_order = (has_frame_sort_override && frame_sort == FrameSort::Name);
+
     if (do_sort) {
         std::ranges::sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
-            if (lhs.path != rhs.path) {
-                return lhs.path < rhs.path;
+            int cmp = sprat::core::compare_natural(lhs.path, rhs.path);
+            if (cmp != 0) {
+                return cmp < 0;
             }
             if (lhs.meta.file_size != rhs.meta.file_size) {
                 return lhs.meta.file_size < rhs.meta.file_size;
@@ -3439,7 +3642,7 @@ int run_spratlayout(int argc, char** argv) {
         atlases.push_back({atlas_width, atlas_height});
         for (auto& s : sprites) { s.atlas_index = 0; }
     } else if (multipack) {
-        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, has_frame_sort_override, atlases)) {
+        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, enforce_name_order, atlases)) {
             std::cerr << "Error: failed to compute multipack layout\n";
             return 1;
         }
@@ -3487,7 +3690,7 @@ int run_spratlayout(int argc, char** argv) {
                     return 1;
                 }
                 for (SortMode sort_mode : sort_modes) {
-                    if (has_frame_sort_override && sort_mode != SortMode::None) {
+                    if (enforce_name_order && sort_mode != SortMode::None) {
                         continue;
                     }
                     std::vector<Sprite> trial_sprites = sprites;
@@ -3547,7 +3750,7 @@ int run_spratlayout(int argc, char** argv) {
                     }
 
                     for (SortMode sort_mode : sort_modes) {
-                        if (has_frame_sort_override && sort_mode != SortMode::None) {
+                        if (enforce_name_order && sort_mode != SortMode::None) {
                             continue;
                         }
                         std::vector<Sprite> trial_sprites = sprites;
@@ -3602,7 +3805,7 @@ int run_spratlayout(int argc, char** argv) {
         std::array<std::vector<Sprite>, k_sort_mode_count> sorted_sprites_by_mode;
         int sort_idx = 0;
         for (SortMode sm : sort_modes) {
-            if (has_frame_sort_override && sm != SortMode::None) {
+            if (enforce_name_order && sm != SortMode::None) {
                 // We must still populate the index for the array, but we can skip sorting
                 sorted_sprites_by_mode[sort_idx] = sprites;
             } else {
@@ -3674,7 +3877,7 @@ int run_spratlayout(int argc, char** argv) {
 
         bool budget_exhausted = false;
         for (size_t sort_idx = 0; sort_idx < sort_modes.size() && !budget_exhausted; ++sort_idx) {
-            if (has_frame_sort_override && sort_modes[sort_idx] != SortMode::None) {
+            if (enforce_name_order && sort_modes[sort_idx] != SortMode::None) {
                 continue;
             }
             for (RectHeuristic rect_heuristic : rect_heuristics) {
@@ -3807,12 +4010,13 @@ int run_spratlayout(int argc, char** argv) {
                         for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                             const int width = width_candidates[width_index];
                             for (size_t sort_idx : k_guided_sort_indices) {
-                                if (has_frame_sort_override && sort_idx != k_sort_mode_index_none) {
+                                if (enforce_name_order && sort_idx != k_sort_mode_index_none) {
                                     continue;
                                 }
                                 if (local_budget_exhausted) {
                                     break;
                                 }
+
                                 for (RectHeuristic rect_heuristic : k_guided_heuristics) {
                                     if (!consume_combination_budget()) {
                                         local_budget_exhausted = true;
@@ -3905,7 +4109,7 @@ int run_spratlayout(int argc, char** argv) {
                         for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                             const int width = width_candidates[width_index];
                             for (size_t sort_idx : k_guided_sort_indices) {
-                                if (has_frame_sort_override && sort_idx != k_sort_mode_index_none) {
+                                if (enforce_name_order && sort_idx != k_sort_mode_index_none) {
                                     continue;
                                 }
                                 if (!consume_combination_budget()) {
@@ -4071,7 +4275,8 @@ int run_spratlayout(int argc, char** argv) {
             }
 
             std::vector<Sprite> sorted_sprites = sprites;
-            if (do_sort) {
+            const bool enforce_fast_order = has_frame_sort_override ? (frame_sort == FrameSort::Name) : do_sort;
+            if (enforce_fast_order) {
                 sort_sprites_by_mode(sorted_sprites, SortMode::None);
             } else {
                 sort_sprites_by_mode(sorted_sprites, SortMode::Height);

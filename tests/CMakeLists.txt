@@ -66,3 +66,23 @@ add_test(
             $<TARGET_FILE:spratunpack>
             $<TARGET_FILE:spratframes>
 )
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sort_behavior_test.sh")
+    add_test(
+        NAME sort_behavior
+        COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/sort_behavior_test.sh
+                $<TARGET_FILE:spratlayout>
+    )
+else()
+    message(WARNING "Skipping sort_behavior test: tests/sort_behavior_test.sh not found")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/layout_limits_and_multipack_optimize_test.sh")
+    add_test(
+        NAME layout_limits_and_multipack_optimize
+        COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/layout_limits_and_multipack_optimize_test.sh
+                $<TARGET_FILE:spratlayout>
+    )
+else()
+    message(WARNING "Skipping layout_limits_and_multipack_optimize test: script not found")
+endif()

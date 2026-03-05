@@ -153,4 +153,45 @@ std::string to_quoted(const std::filesystem::path& p) {
     return to_quoted(p.string());
 }
 
+int compare_natural(std::string_view a, std::string_view b) {
+    size_t i = 0;
+    size_t j = 0;
+    while (i < a.size() && j < b.size()) {
+        if (std::isdigit(static_cast<unsigned char>(a[i])) && std::isdigit(static_cast<unsigned char>(b[j]))) {
+            // Skip leading zeros
+            while (i < a.size() && a[i] == '0') i++;
+            while (j < b.size() && b[j] == '0') j++;
+
+            size_t start_i = i;
+            size_t start_j = j;
+
+            while (i < a.size() && std::isdigit(static_cast<unsigned char>(a[i]))) i++;
+            while (j < b.size() && std::isdigit(static_cast<unsigned char>(b[j]))) j++;
+
+            size_t len_i = i - start_i;
+            size_t len_j = j - start_j;
+
+            if (len_i != len_j) {
+                return len_i < len_j ? -1 : 1;
+            }
+
+            std::string_view num_a = a.substr(start_i, len_i);
+            std::string_view num_b = b.substr(start_j, len_j);
+            if (num_a != num_b) {
+                return num_a < num_b ? -1 : 1;
+            }
+        } else {
+            if (a[i] != b[j]) {
+                return static_cast<unsigned char>(a[i]) < static_cast<unsigned char>(b[j]) ? -1 : 1;
+            }
+            i++;
+            j++;
+        }
+    }
+
+    if (i < a.size()) return 1;
+    if (j < b.size()) return -1;
+    return 0;
+}
+
 } // namespace sprat::core

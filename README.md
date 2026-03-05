@@ -204,11 +204,15 @@ Profile definitions are searched in:
 ### Spratlayout Options
 - `--mode compact|pot|fast`: Packing algorithm choice.
 - `--optimize gpu|space`: Prioritize GPU-friendly dimensions or minimum area.
+- `--max-width N`: Maximum atlas width.
+- `--max-height N`: Maximum atlas height.
+- `--no-max-width`: Disable max width limit even if profile sets one.
+- `--no-max-height`: Disable max height limit even if profile sets one.
 - `--padding N`: Pixels between sprites to prevent texture bleeding.
 - `--extrude N`: Repeat edge pixels N times (requires padding >= extrude * 2).
 - `--trim-transparent`: Remove empty borders to save space.
 - `--rotate`: Allow 90-degree rotation during packing for tighter layouts.
-- `--multipack`: Split into multiple atlases if sprites don't fit within max width/height.
+- `--multipack`: Enable multi-atlas candidate search and splitting.
 - `--sort name|none`: Order of sprites in layout (default: `name` for folders, `none` for stdin).
 - `--scale F`: Pre-scale images (0.0 to 1.0).
 - `--threads N`: Parallelize the packing search.
@@ -221,7 +225,7 @@ Profile definitions are searched in:
 
 ## Multipacking
 
-When sprites cannot fit into a single atlas of the maximum allowed size, use `--multipack` to automatically split them across multiple atlases.
+Use `--multipack` to allow splitting across multiple atlases. With explicit max limits, splitting is constrained by those limits. With limits disabled, `--optimize` still influences whether one or more atlases are selected.
 
 ```sh
 # Force small atlases to trigger multipack

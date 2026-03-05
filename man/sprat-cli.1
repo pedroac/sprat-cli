@@ -89,7 +89,7 @@ If \fIfolder\fR is actually a text file, it is treated as a newline-delimited li
 .PP
 Multipack:
 .IP "\(bu" 2
-If \fB\-\-multipack\fR is enabled, the tool will split sprites into multiple atlases if they do not fit within the specified maximum dimensions. Multiple \fBatlas\fR sections will be emitted in the layout.
+If \fB\-\-multipack\fR is enabled, the tool will evaluate multi-atlas candidates and may emit multiple \fBatlas\fR sections. When max dimensions are set, candidates are constrained by those limits.
 .PP
 Profile configuration is loaded from the first existing file in this order:
 .IP "\(bu" 2
@@ -202,6 +202,12 @@ Maximum atlas width. Overrides profile value.
 .TP
 \fB\-\-max\-height\fR \fIN\fR
 Maximum atlas height. Overrides profile value.
+.TP
+\fB\-\-no\-max\-width\fR
+Disable width limit even if selected profile defines one.
+.TP
+\fB\-\-no\-max\-height\fR
+Disable height limit even if selected profile defines one.
 .TP
 \fB\-\-padding\fR \fIN\fR
 Extra pixels between packed sprites. Overrides profile value.
