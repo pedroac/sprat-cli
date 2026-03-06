@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies (Linux)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-dev
+          sudo apt-get install -y libarchive-dev gettext
 
       - name: Configure
         run: |
@@ -28,6 +28,7 @@ jobs:
             -S . \
             -B build \
             -DSPRAT_DOWNLOAD_STB=ON \
+            -DSPRAT_REQUIRE_GETTEXT=ON \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -51,7 +52,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-dev
+          sudo apt-get install -y libarchive-dev gettext
 
       - name: Cache vcpkg (Windows)
         if: runner.os == 'Windows'
@@ -74,7 +75,8 @@ jobs:
           # Use brew list to check if already installed and avoid warnings
           brew list pkg-config > /dev/null 2>&1 || brew install pkg-config
           brew list libarchive > /dev/null 2>&1 || brew install libarchive
-          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig" >> "$GITHUB_ENV"
+          brew list gettext > /dev/null 2>&1 || brew install gettext
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$(brew --prefix gettext)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Configure
         shell: bash
@@ -88,6 +90,8 @@ jobs:
           if [ "${{ runner.os }}" == "Windows" ]; then
             VCPKG_TOOLCHAIN="${VCPKG_ROOT//\\//}/scripts/buildsystems/vcpkg.cmake"
             CMAKE_OPTIONS+=("-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN")
+          else
+            CMAKE_OPTIONS+=("-DSPRAT_REQUIRE_GETTEXT=ON")
           fi
           cmake "${CMAKE_OPTIONS[@]}"
 

@@ -38,6 +38,7 @@ namespace fs = std::filesystem;
 #include <thread>
 #include <queue>
 #include "core/cli_parse.h"
+#include "core/i18n.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -66,6 +67,7 @@ constexpr int k_max_channel_value = 255;
 namespace {
 using sprat::core::parse_positive_int;
 using sprat::core::parse_non_negative_int;
+using sprat::core::tr;
 using sprat::core::to_quoted;
 
 struct Color {
@@ -153,14 +155,14 @@ public:
         unsigned char* data = stbi_load(config_.input_path.string().c_str(), &width_, &height_, &channels_, req_channels);
         
         if (data == nullptr) {
-            std::cerr << "Error: Failed to load image: " << to_quoted(config_.input_path.string()) 
-                      << " (Reason: " << stbi_failure_reason() << ")" << '\n';
+            std::cerr << tr("Error: Failed to load image: ") << to_quoted(config_.input_path.string())
+                      << tr(" (Reason: ") << stbi_failure_reason() << tr(")") << '\n';
             return false;
         }
         
         // Validate dimensions are reasonable
         if (width_ <= 0 || height_ <= 0 || width_ > k_max_image_dimension || height_ > k_max_image_dimension) {
-            std::cerr << "Error: Invalid image dimensions: " << width_ << "x" << height_ << '\n';
+            std::cerr << tr("Error: Invalid image dimensions: ") << width_ << "x" << height_ << '\n';
             stbi_image_free(data);
             return false;
         }
@@ -168,7 +170,7 @@ public:
         // Check for potential overflow in size calculation
         size_t total_pixels = static_cast<size_t>(width_) * static_cast<size_t>(height_);
         if (total_pixels > k_max_total_pixels) { // Limit to ~100MP
-            std::cerr << "Error: Image too large: " << total_pixels << " pixels" << '\n';
+            std::cerr << tr("Error: Image too large: ") << total_pixels << tr(" pixels") << '\n';
             stbi_image_free(data);
             return false;
         }
@@ -186,7 +188,7 @@ public:
         
         // Preprocess image: check first pixel and make it transparent if not already
         if (!preprocess_image()) {
-            std::cerr << "Error: Failed to preprocess image" << '\n';
+            std::cerr << tr("Error: Failed to preprocess image") << '\n';
             return false;
         }
         
@@ -194,20 +196,20 @@ public:
         
         if (config_.has_rectangles) {
             if (!detect_rectangles()) {
-                std::cerr << "Error: Failed to detect rectangles" << '\n';
+                std::cerr << tr("Error: Failed to detect rectangles") << '\n';
                 return false;
             }
             frames = extract_from_rectangles();
         } else {
             if (!find_connected_components()) {
-                std::cerr << "Error: Failed to find connected components" << '\n';
+                std::cerr << tr("Error: Failed to find connected components") << '\n';
                 return false;
             }
             frames = extract_from_components();
         }
         
         if (frames.empty()) {
-            std::cerr << "Warning: No frames found" << '\n';
+            std::cerr << tr("Warning: No frames found") << '\n';
             return true;
         }
         
@@ -739,25 +741,25 @@ bool parse_color(const std::string& value, Color& out) {
 }
 
 void print_usage() {
-    std::cout << "Usage: spratframes [OPTIONS] <input_image>\n\n"
-        << "Detect sprite frame rectangles in spritesheets.\n\n"
-        << "Output format:\n"
-        << "  SpratFrames format: path f, then sprite x,y w,h\n\n"
-        << "Options:\n"
-        << "  --has-rectangles          Spritesheet has rectangles surrounding sprites\n"
-        << "  --rectangle-color COLOR   Color of rectangle borders (default: " 
+    std::cout << tr("Usage: spratframes [OPTIONS] <input_image>\n\n")
+        << tr("Detect sprite frame rectangles in spritesheets.\n\n")
+        << tr("Output format:\n")
+        << tr("  SpratFrames format: path f, then sprite x,y w,h\n\n")
+        << tr("Options:\n")
+        << tr("  --has-rectangles          Spritesheet has rectangles surrounding sprites\n")
+        << tr("  --rectangle-color COLOR   Color of rectangle borders (default: ")
         << k_default_rectangle_color_r << "," << k_default_rectangle_color_g << "," << k_default_rectangle_color_b << ")\n"
-        << "                            Formats: #RRGGBB, #RGB, RGB(r,g,b), r,g,b\n"
-        << "  --tolerance N            Distance tolerance for sprite grouping (default: " << k_default_tolerance << ")\n"
-        << "  --min-size N             Minimum sprite size in pixels (default: " << k_default_min_sprite_size << ")\n"
-        << "  --max-sprites N          Maximum number of sprites to extract (default: " << k_default_max_sprites << ")\n"
-        << "  --threads N              Number of threads to use (default: " << k_default_threads << " = auto)\n"
-        << "  --help, -h               Show this help message\n\n"
-        << "Examples:\n"
-        << "  spratframes sheet.png\n"
-        << "  spratframes --has-rectangles --rectangle-color=\"#FF00FF\" sheet.png\n"
-        << "  spratframes --tolerance 2 --min-size 8 sheet.png\n"
-        << "  spratframes sheet.png > frames.spratframes\n";
+        << tr("                            Formats: #RRGGBB, #RGB, RGB(r,g,b), r,g,b\n")
+        << tr("  --tolerance N            Distance tolerance for sprite grouping (default: ") << k_default_tolerance << ")\n"
+        << tr("  --min-size N             Minimum sprite size in pixels (default: ") << k_default_min_sprite_size << ")\n"
+        << tr("  --max-sprites N          Maximum number of sprites to extract (default: ") << k_default_max_sprites << ")\n"
+        << tr("  --threads N              Number of threads to use (default: ") << k_default_threads << tr(" = auto)\n")
+        << tr("  --help, -h               Show this help message\n\n")
+        << tr("Examples:\n")
+        << tr("  spratframes sheet.png\n")
+        << tr("  spratframes --has-rectangles --rectangle-color=\"#FF00FF\" sheet.png\n")
+        << tr("  spratframes --tolerance 2 --min-size 8 sheet.png\n")
+        << tr("  spratframes sheet.png > frames.spratframes\n");
 }
    
 } // namespace
@@ -765,7 +767,7 @@ void print_usage() {
 int run_spratframes(int argc, char** argv) {
 #ifdef _WIN32
     if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-        std::cerr << "Failed to set stdout to binary mode\n";
+        std::cerr << tr("Failed to set stdout to binary mode\n");
     }
 #endif
     FramesConfig config;
@@ -778,39 +780,39 @@ int run_spratframes(int argc, char** argv) {
         if (arg == "--help" || arg == "-h") {
             show_help = true;
         } else if (arg == "--version" || arg == "-v") {
-            std::cout << "spratframes version " << SPRAT_VERSION << "\n";
+            std::cout << tr("spratframes version ") << SPRAT_VERSION << "\n";
             return 0;
         } else if (arg == "--has-rectangles") {
             config.has_rectangles = true;
         } else if (arg == "--rectangle-color" && i + 1 < argc) {
             if (!parse_color(argv[++i], config.rectangle_color)) {
-                std::cerr << "Error: Invalid color format: " << argv[i] << '\n';
+                std::cerr << tr("Error: Invalid color format: ") << argv[i] << '\n';
                 return 1;
             }
         } else if (arg == "--tolerance" && i + 1 < argc) {
             if (!parse_positive_int(argv[++i], config.tolerance)) {
-                std::cerr << "Error: Invalid tolerance value: " << argv[i] << '\n';
+                std::cerr << tr("Error: Invalid tolerance value: ") << argv[i] << '\n';
                 return 1;
             }
         } else if (arg == "--min-size" && i + 1 < argc) {
             if (!parse_positive_int(argv[++i], config.min_sprite_size)) {
-                std::cerr << "Error: Invalid min-size value: " << argv[i] << '\n';
+                std::cerr << tr("Error: Invalid min-size value: ") << argv[i] << '\n';
                 return 1;
             }
         } else if (arg == "--max-sprites" && i + 1 < argc) {
             if (!parse_positive_int(argv[++i], config.max_sprites)) {
-                std::cerr << "Error: Invalid max-sprites value: " << argv[i] << '\n';
+                std::cerr << tr("Error: Invalid max-sprites value: ") << argv[i] << '\n';
                 return 1;
             }
         } else if (arg == "--threads" && i + 1 < argc) {
             int threads_int = 0;
             if (!parse_positive_int(argv[++i], threads_int)) {
-                std::cerr << "Error: Invalid threads value: " << argv[i] << '\n';
+                std::cerr << tr("Error: Invalid threads value: ") << argv[i] << '\n';
                 return 1;
             }
             config.threads = static_cast<unsigned int>(threads_int);
         } else if (arg.empty() || arg[0] == '-') {
-            std::cerr << "Error: Unknown option: " << arg << '\n';
+            std::cerr << tr("Error: Unknown option: ") << arg << '\n';
             print_usage();
             return 1;
         } else {
@@ -818,7 +820,7 @@ int run_spratframes(int argc, char** argv) {
             if (config.input_path.empty()) {
                 config.input_path = argv[i];
             } else {
-                std::cerr << "Error: Too many arguments" << '\n';
+                std::cerr << tr("Error: Too many arguments") << '\n';
                 print_usage();
                 return 1;
             }
@@ -832,14 +834,14 @@ int run_spratframes(int argc, char** argv) {
     
     // Validate required arguments
     if (config.input_path.empty()) {
-        std::cerr << "Error: Input image path is required" << '\n';
+        std::cerr << tr("Error: Input image path is required") << '\n';
         print_usage();
         return 1;
     }
     
     // Validate input file exists
     if (!fs::exists(config.input_path) || !fs::is_regular_file(config.input_path)) {
-        std::cerr << "Error: Input file does not exist or is not a file: " << to_quoted(config.input_path.string()) << '\n';
+        std::cerr << tr("Error: Input file does not exist or is not a file: ") << to_quoted(config.input_path.string()) << '\n';
         return 1;
     }
     
@@ -851,7 +853,7 @@ int run_spratframes(int argc, char** argv) {
     // Detect frames
     SpriteFramesDetector detector(config);
     if (!detector.detect_frames()) {
-        std::cerr << "Error: Failed to detect frames" << '\n';
+        std::cerr << tr("Error: Failed to detect frames") << '\n';
         return 1;
     }
     

@@ -53,6 +53,7 @@ namespace fs = std::filesystem;
 #include <archive.h>
 #include <archive_entry.h>
 #include "core/cli_parse.h"
+#include "core/i18n.h"
 
 #include <utility>
 #define STB_IMAGE_IMPLEMENTATION
@@ -68,6 +69,7 @@ namespace {
 using sprat::core::parse_non_negative_int;
 using sprat::core::parse_positive_int;
 using sprat::core::parse_positive_uint;
+using sprat::core::tr;
 using sprat::core::to_quoted;
 
 std::string trim_copy(const std::string& s) {
@@ -885,7 +887,7 @@ bool is_compressed_tar_file(const fs::path& path) {
 bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
     struct archive* a = archive_read_new();
     if (a == nullptr) {
-        std::cerr << "Error: Failed to create archive reader" << '\n';
+        std::cerr << tr("Error: Failed to create archive reader") << '\n';
         return false;
     }
     
@@ -894,14 +896,14 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
     archive_read_support_filter_all(a);
     
     if (archive_read_open_filename(a, tar_path.string().c_str(), k_tar_read_buffer_size) != ARCHIVE_OK) {
-        std::cerr << "Error: Failed to open tar file: " << archive_error_string(a) << '\n';
+        std::cerr << tr("Error: Failed to open tar file: ") << archive_error_string(a) << '\n';
         archive_read_free(a);
         return false;
     }
     
     struct archive* ext = archive_write_disk_new();
     if (ext == nullptr) {
-        std::cerr << "Error: Failed to create archive writer" << '\n';
+        std::cerr << tr("Error: Failed to create archive writer") << '\n';
         archive_read_free(a);
         return false;
     }
@@ -917,7 +919,7 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
             break;
         }
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to read archive header: ") << archive_error_string(a) << '\n';
             break;
         }
         
@@ -946,7 +948,7 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
         // Extract the file
         r = archive_write_header(ext, entry);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << '\n';
+            std::cerr << tr("Error: Failed to write archive header: ") << archive_error_string(ext) << '\n';
         } else {
             const void* buff = nullptr;
             size_t size = 0;
@@ -955,19 +957,19 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
             while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
                 r = archive_write_data_block(ext, buff, size, offset);
                 if (r < ARCHIVE_OK) {
-                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << '\n';
+                    std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(ext) << '\n';
                     break;
                 }
             }
             
             if (r < ARCHIVE_OK) {
-                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << '\n';
+                std::cerr << tr("Error: Failed to read archive data: ") << archive_error_string(a) << '\n';
             }
         }
         
         r = archive_write_finish_entry(ext);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << '\n';
+            std::cerr << tr("Error: Failed to finish archive entry: ") << archive_error_string(ext) << '\n';
         }
     }
     
@@ -982,7 +984,7 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
 bool extract_tar_from_stdin(const fs::path& output_dir) {
     struct archive* a = archive_read_new();
     if (a == nullptr) {
-        std::cerr << "Error: Failed to create archive reader" << '\n';
+        std::cerr << tr("Error: Failed to create archive reader") << '\n';
         return false;
     }
     
@@ -992,14 +994,14 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
     
     // Open from stdin
     if (archive_read_open_fd(a, STDIN_FILENO, k_tar_read_buffer_size) != ARCHIVE_OK) {
-        std::cerr << "Error: Failed to open stdin for tar extraction: " << archive_error_string(a) << '\n';
+        std::cerr << tr("Error: Failed to open stdin for tar extraction: ") << archive_error_string(a) << '\n';
         archive_read_free(a);
         return false;
     }
     
     struct archive* ext = archive_write_disk_new();
     if (ext == nullptr) {
-        std::cerr << "Error: Failed to create archive writer" << '\n';
+        std::cerr << tr("Error: Failed to create archive writer") << '\n';
         archive_read_free(a);
         return false;
     }
@@ -1015,7 +1017,7 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
             break;
         }
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to read archive header: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to read archive header: ") << archive_error_string(a) << '\n';
             break;
         }
         
@@ -1044,7 +1046,7 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
         // Extract the file
         r = archive_write_header(ext, entry);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to write archive header: " << archive_error_string(ext) << '\n';
+            std::cerr << tr("Error: Failed to write archive header: ") << archive_error_string(ext) << '\n';
         } else {
             const void* buff = nullptr;
             size_t size = 0;
@@ -1053,19 +1055,19 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
             while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
                 r = archive_write_data_block(ext, buff, size, offset);
                 if (r < ARCHIVE_OK) {
-                    std::cerr << "Error: Failed to write archive data: " << archive_error_string(ext) << '\n';
+                    std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(ext) << '\n';
                     break;
                 }
             }
             
             if (r < ARCHIVE_OK) {
-                std::cerr << "Error: Failed to read archive data: " << archive_error_string(a) << '\n';
+                std::cerr << tr("Error: Failed to read archive data: ") << archive_error_string(a) << '\n';
             }
         }
         
         r = archive_write_finish_entry(ext);
         if (r < ARCHIVE_OK) {
-            std::cerr << "Error: Failed to finish archive entry: " << archive_error_string(ext) << '\n';
+            std::cerr << tr("Error: Failed to finish archive entry: ") << archive_error_string(ext) << '\n';
         }
     }
     
@@ -1104,7 +1106,7 @@ bool detect_and_extract_tar_content(const fs::path& input_path, InputContext& ou
         std::error_code ec;
         fs::create_directories(temp_dir, ec);
         if (ec) {
-            std::cerr << "Error: Failed to create temporary directory for tar extraction\n";
+            std::cerr << tr("Error: Failed to create temporary directory for tar extraction\n");
             return false;
         }
         
@@ -1112,7 +1114,7 @@ bool detect_and_extract_tar_content(const fs::path& input_path, InputContext& ou
         
         // Extract the tar file
         if (!extract_tar_file(input_path, temp_dir)) {
-            std::cerr << "Error: Failed to extract tar file: " << to_quoted(input_path) << "\n";
+            std::cerr << tr("Error: Failed to extract tar file: ") << to_quoted(input_path) << "\n";
             // Cleanup on error
             for (const auto& dir : out_context.temp_dirs_to_cleanup) {
                 fs::remove_all(dir, ec);
@@ -1142,7 +1144,7 @@ bool load_content_from_stdin(InputContext& out_context) {
     std::error_code ec;
     fs::create_directories(temp_dir, ec);
     if (ec) {
-        std::cerr << "Error: Failed to create temporary directory for stdin tar extraction\n";
+        std::cerr << tr("Error: Failed to create temporary directory for stdin tar extraction\n");
         return false;
     }
     
@@ -1150,7 +1152,7 @@ bool load_content_from_stdin(InputContext& out_context) {
     
     // Extract from stdin
     if (!extract_tar_from_stdin(temp_dir)) {
-        std::cerr << "Error: Failed to extract tar from stdin\n";
+        std::cerr << tr("Error: Failed to extract tar from stdin\n");
         // Cleanup on error
         for (const auto& dir : out_context.temp_dirs_to_cleanup) {
             fs::remove_all(dir, ec);
@@ -1352,34 +1354,34 @@ std::string to_hex_size_t(size_t value) {
 }
 
 void print_usage() {
-    std::cout << "Usage: spratlayout <folder> [OPTIONS]\n"
-              << "\n"
-              << "Scan an image folder and write a text layout to standard output.\n"
-              << "Rotated sprites are emitted with a trailing 'rotated' token.\n"
-              << "\n"
-              << "Options:\n"
-              << "  --profile NAME             Profile name from config (default: fast)\n"
-              << "  --profiles-config PATH     Use an explicit profile configuration file\n"
-              << "  --mode MODE                Packing mode: compact, pot, or fast\n"
-              << "  --optimize TARGET          Optimization target: gpu or space\n"
-              << "  --max-width N              Maximum atlas width\n"
-              << "  --max-height N             Maximum atlas height\n"
-              << "  --no-max-width             Disable width limit (even if profile sets one)\n"
-              << "  --no-max-height            Disable height limit (even if profile sets one)\n"
-              << "  --padding N                Extra pixels between packed sprites\n"
-              << "  --extrude N                Repeat edge pixels N times (padding should be >= extrude * 2)\n"
-              << "  --max-combinations N       Max combinations for compact search (0=auto)\n"
-              << "  --source-resolution WxH    Source design resolution baseline\n"
-              << "  --target-resolution WxH    Target output resolution\n"
-              << "  --resolution-reference REF Axis ratio driver: largest or smallest\n"
-              << "  --scale F                  Pre-scale factor (0 < F <= 1)\n"
-              << "  --trim-transparent         Enable transparent-border trimming\n"
-              << "  --rotate                   Allow 90-degree sprite rotation during packing\n"
-              << "  --multipack                Split into multiple atlases if they don't fit\n"
-              << "  --sort name|none           Order of sprites in layout (default: name for folders)\n"
-              << "  --threads N                Number of worker threads\n"
-              << "  --debug                    Enable detailed error reporting and debug visualization\n"
-              << "  --help, -h                 Show this help message\n";
+    std::cout << tr("Usage: spratlayout <folder> [OPTIONS]\n")
+              << tr("\n")
+              << tr("Scan an image folder and write a text layout to standard output.\n")
+              << tr("Rotated sprites are emitted with a trailing 'rotated' token.\n")
+              << tr("\n")
+              << tr("Options:\n")
+              << tr("  --profile NAME             Profile name from config (default: fast)\n")
+              << tr("  --profiles-config PATH     Use an explicit profile configuration file\n")
+              << tr("  --mode MODE                Packing mode: compact, pot, or fast\n")
+              << tr("  --optimize TARGET          Optimization target: gpu or space\n")
+              << tr("  --max-width N              Maximum atlas width\n")
+              << tr("  --max-height N             Maximum atlas height\n")
+              << tr("  --no-max-width             Disable width limit (even if profile sets one)\n")
+              << tr("  --no-max-height            Disable height limit (even if profile sets one)\n")
+              << tr("  --padding N                Extra pixels between packed sprites\n")
+              << tr("  --extrude N                Repeat edge pixels N times (padding should be >= extrude * 2)\n")
+              << tr("  --max-combinations N       Max combinations for compact search (0=auto)\n")
+              << tr("  --source-resolution WxH    Source design resolution baseline\n")
+              << tr("  --target-resolution WxH    Target output resolution\n")
+              << tr("  --resolution-reference REF Axis ratio driver: largest or smallest\n")
+              << tr("  --scale F                  Pre-scale factor (0 < F <= 1)\n")
+              << tr("  --trim-transparent         Enable transparent-border trimming\n")
+              << tr("  --rotate                   Allow 90-degree sprite rotation during packing\n")
+              << tr("  --multipack                Split into multiple atlases if they don't fit\n")
+              << tr("  --sort name|none           Order of sprites in layout (default: name for folders)\n")
+              << tr("  --threads N                Number of worker threads\n")
+              << tr("  --debug                    Enable detailed error reporting and debug visualization\n")
+              << tr("  --help, -h                 Show this help message\n");
 }
 
 bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds) {
@@ -2930,7 +2932,7 @@ int run_spratlayout(int argc, char** argv) {
             print_usage();
             return 0;
         } else if (arg == "--version" || arg == "-v") {
-            std::cout << "spratlayout version " << SPRAT_VERSION << "\n";
+            std::cout << tr("spratlayout version ") << SPRAT_VERSION << "\n";
             return 0;
         } else if (arg == "--debug") {
             debug = true;
@@ -2942,7 +2944,7 @@ int run_spratlayout(int argc, char** argv) {
             std::string value = argv[++i];
             std::string error;
             if (!parse_mode_from_string(value, mode_override, error)) {
-                std::cerr << "Invalid mode value: " << value << "\n";
+                std::cerr << tr("Invalid mode value: ") << value << "\n";
                 return 1;
             }
             has_mode_override = true;
@@ -2950,21 +2952,21 @@ int run_spratlayout(int argc, char** argv) {
             std::string value = argv[++i];
             std::string error;
             if (!parse_optimize_target_from_string(value, optimize_override, error)) {
-                std::cerr << "Invalid optimize value: " << value << "\n";
+                std::cerr << tr("Invalid optimize value: ") << value << "\n";
                 return 1;
             }
             has_optimize_override = true;
         } else if (arg == "--max-width" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_positive_int(value, max_width_limit)) {
-                std::cerr << "Invalid max width value: " << value << "\n";
+                std::cerr << tr("Invalid max width value: ") << value << "\n";
                 return 1;
             }
             has_max_width_limit = true;
         } else if (arg == "--max-height" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_positive_int(value, max_height_limit)) {
-                std::cerr << "Invalid max height value: " << value << "\n";
+                std::cerr << tr("Invalid max height value: ") << value << "\n";
                 return 1;
             }
             has_max_height_limit = true;
@@ -2980,11 +2982,11 @@ int run_spratlayout(int argc, char** argv) {
                 size_t idx = 0;
                 padding = std::stoi(value, &idx);
                 if (idx != value.size()) {
-                    std::cerr << "Invalid padding value: " << value << "\n";
+                    std::cerr << tr("Invalid padding value: ") << value << "\n";
                     return 1;
                 }
             } catch (const std::exception&) {
-                std::cerr << "Invalid padding value: " << value << "\n";
+                std::cerr << tr("Invalid padding value: ") << value << "\n";
                 return 1;
             }
             padding = std::max(padding, 0);
@@ -2992,47 +2994,47 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--extrude" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_non_negative_int(value, extrude)) {
-                std::cerr << "Invalid extrude value: " << value << "\n";
+                std::cerr << tr("Invalid extrude value: ") << value << "\n";
                 return 1;
             }
             has_extrude_override = true;
         } else if (arg == "--max-combinations" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_non_negative_int(value, max_combinations)) {
-                std::cerr << "Invalid max combinations value: " << value << "\n";
+                std::cerr << tr("Invalid max combinations value: ") << value << "\n";
                 return 1;
             }
             has_max_combinations_override = true;
         } else if (arg == "--source-resolution" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_resolution(value, source_resolution_width, source_resolution_height)) {
-                std::cerr << "Invalid source resolution value: " << value << "\n";
+                std::cerr << tr("Invalid source resolution value: ") << value << "\n";
                 return 1;
             }
             has_source_resolution = true;
         } else if (arg == "--target-resolution" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_resolution(value, target_resolution_width, target_resolution_height)) {
-                std::cerr << "Invalid target resolution value: " << value << "\n";
+                std::cerr << tr("Invalid target resolution value: ") << value << "\n";
                 return 1;
             }
             has_target_resolution = true;
         } else if (arg == "--resolution-reference" && i + 1 < argc) {
             if (has_resolution_reference_override) {
-                std::cerr << "Error: --resolution-reference can only be provided once\n";
+                std::cerr << tr("Error: --resolution-reference can only be provided once\n");
                 return 1;
             }
             std::string value = argv[++i];
             std::string error;
             if (!parse_resolution_reference_from_string(value, resolution_reference, error)) {
-                std::cerr << "Invalid resolution reference value: " << value << "\n";
+                std::cerr << tr("Invalid resolution reference value: ") << value << "\n";
                 return 1;
             }
             has_resolution_reference_override = true;
         } else if (arg == "--scale" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_scale_factor(value, scale)) {
-                std::cerr << "Invalid scale value: " << value << "\n";
+                std::cerr << tr("Invalid scale value: ") << value << "\n";
                 return 1;
             }
             has_scale_override = true;
@@ -3048,25 +3050,25 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--sort" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_frame_sort_from_string(value, frame_sort)) {
-                std::cerr << "Invalid sort value: " << value << "\n";
+                std::cerr << tr("Invalid sort value: ") << value << "\n";
                 return 1;
             }
             has_frame_sort_override = true;
         } else if (arg == "--threads") {
             std::string value = argv[++i];
             if (!parse_positive_uint(value, thread_limit)) {
-                std::cerr << "Invalid thread count: " << value << "\n";
+                std::cerr << tr("Invalid thread count: ") << value << "\n";
                 return 1;
             }
             has_threads_override = true;
         } else if (arg.starts_with("-")) {
-            std::cerr << "Unknown argument: " << arg << "\n";
+            std::cerr << tr("Unknown argument: ") << arg << "\n";
             return 1;
         } else {
             if (folder.empty()) {
                 folder = arg;
             } else {
-                std::cerr << "Error: Too many arguments: " << arg << "\n";
+                std::cerr << tr("Error: Too many arguments: ") << arg << "\n";
                 return 1;
             }
         }
@@ -3148,7 +3150,7 @@ int run_spratlayout(int argc, char** argv) {
                 continue;
             }
             if (has_requested_profile) {
-                std::cerr << "Failed to load profile config (" << to_quoted(candidate) << "): " << config_error << "\n";
+                std::cerr << tr("Failed to load profile config (") << to_quoted(candidate) << tr("): ") << config_error << "\n";
                 return 1;
             }
             tried_candidates.push_back(candidate.string());
@@ -3160,15 +3162,15 @@ int run_spratlayout(int argc, char** argv) {
     }
 
     if (has_requested_profile && !loaded_profile_file) {
-        std::cerr << "Failed to load profile config. Tried:";
+        std::cerr << tr("Failed to load profile config. Tried:");
         for (const std::string& candidate : tried_candidates) {
             std::cerr << " " << candidate;
         }
-        std::cerr << "\n";
+        std::cerr << tr("\n");
         if (!candidate_access_errors.empty()) {
-            std::cerr << "Profile config access errors:\n";
+            std::cerr << tr("Profile config access errors:\n");
             for (const std::string& error : candidate_access_errors) {
-                std::cerr << "  - " << to_quoted(error) << "\n";
+                std::cerr << tr("  - ") << to_quoted(error) << "\n";
             }
         }
         return 1;
@@ -3200,7 +3202,7 @@ int run_spratlayout(int argc, char** argv) {
                 }
                 available += profile_definitions[idx].name;
             }
-            std::cerr << "Invalid profile '" << selected_profile_name << "'. Available profiles: "
+            std::cerr << tr("Invalid profile '") << selected_profile_name << tr("'. Available profiles: ")
                       << available << "\n";
             return 1;
         }
@@ -3281,7 +3283,7 @@ int run_spratlayout(int argc, char** argv) {
     }
 
     if (has_source_resolution != has_target_resolution) {
-        std::cerr << "Error: --source-resolution and --target-resolution must be provided together\n";
+        std::cerr << tr("Error: --source-resolution and --target-resolution must be provided together\n");
         return 1;
     }
     if (has_source_resolution) {
@@ -3305,12 +3307,12 @@ int run_spratlayout(int argc, char** argv) {
     // Check if we should read from stdin (when folder is "-")
     if (folder == "-") {
         if (!load_content_from_stdin(input_context)) {
-            std::cerr << "Error: Failed to load content from stdin\n";
+            std::cerr << tr("Error: Failed to load content from stdin\n");
             return 1;
         }
     } else {
         if (!detect_and_extract_tar_content(folder, input_context)) {
-            std::cerr << "Error: Failed to load content from input\n";
+            std::cerr << tr("Error: Failed to load content from input\n");
             return 1;
         }
     }
@@ -3325,7 +3327,7 @@ int run_spratlayout(int argc, char** argv) {
     auto add_source = [&](const fs::path& image_path, bool strict) -> bool {
         if (!is_supported_image_extension(image_path)) {
             if (strict) {
-                std::cerr << "Invalid extension in list input: " << to_quoted(image_path) << "\n";
+                std::cerr << tr("Invalid extension in list input: ") << to_quoted(image_path) << "\n";
                 return false;
             }
             return true;
@@ -3333,7 +3335,7 @@ int run_spratlayout(int argc, char** argv) {
         ImageMeta meta;
         if (!read_image_meta(image_path, meta)) {
             if (strict) {
-                std::cerr << "Failed to stat image: " << to_quoted(image_path) << "\n";
+                std::cerr << tr("Failed to stat image: ") << to_quoted(image_path) << "\n";
                 return false;
             }
             return true;
@@ -3378,7 +3380,7 @@ int run_spratlayout(int argc, char** argv) {
     } else {
         std::ifstream list_file(input_context.working_folder);
         if (!list_file) {
-            std::cerr << "Failed to open list file: " << input_context.working_folder << "\n";
+            std::cerr << tr("Failed to open list file: ") << input_context.working_folder << "\n";
             return 1;
         }
         std::string line;
@@ -3394,7 +3396,7 @@ int run_spratlayout(int argc, char** argv) {
                 entry_path = input_context.working_folder.parent_path() / entry_path;
             }
             if (!fs::exists(entry_path) || !fs::is_regular_file(entry_path)) {
-                std::cerr << "Invalid image path at line " << line_number << ": " << to_quoted(trimmed) << "\n";
+                std::cerr << tr("Invalid image path at line ") << line_number << tr(": ") << to_quoted(trimmed) << "\n";
                 return 1;
             }
             if (!add_source(entry_path, true)) {
@@ -3428,7 +3430,7 @@ int run_spratlayout(int argc, char** argv) {
     }
 
     if (sources.empty()) {
-        std::cerr << "Error: no valid images found\n";
+        std::cerr << tr("Error: no valid images found\n");
         return 1;
     }
 
@@ -3511,7 +3513,7 @@ int run_spratlayout(int argc, char** argv) {
         int channels = 0;
         unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
         if (data == nullptr) {
-            std::cerr << "Warning: Failed to load sprite " << to_quoted(path) << " (Reason: " << stbi_failure_reason() << ")\n";
+            std::cerr << tr("Warning: Failed to load sprite ") << to_quoted(path) << tr(" (Reason: ") << stbi_failure_reason() << tr(")\n");
             continue;
         }
 
@@ -3555,7 +3557,7 @@ int run_spratlayout(int argc, char** argv) {
     save_image_cache(cache_path, cache_entries);
 
     if (sprites.empty()) {
-        std::cerr << "Error: no valid images found\n";
+        std::cerr << tr("Error: no valid images found\n");
         return 1;
     }
 
@@ -3564,7 +3566,7 @@ int run_spratlayout(int argc, char** argv) {
             int scaled_w = 0;
             int scaled_h = 0;
             if (!scale_dimension(s.w, scale, scaled_w) || !scale_dimension(s.h, scale, scaled_h)) {
-                std::cerr << "Error: scaled sprite dimensions are invalid\n";
+                std::cerr << tr("Error: scaled sprite dimensions are invalid\n");
                 return 1;
             }
             s.w = scaled_w;
@@ -3581,18 +3583,18 @@ int run_spratlayout(int argc, char** argv) {
         int padded_w = 0;
         int padded_h = 0;
         if (!checked_add_int(s.w, padding, padded_w)) {
-            std::cerr << "Error: dimensions are too large\n";
+            std::cerr << tr("Error: dimensions are too large\n");
             return 1;
         }
         if (!checked_add_int(s.h, padding, padded_h)) {
-            std::cerr << "Error: dimensions are too large\n";
+            std::cerr << tr("Error: dimensions are too large\n");
             return 1;
         }
 
         size_t sprite_area = 0;
         if (!checked_mul_size_t(static_cast<size_t>(padded_w), static_cast<size_t>(padded_h), sprite_area) ||
             sprite_area > std::numeric_limits<size_t>::max() - total_area) {
-            std::cerr << "Error: total area is too large\n";
+            std::cerr << tr("Error: total area is too large\n");
             return 1;
         }
         total_area += sprite_area;
@@ -3601,7 +3603,7 @@ int run_spratlayout(int argc, char** argv) {
         max_height = std::max(max_height, padded_h);
         if (!checked_add_int(sum_width, padded_w, sum_width) ||
             !checked_add_int(sum_height, padded_h, sum_height)) {
-            std::cerr << "Error: dimensions are too large\n";
+            std::cerr << tr("Error: dimensions are too large\n");
             return 1;
         }
     }
@@ -3617,7 +3619,7 @@ int run_spratlayout(int argc, char** argv) {
         height_upper_bound = std::min(height_upper_bound, max_height_limit);
     }
     if (max_width > width_upper_bound || max_height > height_upper_bound) {
-        std::cerr << "Error: sprite dimensions exceed provided atlas limits\n";
+        std::cerr << tr("Error: sprite dimensions exceed provided atlas limits\n");
         return 1;
     }
 
@@ -3643,7 +3645,7 @@ int run_spratlayout(int argc, char** argv) {
         for (auto& s : sprites) { s.atlas_index = 0; }
     } else if (multipack) {
         if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, enforce_name_order, atlases)) {
-            std::cerr << "Error: failed to compute multipack layout\n";
+            std::cerr << tr("Error: failed to compute multipack layout\n");
             return 1;
         }
     } else {
@@ -3666,7 +3668,7 @@ int run_spratlayout(int argc, char** argv) {
             int min_pot_width = next_power_of_two(max_width);
             int min_pot_height = next_power_of_two(max_height);
             if (min_pot_width <= 0 || min_pot_height <= 0) {
-                std::cerr << "Error: dimensions are too large\n";
+                std::cerr << tr("Error: dimensions are too large\n");
                 return 1;
             }
 
@@ -3682,11 +3684,11 @@ int run_spratlayout(int argc, char** argv) {
 
             while (true) {
                 if (max_width_limit > 0 && side > max_width_limit) {
-                    std::cerr << "Error: no POT layout fits within max width\n";
+                    std::cerr << tr("Error: no POT layout fits within max width\n");
                     return 1;
                 }
                 if (max_height_limit > 0 && side > max_height_limit) {
-                    std::cerr << "Error: no POT layout fits within max height\n";
+                    std::cerr << tr("Error: no POT layout fits within max height\n");
                     return 1;
                 }
                 for (SortMode sort_mode : sort_modes) {
@@ -3712,7 +3714,7 @@ int run_spratlayout(int argc, char** argv) {
                     break;
                 }
                 if (side > std::numeric_limits<int>::max() / 2) {
-                    std::cerr << "Error: atlas dimensions overflow\n";
+                    std::cerr << tr("Error: atlas dimensions overflow\n");
                     return 1;
                 }
                 side *= 2;
@@ -3771,7 +3773,7 @@ int run_spratlayout(int argc, char** argv) {
             }
 
             if (!have_best) {
-                std::cerr << "Error: failed to compute pot layout\n";
+                std::cerr << tr("Error: failed to compute pot layout\n");
                 return 1;
             }
 
@@ -3782,7 +3784,7 @@ int run_spratlayout(int argc, char** argv) {
             for (auto& s : sprites) { s.atlas_index = 0; }
         } else if (mode == Mode::COMPACT) {
         if (sum_width <= 0 || sum_height <= 0) {
-            std::cerr << "Error: compact bounds are invalid\n";
+            std::cerr << tr("Error: compact bounds are invalid\n");
             return 1;
         }
         const size_t combination_budget = max_combinations > 0
@@ -3819,7 +3821,7 @@ int run_spratlayout(int argc, char** argv) {
         if (total_area > 0) {
             long double area_root = std::sqrt(static_cast<long double>(total_area));
             if (area_root > static_cast<long double>(std::numeric_limits<int>::max())) {
-                std::cerr << "Error: compact width is too large\n";
+                std::cerr << tr("Error: compact width is too large\n");
                 return 1;
             }
             int root_width = static_cast<int>(std::ceil(area_root));
@@ -4157,7 +4159,7 @@ int run_spratlayout(int argc, char** argv) {
                 selected_candidate = best_space_candidate.valid ? &best_space_candidate : &best_gpu_candidate;
             }
             if ((selected_candidate == nullptr) || !selected_candidate->valid) {
-                std::cerr << "Error: failed to compute compact layout\n";
+                std::cerr << tr("Error: failed to compute compact layout\n");
                 return 1;
             }
 
@@ -4251,7 +4253,7 @@ int run_spratlayout(int argc, char** argv) {
             if (total_area > 0) {
                 long double area_root = std::sqrt(static_cast<long double>(total_area));
                 if (area_root > static_cast<long double>(std::numeric_limits<int>::max())) {
-                    std::cerr << "Error: fast width is too large\n";
+                    std::cerr << tr("Error: fast width is too large\n");
                     return 1;
                 }
                 int candidate = static_cast<int>(std::ceil(area_root));
@@ -4297,7 +4299,7 @@ int run_spratlayout(int argc, char** argv) {
                 break;
             }
             if (!packed) {
-                std::cerr << "Error: failed to compute fast layout\n";
+                std::cerr << tr("Error: failed to compute fast layout\n");
                 return 1;
             }
             atlases.push_back({atlas_width, atlas_height});
@@ -4307,7 +4309,7 @@ int run_spratlayout(int argc, char** argv) {
 
     if (padding > 0 && !multipack) {
         if (!compute_tight_atlas_bounds(sprites, atlas_width, atlas_height)) {
-            std::cerr << "Error: failed to compute final atlas bounds\n";
+            std::cerr << tr("Error: failed to compute final atlas bounds\n");
             return 1;
         }
         if (!atlases.empty()) {
@@ -4352,7 +4354,7 @@ int run_spratlayout(int argc, char** argv) {
 
 #ifdef _WIN32
     if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-        std::cerr << "Failed to set stdout to binary mode\n";
+        std::cerr << tr("Failed to set stdout to binary mode\n");
     }
 #endif
 

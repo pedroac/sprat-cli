@@ -51,9 +51,11 @@ typedef SSIZE_T ssize_t;
 // Libarchive for proper tar format
 #include <archive.h>
 #include <archive_entry.h>
+#include "core/i18n.h"
 
 namespace {
 using sprat::core::parse_non_negative_uint;
+using sprat::core::tr;
 using sprat::core::to_quoted;
 
 constexpr int NUM_CHANNELS = 4;
@@ -120,12 +122,12 @@ private:
                 buffer.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
             }
         } else {
-            std::cerr << "Error: No input atlas provided.\n";
+            std::cerr << tr("Error: No input atlas provided.\n");
             return false;
         }
 
         if (buffer.empty()) {
-            std::cerr << "Error: No atlas image data received\n";
+            std::cerr << tr("Error: No atlas image data received\n");
             return false;
         }
 
@@ -150,7 +152,7 @@ private:
             NUM_CHANNELS);
 
         if (data == nullptr) {
-            std::cerr << "Error: Failed to load atlas image (Reason: " << stbi_failure_reason() << ")\n";
+            std::cerr << tr("Error: Failed to load atlas image (Reason: ") << stbi_failure_reason() << tr(")\n");
             return false;
         }
 
@@ -168,13 +170,13 @@ private:
                           std::istreambuf_iterator<char>());
             if (content.empty()) {
                 if (config_.frames_from_stdin) {
-                    std::cerr << "Error: No frames data received on stdin\n";
+                    std::cerr << tr("Error: No frames data received on stdin\n");
                     return false;
                 }
                 // If we were just hoping for frames on stdin because input was missing,
                 // but got nothing, we'll fail later in load_image.
                 // But wait, if we are here, input_from_stdin is true.
-                std::cerr << "Error: No data received on stdin. Expected atlas image or frames definition.\n";
+                std::cerr << tr("Error: No data received on stdin. Expected atlas image or frames definition.\n");
                 return false;
             }
             // For stdin, we try to detect format from content
@@ -194,7 +196,7 @@ private:
                     content.assign(std::istreambuf_iterator<char>(std::cin),
                                   std::istreambuf_iterator<char>());
                     if (content.empty()) {
-                        std::cerr << "Error: No data received on stdin. Expected frames definition.\n";
+                        std::cerr << tr("Error: No data received on stdin. Expected frames definition.\n");
                         return false;
                     }
                     if (content.find("\"frames\":") != std::string::npos || content.find('[') != std::string::npos) {
@@ -224,7 +226,7 @@ private:
                                     extension = ".spratframes";
                                 }
                             } else {
-                                std::cerr << "Error: Frames file not found and could not be auto-detected.\n";
+                                std::cerr << tr("Error: Frames file not found and could not be auto-detected.\n");
                                 return false;
                             }
                         }
@@ -238,7 +240,7 @@ private:
 
                 std::ifstream file(config_.frames_path);
                 if (!file.is_open()) {
-                    std::cerr << "Error: Failed to open frames file " << to_quoted(config_.frames_path.string()) << "\n";
+                    std::cerr << tr("Error: Failed to open frames file ") << to_quoted(config_.frames_path.string()) << "\n";
                     return false;
                 }
 
@@ -266,7 +268,7 @@ private:
             return true;
         }
 
-        std::cerr << "Error: Unsupported frames format " << extension << " and could not auto-detect format from content.\n";
+        std::cerr << tr("Error: Unsupported frames format ") << extension << tr(" and could not auto-detect format from content.\n");
         return false;
     }
 
@@ -369,7 +371,7 @@ private:
             if (content.find('[') != std::string::npos) {
                 return parse_json_array(content);
             }
-            std::cerr << "Error: Invalid JSON format (missing \"frames\")\n";
+            std::cerr << tr("Error: Invalid JSON format (missing \"frames\")\n");
             return false;
         }
 
@@ -519,16 +521,16 @@ private:
         if (!fs::exists(config_.output_dir)) {
             std::error_code ec;
             if (!fs::create_directories(config_.output_dir, ec)) {
-                std::cerr << "Error: Failed to create output directory " << to_quoted(config_.output_dir.string()) << "\n";
+                std::cerr << tr("Error: Failed to create output directory ") << to_quoted(config_.output_dir.string()) << "\n";
                 return false;
             }
         }
 
-        std::cout << "Unpacking " << frames_.size() << " frames to " << to_quoted(config_.output_dir.string()) << "...\n";
+        std::cout << tr("Unpacking ") << frames_.size() << tr(" frames to ") << to_quoted(config_.output_dir.string()) << tr("...\n");
 
         for (const auto& frame : frames_) {
             if (!save_sprite_image(frame)) {
-                std::cerr << "Warning: Failed to save sprite " << to_quoted(frame.name) << "\n";
+                std::cerr << tr("Warning: Failed to save sprite ") << to_quoted(frame.name) << "\n";
             }
         }
 
@@ -539,18 +541,18 @@ private:
         // Output as a tar archive to stdout
         struct archive* a = archive_write_new();
         if (a == nullptr) {
-            std::cerr << "Error: Failed to create archive writer\n";
+            std::cerr << tr("Error: Failed to create archive writer\n");
             return false;
         }
 
         if (archive_write_set_format_pax_restricted(a) != ARCHIVE_OK) {
-            std::cerr << "Error: Failed to set archive format: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to set archive format: ") << archive_error_string(a) << '\n';
             archive_write_free(a);
             return false;
         }
 
         if (archive_write_add_filter_none(a) != ARCHIVE_OK) {
-            std::cerr << "Error: Failed to set compression: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to set compression: ") << archive_error_string(a) << '\n';
             archive_write_free(a);
             return false;
         }
@@ -565,21 +567,21 @@ private:
         };
 
         if (archive_write_open(a, nullptr, nullptr, write_callback, nullptr) != ARCHIVE_OK) {
-            std::cerr << "Error: Failed to open memory for archive: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to open memory for archive: ") << archive_error_string(a) << '\n';
             archive_write_free(a);
             return false;
         }
 
         for (const auto& frame : frames_) {
             if (!write_sprite_to_archive_entry(a, frame)) {
-                std::cerr << "Warning: Failed to add sprite " << to_quoted(frame.name) << " to archive\n";
+                std::cerr << tr("Warning: Failed to add sprite ") << to_quoted(frame.name) << tr(" to archive\n");
                 archive_write_free(a);
                 return false;
             }
         }
 
         if (archive_write_close(a) != ARCHIVE_OK) {
-            std::cerr << "Error: Failed to close archive: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to close archive: ") << archive_error_string(a) << '\n';
             archive_write_free(a);
             return false;
         }
@@ -645,13 +647,13 @@ private:
         archive_entry_set_mtime(entry, time(nullptr), 0);
 
         if (archive_write_header(a, entry) != ARCHIVE_OK) {
-            std::cerr << "Error: Failed to write archive header: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to write archive header: ") << archive_error_string(a) << '\n';
             archive_entry_free(entry);
             return false;
         }
 
         if (archive_write_data(a, png_buffer.get(), png_size) != static_cast<ssize_t>(png_size)) {
-            std::cerr << "Error: Failed to write archive data: " << archive_error_string(a) << '\n';
+            std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(a) << '\n';
             archive_entry_free(entry);
             return false;
         }
@@ -699,17 +701,17 @@ private:
 };
 
 void print_usage() {
-    std::cout << "Usage: spratunpack [atlas.png|-] [OPTIONS]\n"
-              << "\n"
-              << "Extract individual sprites from an atlas using a frames definition file.\n"
-              << "If atlas path is omitted or '-' is used, atlas PNG is read from stdin.\n"
-              << "\n"
-              << "Options:\n"
-              << "  -f, --frames PATH          Frames definition file (or '-' for stdin)\n"
-              << "  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n"
-              << "  -j, --threads N            Number of threads to use (default: auto)\n"
-              << "  --debug                    Enable detailed error reporting\n"
-              << "  -h, --help                 Show this help message\n";
+    std::cout << tr("Usage: spratunpack [atlas.png|-] [OPTIONS]\n")
+              << tr("\n")
+              << tr("Extract individual sprites from an atlas using a frames definition file.\n")
+              << tr("If atlas path is omitted or '-' is used, atlas PNG is read from stdin.\n")
+              << tr("\n")
+              << tr("Options:\n")
+              << tr("  -f, --frames PATH          Frames definition file (or '-' for stdin)\n")
+              << tr("  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n")
+              << tr("  -j, --threads N            Number of threads to use (default: auto)\n")
+              << tr("  --debug                    Enable detailed error reporting\n")
+              << tr("  -h, --help                 Show this help message\n");
 }
 
 } // namespace
@@ -725,7 +727,7 @@ int run_spratunpack(int argc, char** argv) {
             print_usage();
             return 0;
         } else if (arg == "--version" || arg == "-v") {
-            std::cout << "spratunpack version " << SPRAT_VERSION << "\n";
+            std::cout << tr("spratunpack version ") << SPRAT_VERSION << "\n";
             return 0;
         } else if (arg == "--debug") {
             config.debug = true;
@@ -733,7 +735,7 @@ int run_spratunpack(int argc, char** argv) {
             if (config.input_path.empty() && !config.input_from_stdin) {
                 config.input_from_stdin = true;
             } else {
-                std::cerr << "Error: Too many arguments: " << arg << "\n";
+                std::cerr << tr("Error: Too many arguments: ") << arg << "\n";
                 print_usage();
                 return 1;
             }
@@ -745,35 +747,35 @@ int run_spratunpack(int argc, char** argv) {
                     config.frames_path = "";
                 }
             } else {
-                std::cerr << "Error: Missing value for " << arg << "\n";
+                std::cerr << tr("Error: Missing value for ") << arg << "\n";
                 return 1;
             }
         } else if (arg == "-o" || arg == "--output") {
             if (i + 1 < argc) {
                 config.output_dir = argv[++i];
             } else {
-                std::cerr << "Error: Missing value for " << arg << "\n";
+                std::cerr << tr("Error: Missing value for ") << arg << "\n";
                 return 1;
             }
         } else if (arg == "-j" || arg == "--threads") {
             if (i + 1 < argc) {
                 if (!parse_non_negative_uint(argv[++i], config.threads)) {
-                    std::cerr << "Error: Invalid thread count: " << argv[i] << "\n";
+                    std::cerr << tr("Error: Invalid thread count: ") << argv[i] << "\n";
                     return 1;
                 }
             } else {
-                std::cerr << "Error: Missing value for " << arg << "\n";
+                std::cerr << tr("Error: Missing value for ") << arg << "\n";
                 return 1;
             }
         } else if (arg.starts_with("-")) {
-            std::cerr << "Unknown option: " << arg << "\n";
+            std::cerr << tr("Unknown option: ") << arg << "\n";
             print_usage();
             return 1;
         } else {
             if (config.input_path.empty()) {
                 config.input_path = arg;
             } else {
-                std::cerr << "Error: Too many arguments: " << arg << "\n";
+                std::cerr << tr("Error: Too many arguments: ") << arg << "\n";
                 print_usage();
                 return 1;
             }
@@ -785,7 +787,7 @@ int run_spratunpack(int argc, char** argv) {
     }
 
     if (config.input_from_stdin && config.frames_from_stdin) {
-        std::cerr << "Error: Cannot read both atlas image and frames from stdin.\n";
+        std::cerr << tr("Error: Cannot read both atlas image and frames from stdin.\n");
         return 1;
     }
 

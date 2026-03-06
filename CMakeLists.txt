@@ -117,7 +117,33 @@ add_library(spratcore STATIC
     src/core/cli_parse.cpp
     src/core/layout_parser.cpp
     src/core/output_pattern.cpp
+    src/core/i18n.cpp
 )
+
+option(SPRAT_ENABLE_NLS "Enable gettext-based translations when available" ON)
+option(SPRAT_REQUIRE_GETTEXT "Fail configure if gettext support is requested but unavailable" OFF)
+
+set(SPRAT_GETTEXT_AVAILABLE FALSE)
+if(SPRAT_ENABLE_NLS)
+    find_package(Gettext QUIET)
+    if(Gettext_FOUND)
+        set(SPRAT_GETTEXT_AVAILABLE TRUE)
+        target_compile_definitions(spratcore PUBLIC SPRAT_ENABLE_GETTEXT)
+        if(TARGET Intl::Intl)
+            target_link_libraries(spratcore PUBLIC Intl::Intl)
+        elseif(TARGET Gettext::Gettext)
+            target_link_libraries(spratcore PUBLIC Gettext::Gettext)
+        elseif(GETTEXT_LIBRARIES)
+            target_link_libraries(spratcore PUBLIC ${GETTEXT_LIBRARIES})
+        endif()
+        message(STATUS "gettext support enabled")
+    elseif(SPRAT_REQUIRE_GETTEXT)
+        message(FATAL_ERROR "gettext was requested (SPRAT_REQUIRE_GETTEXT=ON) but was not found")
+    else()
+        message(STATUS "gettext not found; translations will fallback to source strings")
+    endif()
+endif()
+target_compile_definitions(spratcore PUBLIC SPRAT_LOCALE_DIR="${CMAKE_INSTALL_FULL_LOCALEDIR}")
 
 # Binaries
 # For Windows cross-compilation, PkgConfig often leaks host paths. 

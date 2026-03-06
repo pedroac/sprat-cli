@@ -31,6 +31,7 @@ namespace fs = std::filesystem;
 #include <vector>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
+#include "core/i18n.h"
 #include "core/output_pattern.h"
 
 namespace {
@@ -102,6 +103,7 @@ using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::parse_pair;
 using sprat::core::parse_quoted;
+using sprat::core::tr;
 using sprat::core::validate_output_pattern;
 
 std::string trim_copy(const std::string& s) {
@@ -1237,7 +1239,7 @@ void list_transforms() {
         Transform t;
         std::string error;
         if (!parse_transform_file(path, t, error)) {
-            std::cerr << "Warning: " << error << "\n";
+            std::cerr << tr("Warning: ") << error << "\n";
             continue;
         }
         std::cout << t.name;
@@ -1276,26 +1278,26 @@ std::string format_atlas_path(const std::string& pattern, int index) {
 }
 
 void print_usage() {
-    std::cout << "Usage: spratconvert [OPTIONS]\n"
-              << "\n"
-              << "Read layout text from stdin and transform it into other formats.\n"
-              << "Unsuffixed placeholders are auto-encoded based on transform output type.\n"
-              << "\n"
-              << "Options:\n"
-              << "  --transform NAME|PATH      Transform name or path (default: json)\n"
-              << "  --output, -o PATTERN       Atlas filename pattern (e.g. atlas_%d.png)\n"
-              << "  --list-transforms          Print available transforms and exit\n"
-              << "  --markers PATH             Load external markers file\n"
-              << "  --animations PATH          Load external animations file\n"
-              << "  --auto-animations          Group frames into animations by name pattern\n"
-              << "  --help, -h                 Show this help message\n";
+    std::cout << tr("Usage: spratconvert [OPTIONS]\n")
+              << tr("\n")
+              << tr("Read layout text from stdin and transform it into other formats.\n")
+              << tr("Unsuffixed placeholders are auto-encoded based on transform output type.\n")
+              << tr("\n")
+              << tr("Options:\n")
+              << tr("  --transform NAME|PATH      Transform name or path (default: json)\n")
+              << tr("  --output, -o PATTERN       Atlas filename pattern (e.g. atlas_%d.png)\n")
+              << tr("  --list-transforms          Print available transforms and exit\n")
+              << tr("  --markers PATH             Load external markers file\n")
+              << tr("  --animations PATH          Load external animations file\n")
+              << tr("  --auto-animations          Group frames into animations by name pattern\n")
+              << tr("  --help, -h                 Show this help message\n");
 }
 } // namespace
 
 int run_spratconvert(int argc, char** argv) {
 #ifdef _WIN32
     if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-        std::cerr << "Failed to set stdout to binary mode\n";
+        std::cerr << tr("Failed to set stdout to binary mode\n");
     }
 #endif
     std::string transform_arg = "json";
@@ -1323,7 +1325,7 @@ int run_spratconvert(int argc, char** argv) {
             print_usage();
             return 0;
         } else if (arg == "--version" || arg == "-v") {
-            std::cout << "spratconvert version " << SPRAT_VERSION << "\n";
+            std::cout << tr("spratconvert version ") << SPRAT_VERSION << "\n";
             return 0;
         } else {
             print_usage();
@@ -1367,7 +1369,7 @@ int run_spratconvert(int argc, char** argv) {
     if (!output_pattern_arg.empty()) {
         std::string pattern_error;
         if (!validate_output_pattern(output_pattern_arg, layout.atlases.size(), true, pattern_error)) {
-            std::cerr << "Invalid output pattern: " << pattern_error << "\n";
+            std::cerr << tr("Invalid output pattern: ") << pattern_error << "\n";
             return 1;
         }
     }

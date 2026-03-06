@@ -38,6 +38,7 @@
 #include <archive_entry.h>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
+#include "core/i18n.h"
 #include "core/output_pattern.h"
 
 #ifdef SPRAT_HAS_ZOPFLI
@@ -59,6 +60,7 @@ using sprat::core::format_index_pattern;
 using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::to_quoted;
+using sprat::core::tr;
 using sprat::core::validate_output_pattern;
 
 bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
@@ -255,24 +257,24 @@ void extrude_atlas(
 } // namespace
 
 void print_usage() {
-    std::cout << "Usage: spratpack [OPTIONS]\n"
-              << "\n"
-              << "Read layout text from stdin and write one or more PNG atlases.\n"
-              << "If multiple atlases are generated and writing to stdout, output is a TAR.\n"
-              << "Multipack layouts also trigger TAR output by default when writing to stdout.\n"
-              << "\n"
-              << "Options:\n"
-              << "  -o, --output PATTERN   Output filename pattern (e.g. atlas_%d.png)\n"
-              << "  --atlas-index N        Pick a specific atlas index to output\n"
-              << "  --extrude N            Repeat edge pixels N times (overrides layout)\n"
-              << "  --frame-lines          Draw rectangle outlines for each sprite\n"
-              << "  --line-width N         Outline thickness in pixels (default: 1)\n"
-              << "  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n"
-              << "  --threads N            Number of worker threads\n"
-              << "  --debug                Enable detailed error reporting and debug visualization\n"
-              << "  --protect              Protect output with basic obfuscation\n"
-              << "  --zopfli               Optimize output PNG using Zopfli (very slow)\n"
-              << "  --help, -h             Show this help message\n";
+    std::cout << tr("Usage: spratpack [OPTIONS]\n")
+              << tr("\n")
+              << tr("Read layout text from stdin and write one or more PNG atlases.\n")
+              << tr("If multiple atlases are generated and writing to stdout, output is a TAR.\n")
+              << tr("Multipack layouts also trigger TAR output by default when writing to stdout.\n")
+              << tr("\n")
+              << tr("Options:\n")
+              << tr("  -o, --output PATTERN   Output filename pattern (e.g. atlas_%d.png)\n")
+              << tr("  --atlas-index N        Pick a specific atlas index to output\n")
+              << tr("  --extrude N            Repeat edge pixels N times (overrides layout)\n")
+              << tr("  --frame-lines          Draw rectangle outlines for each sprite\n")
+              << tr("  --line-width N         Outline thickness in pixels (default: 1)\n")
+              << tr("  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n")
+              << tr("  --threads N            Number of worker threads\n")
+              << tr("  --debug                Enable detailed error reporting and debug visualization\n")
+              << tr("  --protect              Protect output with basic obfuscation\n")
+              << tr("  --zopfli               Optimize output PNG using Zopfli (very slow)\n")
+              << tr("  --help, -h             Show this help message\n");
 }
 
 int run_spratpack(int argc, char** argv) {
@@ -295,7 +297,7 @@ int run_spratpack(int argc, char** argv) {
             print_usage();
             return 0;
         } else if (arg == "--version" || arg == "-v") {
-            std::cout << "spratpack version " << SPRAT_VERSION << "\n";
+            std::cout << tr("spratpack version ") << SPRAT_VERSION << "\n";
             return 0;
         } else if (arg == "--debug") {
             debug = true;
@@ -308,13 +310,13 @@ int run_spratpack(int argc, char** argv) {
         } else if (arg == "--atlas-index" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_int(value, requested_atlas_index) || requested_atlas_index < 0) {
-                std::cerr << "Invalid atlas index: " << value << "\n";
+                std::cerr << tr("Invalid atlas index: ") << value << "\n";
                 return 1;
             }
         } else if (arg == "--extrude" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_int(value, extrude) || extrude < 0) {
-                std::cerr << "Invalid extrude value: " << value << "\n";
+                std::cerr << tr("Invalid extrude value: ") << value << "\n";
                 return 1;
             }
             has_extrude_override = true;
@@ -323,20 +325,20 @@ int run_spratpack(int argc, char** argv) {
         } else if (arg == "--line-width" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_int(value, line_width) || line_width <= 0) {
-                std::cerr << "Invalid line width: " << value << "\n";
+                std::cerr << tr("Invalid line width: ") << value << "\n";
                 return 1;
             }
         } else if (arg == "--line-color" && i + 1 < argc) {
             std::string value = argv[++i];
             if (!parse_line_color(value, line_color)) {
-                std::cerr << "Invalid line color: " << value << "\n";
+                std::cerr << tr("Invalid line color: ") << value << "\n";
                 return 1;
             }
         } else if (arg == "--threads" && i + 1 < argc) {
             std::string value = argv[++i];
             int parsed = 0;
             if (!parse_int(value, parsed) || parsed <= 0) {
-                std::cerr << "Invalid thread count: " << value << "\n";
+                std::cerr << tr("Invalid thread count: ") << value << "\n";
                 return 1;
             }
             thread_limit = static_cast<unsigned int>(parsed);
@@ -355,7 +357,8 @@ int run_spratpack(int argc, char** argv) {
     }
 
     if (requested_atlas_index >= 0 && static_cast<size_t>(requested_atlas_index) >= layout.atlases.size()) {
-        std::cerr << "Error: requested atlas index " << requested_atlas_index << " out of range (total: " << layout.atlases.size() << ")\n";
+        std::cerr << tr("Error: requested atlas index ") << requested_atlas_index
+                  << tr(" out of range (total: ") << layout.atlases.size() << ")\n";
         return 1;
     }
     if (!output_pattern.empty()) {
@@ -364,7 +367,7 @@ int run_spratpack(int argc, char** argv) {
                                      layout.atlases.size(),
                                      requested_atlas_index < 0,
                                      pattern_error)) {
-            std::cerr << "Invalid output pattern: " << pattern_error << "\n";
+            std::cerr << tr("Invalid output pattern: ") << pattern_error << "\n";
             return 1;
         }
     }
@@ -387,12 +390,12 @@ int run_spratpack(int argc, char** argv) {
         archive_write_set_format_pax_restricted(a.get());
 #ifdef _WIN32
         if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-            std::cerr << "Failed to set stdout to binary mode\n";
+            std::cerr << tr("Failed to set stdout to binary mode\n");
             return 1;
         }
 #endif
         if (archive_write_open_FILE(a.get(), stdout) != ARCHIVE_OK) {
-            std::cerr << "Failed to open TAR stream on stdout: " << archive_error_string(a.get()) << "\n";
+            std::cerr << tr("Failed to open TAR stream on stdout: ") << archive_error_string(a.get()) << "\n";
             return 1;
         }
     }
@@ -415,7 +418,7 @@ int run_spratpack(int argc, char** argv) {
         size_t byte_count = 0;
         if (!checked_mul_size_t(static_cast<size_t>(atlas_width), static_cast<size_t>(atlas_height), pixel_count)
             || !checked_mul_size_t(pixel_count, NUM_CHANNELS, byte_count)) {
-            std::cerr << "Error: Atlas " << atlas_idx << " dimensions are too large for memory allocation\n";
+            std::cerr << tr("Error: Atlas ") << atlas_idx << tr(" dimensions are too large for memory allocation\n");
             return 1;
         }
 
@@ -576,7 +579,7 @@ int run_spratpack(int argc, char** argv) {
         };
 
         if (stbi_write_png_to_func(write_to_vec, &png_data, atlas_width, atlas_height, 4, atlas_data.data(), atlas_width * 4) == 0) {
-            std::cerr << "Error: Failed to encode PNG for atlas " << atlas_idx << "\n";
+            std::cerr << tr("Error: Failed to encode PNG for atlas ") << atlas_idx << "\n";
             return 1;
         }
 
@@ -587,7 +590,7 @@ int run_spratpack(int argc, char** argv) {
             if (ZopfliPNGCompress(png_data, options, false, &optimized) == 0) {
                 png_data = std::move(optimized);
             } else {
-                std::cerr << "Warning: Zopfli optimization failed for atlas " << atlas_idx << "\n";
+                std::cerr << tr("Warning: Zopfli optimization failed for atlas ") << atlas_idx << "\n";
             }
         }
 #endif
@@ -606,7 +609,7 @@ int run_spratpack(int argc, char** argv) {
             std::string filename = "atlas_" + std::to_string(atlas_idx) + ".png";
             struct archive_entry* entry = archive_entry_new();
             if (!entry) {
-                std::cerr << "Error: Failed to create TAR entry\n";
+                std::cerr << tr("Error: Failed to create TAR entry\n");
                 return 1;
             }
             archive_entry_set_pathname(entry, filename.c_str());
@@ -615,12 +618,12 @@ int run_spratpack(int argc, char** argv) {
             archive_entry_set_perm(entry, 0644);
             
             if (archive_write_header(a.get(), entry) != ARCHIVE_OK) {
-                std::cerr << "Error: Failed to write TAR header: " << archive_error_string(a.get()) << "\n";
+                std::cerr << tr("Error: Failed to write TAR header: ") << archive_error_string(a.get()) << "\n";
                 archive_entry_free(entry);
                 return 1;
             }
             if (archive_write_data(a.get(), png_data.data(), png_data.size()) < 0) {
-                std::cerr << "Error: Failed to write TAR data: " << archive_error_string(a.get()) << "\n";
+                std::cerr << tr("Error: Failed to write TAR data: ") << archive_error_string(a.get()) << "\n";
                 archive_entry_free(entry);
                 return 1;
             }
@@ -628,7 +631,7 @@ int run_spratpack(int argc, char** argv) {
         } else if (output_pattern.empty()) {
 #ifdef _WIN32
             if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-                std::cerr << "Failed to set stdout to binary mode\n";
+                std::cerr << tr("Failed to set stdout to binary mode\n");
                 return 1;
             }
 #endif
@@ -637,12 +640,12 @@ int run_spratpack(int argc, char** argv) {
             std::string filename;
             std::string pattern_error;
             if (!format_index_pattern(output_pattern, static_cast<int>(atlas_idx), filename, pattern_error)) {
-                std::cerr << "Invalid output pattern: " << pattern_error << "\n";
+                std::cerr << tr("Invalid output pattern: ") << pattern_error << "\n";
                 return 1;
             }
             std::ofstream out_file(filename, std::ios::binary);
             if (!out_file) {
-                std::cerr << "Error: Failed to open output file: " << filename << "\n";
+                std::cerr << tr("Error: Failed to open output file: ") << filename << "\n";
                 return 1;
             }
             out_file.write(reinterpret_cast<const char*>(png_data.data()), static_cast<std::streamsize>(png_data.size()));
