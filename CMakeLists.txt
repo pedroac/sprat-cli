@@ -116,6 +116,7 @@ ensure_stb_header(stb_image_write.h)
 add_library(spratcore STATIC
     src/core/cli_parse.cpp
     src/core/layout_parser.cpp
+    src/core/output_pattern.cpp
 )
 
 # Binaries

@@ -31,6 +31,7 @@ namespace fs = std::filesystem;
 #include <vector>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
+#include "core/output_pattern.h"
 
 namespace {
 struct Transform {
@@ -101,6 +102,7 @@ using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::parse_pair;
 using sprat::core::parse_quoted;
+using sprat::core::validate_output_pattern;
 
 std::string trim_copy(const std::string& s) {
     size_t start = 0;
@@ -1363,15 +1365,9 @@ int run_spratconvert(int argc, char** argv) {
         }
     }
     if (!output_pattern_arg.empty()) {
-        std::string sample_path;
         std::string pattern_error;
-        size_t placeholder_count = 0;
-        if (!format_index_pattern(output_pattern_arg, 0, sample_path, pattern_error, &placeholder_count)) {
+        if (!validate_output_pattern(output_pattern_arg, layout.atlases.size(), true, pattern_error)) {
             std::cerr << "Invalid output pattern: " << pattern_error << "\n";
-            return 1;
-        }
-        if (layout.atlases.size() > 1 && placeholder_count == 0) {
-            std::cerr << "Invalid output pattern: must include %d when layout has multiple atlases\n";
             return 1;
         }
     }

@@ -1,4 +1,5 @@
 #include "../src/core/cli_parse.h"
+#include "../src/core/output_pattern.h"
 #include <iostream>
 #include <string>
 #include <cassert>
@@ -100,6 +101,45 @@ void test_to_quoted() {
     std::cout << "test_to_quoted passed" << std::endl;
 }
 
+void test_format_index_pattern() {
+    std::string out;
+    std::string error;
+    size_t placeholders = 0;
+
+    assert(sprat::core::format_index_pattern("atlas_%d.png", 12, out, error, &placeholders));
+    assert(out == "atlas_12.png");
+    assert(placeholders == 1);
+
+    assert(sprat::core::format_index_pattern("atlas_%%_%d.png", 3, out, error, &placeholders));
+    assert(out == "atlas_%_3.png");
+    assert(placeholders == 1);
+
+    assert(!sprat::core::format_index_pattern("atlas_%s.png", 0, out, error, &placeholders));
+    assert(error.find("unsupported placeholder") != std::string::npos);
+
+    assert(!sprat::core::format_index_pattern("atlas_%", 0, out, error, &placeholders));
+    assert(error.find("trailing '%'") != std::string::npos);
+    std::cout << "test_format_index_pattern passed" << std::endl;
+}
+
+void test_validate_output_pattern() {
+    std::string error;
+    size_t placeholders = 0;
+
+    assert(sprat::core::validate_output_pattern("atlas_%d.png", 2, true, error, &placeholders));
+    assert(placeholders == 1);
+
+    assert(!sprat::core::validate_output_pattern("atlas.png", 2, true, error, &placeholders));
+    assert(error.find("must include %d") != std::string::npos);
+
+    assert(sprat::core::validate_output_pattern("atlas.png", 1, true, error, &placeholders));
+    assert(placeholders == 0);
+
+    assert(sprat::core::validate_output_pattern("atlas.png", 2, false, error, &placeholders));
+    assert(placeholders == 0);
+    std::cout << "test_validate_output_pattern passed" << std::endl;
+}
+
 int main() {
     test_parse_positive_int();
     test_parse_non_negative_int();
@@ -108,6 +148,8 @@ int main() {
     test_parse_pair();
     test_parse_quoted();
     test_to_quoted();
+    test_format_index_pattern();
+    test_validate_output_pattern();
     std::cout << "All core tests passed!" << std::endl;
     return 0;
 }

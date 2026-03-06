@@ -133,50 +133,6 @@ bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::st
     return false;
 }
 
-bool format_index_pattern(std::string_view pattern,
-                          int index,
-                          std::string& out,
-                          std::string& error,
-                          size_t* placeholder_count) {
-    out.clear();
-    error.clear();
-    size_t replaced = 0;
-    out.reserve(pattern.size() + 8);
-
-    for (size_t i = 0; i < pattern.size(); ++i) {
-        const char c = pattern[i];
-        if (c != '%') {
-            out.push_back(c);
-            continue;
-        }
-        if (i + 1 >= pattern.size()) {
-            error = "trailing '%' in output pattern";
-            return false;
-        }
-
-        const char spec = pattern[++i];
-        if (spec == '%') {
-            out.push_back('%');
-            continue;
-        }
-        if (spec == 'd') {
-            out += std::to_string(index);
-            ++replaced;
-            continue;
-        }
-
-        error = "unsupported placeholder '%";
-        error.push_back(spec);
-        error += "' (only %d and %% are supported)";
-        return false;
-    }
-
-    if (placeholder_count != nullptr) {
-        *placeholder_count = replaced;
-    }
-    return true;
-}
-
 std::string to_quoted(const std::string& s) {
     std::string result = "\"";
     for (char c : s) {

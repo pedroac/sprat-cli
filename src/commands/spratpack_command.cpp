@@ -38,6 +38,7 @@
 #include <archive_entry.h>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
+#include "core/output_pattern.h"
 
 #ifdef SPRAT_HAS_ZOPFLI
 #include <zopflipng/zopflipng_lib.h>
@@ -58,6 +59,7 @@ using sprat::core::format_index_pattern;
 using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::to_quoted;
+using sprat::core::validate_output_pattern;
 
 bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
     if (a == 0 || b <= std::numeric_limits<size_t>::max() / a) {
@@ -356,16 +358,13 @@ int run_spratpack(int argc, char** argv) {
         std::cerr << "Error: requested atlas index " << requested_atlas_index << " out of range (total: " << layout.atlases.size() << ")\n";
         return 1;
     }
-    size_t output_pattern_placeholders = 0;
     if (!output_pattern.empty()) {
-        std::string sample_path;
         std::string pattern_error;
-        if (!format_index_pattern(output_pattern, 0, sample_path, pattern_error, &output_pattern_placeholders)) {
+        if (!validate_output_pattern(output_pattern,
+                                     layout.atlases.size(),
+                                     requested_atlas_index < 0,
+                                     pattern_error)) {
             std::cerr << "Invalid output pattern: " << pattern_error << "\n";
-            return 1;
-        }
-        if (requested_atlas_index < 0 && layout.atlases.size() > 1 && output_pattern_placeholders == 0) {
-            std::cerr << "Invalid output pattern: must include %d when layout has multiple atlases\n";
             return 1;
         }
     }
