@@ -1356,7 +1356,7 @@ std::string to_hex_size_t(size_t value) {
 void print_usage() {
     std::cout << tr("Usage: spratlayout <folder> [OPTIONS]\n")
               << tr("\n")
-              << tr("Scan an image folder and write a text layout to standard output.\n")
+              << tr("Scan an image folder/list/tar and write a text layout to standard output.\n")
               << tr("Rotated sprites are emitted with a trailing 'rotated' token.\n")
               << tr("\n")
               << tr("Options:\n")
@@ -1381,7 +1381,8 @@ void print_usage() {
               << tr("  --sort name|none           Order of sprites in layout (default: name for folders)\n")
               << tr("  --threads N                Number of worker threads\n")
               << tr("  --debug                    Enable detailed error reporting and debug visualization\n")
-              << tr("  --help, -h                 Show this help message\n");
+              << tr("  --help, -h                 Show this help message\n")
+              << tr("  --version, -v              Show version\n");
 }
 
 bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds) {

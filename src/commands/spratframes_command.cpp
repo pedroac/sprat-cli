@@ -744,7 +744,7 @@ void print_usage() {
     std::cout << tr("Usage: spratframes [OPTIONS] <input_image>\n\n")
         << tr("Detect sprite frame rectangles in spritesheets.\n\n")
         << tr("Output format:\n")
-        << tr("  SpratFrames format: path f, then sprite x,y w,h\n\n")
+        << tr("  SpratFrames format: path <input>, then sprite x,y w,h\n\n")
         << tr("Options:\n")
         << tr("  --has-rectangles          Spritesheet has rectangles surrounding sprites\n")
         << tr("  --rectangle-color COLOR   Color of rectangle borders (default: ")
@@ -754,7 +754,8 @@ void print_usage() {
         << tr("  --min-size N             Minimum sprite size in pixels (default: ") << k_default_min_sprite_size << ")\n"
         << tr("  --max-sprites N          Maximum number of sprites to extract (default: ") << k_default_max_sprites << ")\n"
         << tr("  --threads N              Number of threads to use (default: ") << k_default_threads << tr(" = auto)\n")
-        << tr("  --help, -h               Show this help message\n\n")
+        << tr("  --help, -h               Show this help message\n")
+        << tr("  --version, -v            Show version\n\n")
         << tr("Examples:\n")
         << tr("  spratframes sheet.png\n")
         << tr("  spratframes --has-rectangles --rectangle-color=\"#FF00FF\" sheet.png\n")

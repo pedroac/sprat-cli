@@ -4,7 +4,7 @@
 
 ![sprat-cli screenshot](README-assets/screenshot.png)
 
-`sprat-cli` is a modular toolkit for generating sprite sheets (texture atlases) from the command line. Unlike monolithic GUI tools, it splits the packing process into discrete, pipeable commands. This makes it perfect for:
+`sprat-cli` is a modular toolkit for generating sprite sheets (texture atlases) from the command line. Unlike monolithic GUI tools, it splits the packing process into discrete, pipeable commands (`spratlayout`, `spratpack`, `spratconvert`, `spratframes`, `spratunpack`). This makes it perfect for:
 
 *   **CI/CD Pipelines**: Automate asset generation in your build process.
 *   **Shell Scripting**: Integrate naturally with `|`, `>`, and standard text tools.
@@ -85,6 +85,16 @@ Manual page:
 
 ```sh
 man ./man/sprat-cli.1
+```
+
+Per-command help:
+
+```sh
+./build/spratlayout --help
+./build/spratpack --help
+./build/spratconvert --help
+./build/spratframes --help
+./build/spratunpack --help
 ```
 
 ## Installation
@@ -366,6 +376,12 @@ Use a built-in transform:
 ./build/spratconvert --transform json < layout.txt > layout.json
 ```
 
+If your template uses `{{atlas_path}}`/`{{atlas_index}}`, provide `--output` so paths are deterministic:
+
+```sh
+./build/spratconvert --transform json --output atlas_%d.png < layout.txt > layout.json
+```
+
 ### Automatic Animations
 Automatically group sprites into animations based on their filenames (e.g., `hero_walk_01.png`, `hero_walk_02.png` -> animation `hero_walk`).
 ```sh
@@ -515,7 +531,9 @@ Column meanings for the `sprite` line in trim mode:
 - `<right>,<bottom>`: pixels trimmed from the right and bottom of the original image.
 - `rotated` (optional trailing token): sprite was packed rotated 90 degrees clockwise in the atlas.
 
-`spratpack` reads that layout from stdin and writes the final PNG spritesheet to stdout:
+`spratpack` reads that layout from stdin and writes the final atlas output:
+- Single atlas: PNG to stdout.
+- Multipack layout: TAR stream (containing atlas PNG files) to stdout.
 
 ```sh
 ./build/spratpack < layout.txt > spritesheet.png
@@ -564,7 +582,7 @@ It can read atlas PNG from a file path, `-`, or stdin (when no atlas path is pro
 ```sh
 ./build/spratframes atlas.png | ./build/spratunpack --output ./extracted
 ```
-When piped from `spratframes`, `spratunpack` automatically detects the atlas path from the stream.
+When piped from `spratframes`, `spratunpack` can automatically detect the atlas path from the `path ...` line in the stream.
 
 **Manual usage:**
 ```sh

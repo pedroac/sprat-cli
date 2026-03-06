@@ -260,8 +260,7 @@ void print_usage() {
     std::cout << tr("Usage: spratpack [OPTIONS]\n")
               << tr("\n")
               << tr("Read layout text from stdin and write one or more PNG atlases.\n")
-              << tr("If multiple atlases are generated and writing to stdout, output is a TAR.\n")
-              << tr("Multipack layouts also trigger TAR output by default when writing to stdout.\n")
+              << tr("Writes PNG to stdout for single-atlas input; TAR to stdout for multipack input.\n")
               << tr("\n")
               << tr("Options:\n")
               << tr("  -o, --output PATTERN   Output filename pattern (e.g. atlas_%d.png)\n")
@@ -274,7 +273,8 @@ void print_usage() {
               << tr("  --debug                Enable detailed error reporting and debug visualization\n")
               << tr("  --protect              Protect output with basic obfuscation\n")
               << tr("  --zopfli               Optimize output PNG using Zopfli (very slow)\n")
-              << tr("  --help, -h             Show this help message\n");
+              << tr("  --help, -h             Show this help message\n")
+              << tr("  --version, -v          Show version\n");
 }
 
 int run_spratpack(int argc, char** argv) {

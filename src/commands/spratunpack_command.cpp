@@ -711,7 +711,8 @@ void print_usage() {
               << tr("  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n")
               << tr("  -j, --threads N            Number of threads to use (default: auto)\n")
               << tr("  --debug                    Enable detailed error reporting\n")
-              << tr("  -h, --help                 Show this help message\n");
+              << tr("  -h, --help                 Show this help message\n")
+              << tr("  -v, --version              Show version\n");
 }
 
 } // namespace

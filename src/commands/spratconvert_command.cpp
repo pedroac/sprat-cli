@@ -1285,12 +1285,13 @@ void print_usage() {
               << tr("\n")
               << tr("Options:\n")
               << tr("  --transform NAME|PATH      Transform name or path (default: json)\n")
-              << tr("  --output, -o PATTERN       Atlas filename pattern (e.g. atlas_%d.png)\n")
+              << tr("  --output, -o PATTERN       Atlas path pattern for atlas_* placeholders\n")
               << tr("  --list-transforms          Print available transforms and exit\n")
               << tr("  --markers PATH             Load external markers file\n")
               << tr("  --animations PATH          Load external animations file\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
-              << tr("  --help, -h                 Show this help message\n");
+              << tr("  --help, -h                 Show this help message\n")
+              << tr("  --version, -v              Show version\n");
 }
 } // namespace
 
