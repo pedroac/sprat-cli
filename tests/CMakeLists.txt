@@ -55,6 +55,13 @@ add_test(
 )
 
 add_test(
+    NAME output_pattern
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/output_pattern_test.sh
+            $<TARGET_FILE:spratpack>
+            $<TARGET_FILE:spratconvert>
+)
+
+add_test(
     NAME unpack_error
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/unpack_error_test.sh
             $<TARGET_FILE:spratunpack>

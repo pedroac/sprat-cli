@@ -30,6 +30,7 @@ namespace fs = std::filesystem;
 #include <unordered_map>
 #include <vector>
 #include "core/layout_parser.h"
+#include "core/cli_parse.h"
 
 namespace {
 struct Transform {
@@ -95,6 +96,7 @@ struct AnimationItem {
 
 using Sprite = sprat::core::Sprite;
 using Layout = sprat::core::Layout;
+using sprat::core::format_index_pattern;
 using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::parse_pair;
@@ -1263,17 +1265,12 @@ std::string format_atlas_path(const std::string& pattern, int index) {
     if (pattern.empty()) {
         return "";
     }
-    char buf[1024];
-    int written = 0;
-#ifdef _WIN32
-    written = _snprintf(buf, sizeof(buf), pattern.c_str(), index);
-#else
-    written = snprintf(buf, sizeof(buf), pattern.c_str(), index);
-#endif
-    if (written < 0 || static_cast<size_t>(written) >= sizeof(buf)) {
+    std::string out;
+    std::string error;
+    if (!format_index_pattern(pattern, index, out, error)) {
         return "";
     }
-    return std::string(buf);
+    return out;
 }
 
 void print_usage() {
@@ -1363,6 +1360,19 @@ int run_spratconvert(int argc, char** argv) {
     if (output_pattern_arg.empty()) {
         if (layout.multipack || layout.atlases.size() > 1) {
             output_pattern_arg = "atlas_%d.png";
+        }
+    }
+    if (!output_pattern_arg.empty()) {
+        std::string sample_path;
+        std::string pattern_error;
+        size_t placeholder_count = 0;
+        if (!format_index_pattern(output_pattern_arg, 0, sample_path, pattern_error, &placeholder_count)) {
+            std::cerr << "Invalid output pattern: " << pattern_error << "\n";
+            return 1;
+        }
+        if (layout.atlases.size() > 1 && placeholder_count == 0) {
+            std::cerr << "Invalid output pattern: must include %d when layout has multiple atlases\n";
+            return 1;
         }
     }
 

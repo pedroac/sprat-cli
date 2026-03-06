@@ -54,6 +54,7 @@ constexpr int MAX_CHANNEL_VALUE = 255;
 
 using Sprite = sprat::core::Sprite;
 using Layout = sprat::core::Layout;
+using sprat::core::format_index_pattern;
 using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::to_quoted;
@@ -355,6 +356,19 @@ int run_spratpack(int argc, char** argv) {
         std::cerr << "Error: requested atlas index " << requested_atlas_index << " out of range (total: " << layout.atlases.size() << ")\n";
         return 1;
     }
+    size_t output_pattern_placeholders = 0;
+    if (!output_pattern.empty()) {
+        std::string sample_path;
+        std::string pattern_error;
+        if (!format_index_pattern(output_pattern, 0, sample_path, pattern_error, &output_pattern_placeholders)) {
+            std::cerr << "Invalid output pattern: " << pattern_error << "\n";
+            return 1;
+        }
+        if (requested_atlas_index < 0 && layout.atlases.size() > 1 && output_pattern_placeholders == 0) {
+            std::cerr << "Invalid output pattern: must include %d when layout has multiple atlases\n";
+            return 1;
+        }
+    }
 
     const bool output_to_stdout = output_pattern.empty();
     const bool use_tar = output_to_stdout && (layout.atlases.size() > 1 || layout.multipack) && requested_atlas_index < 0;
@@ -621,20 +635,15 @@ int run_spratpack(int argc, char** argv) {
 #endif
             std::cout.write(reinterpret_cast<const char*>(png_data.data()), static_cast<std::streamsize>(png_data.size()));
         } else {
-            char filename_buf[1024];
-            int written = 0;
-#ifdef _WIN32
-            written = _snprintf(filename_buf, sizeof(filename_buf), output_pattern.c_str(), static_cast<int>(atlas_idx));
-#else
-            written = snprintf(filename_buf, sizeof(filename_buf), output_pattern.c_str(), static_cast<int>(atlas_idx));
-#endif
-            if (written < 0 || static_cast<size_t>(written) >= sizeof(filename_buf)) {
-                std::cerr << "Error: Output filename pattern resulted in a path too long or invalid\n";
+            std::string filename;
+            std::string pattern_error;
+            if (!format_index_pattern(output_pattern, static_cast<int>(atlas_idx), filename, pattern_error)) {
+                std::cerr << "Invalid output pattern: " << pattern_error << "\n";
                 return 1;
             }
-            std::ofstream out_file(filename_buf, std::ios::binary);
+            std::ofstream out_file(filename, std::ios::binary);
             if (!out_file) {
-                std::cerr << "Error: Failed to open output file: " << filename_buf << "\n";
+                std::cerr << "Error: Failed to open output file: " << filename << "\n";
                 return 1;
             }
             out_file.write(reinterpret_cast<const char*>(png_data.data()), static_cast<std::streamsize>(png_data.size()));
