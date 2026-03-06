@@ -6,21 +6,48 @@ extension=.json
 
 [header]
 {
-  "atlases": [{{atlases_json}}],
   "multipack": {{multipack}},
   "scale": {{scale}},
   "extrude": {{extrude}},
-  "sprites": [
+
 [/header]
+
+[atlases]
+[atlas_header]
+  "atlases": [
+
+[/atlas_header]
+
+[atlas]
+    {
+      "width": {{atlas_width}},
+      "height": {{atlas_height}},
+      "path": "{{atlas_path}}",
+      "sprites": [
+        {{sprites}}
+      ]
+    }
+[/atlas]
+
+[atlas_separator]
+,
+
+[/atlas_separator]
+
+[atlas_footer]
+
+  ]
+[/atlas_footer]
+[/atlases]
 
 [sprites]
   [sprite]
-    {"name": "{{name}}", "path": "{{path}}", "atlas_index": {{atlas_index}}, "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "pivot_x": {{pivot_x}}, "pivot_y": {{pivot_y}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": [{{sprite_markers_json}}], "rotation": {{rotation}}}
+{"name": "{{name}}", "path": "{{path}}", "atlas_index": {{atlas_index}}, "x": {{x}}, "y": {{y}}, "w": {{w}}, "h": {{h}}, "pivot_x": {{pivot_x}}, "pivot_y": {{pivot_y}}, "trim_left": {{trim_left}}, "trim_top": {{trim_top}}, "trim_right": {{trim_right}}, "trim_bottom": {{trim_bottom}}, "markers": [{{sprite_markers}}], "rotation": {{rotation}}}
   [/sprite]
 [/sprites]
 
 [sprite_marker]
-[if marker_type="point"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}}}[/if][if marker_type="circle"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}},"radius":{{marker_radius}}}[/if][if marker_type="rectangle"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}},"w":{{marker_w}},"h":{{marker_h}}}[/if][if marker_type="polygon"]{"name":"{{marker_name}}","type":"{{marker_type}}","vertices":{{marker_vertices_json}}}[/if]
+[if marker_type="point"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}}}[/if][if marker_type="circle"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}},"radius":{{marker_radius}}}[/if][if marker_type="rectangle"]{"name":"{{marker_name}}","type":"{{marker_type}}","x":{{marker_x}},"y":{{marker_y}},"w":{{marker_w}},"h":{{marker_h}}}[/if][if marker_type="polygon"]{"name":"{{marker_name}}","type":"{{marker_type}}","vertices":{{marker_vertices}}}[/if]
 [/sprite_marker]
 
 [sprite_markers_separator]
@@ -29,16 +56,20 @@ extension=.json
 
 [separator]
 ,
+
 [/separator]
 
+[if_markers]
+[/if_markers]
+
 [if_animations]
-  ],
+,
   "animations": [
 [/if_animations]
 
 [animations]
   [animation]
-    {"name": "{{animation_name}}", "fps": {{fps}}, "sprite_indexes": {{animation_sprite_indexes_json}}}
+    {"name": "{{animation_name}}", "fps": {{fps}}, "sprite_indexes": {{sprite_indexes}}}
   [/animation]
 [/animations]
 
@@ -51,7 +82,6 @@ extension=.json
 [/animations_footer]
 
 [if_no_animations]
-  ]
 [/if_no_animations]
 
 [footer]

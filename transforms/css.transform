@@ -20,12 +20,16 @@ extension=.css
 [sprites]
   [sprite]
 .sprite-{{index}} {
+  [atlas_path]
+  background-image: url('{{atlas_path}}');
+  [/atlas_path]
   background-position: -{{x}}px -{{y}}px;
   width: {{w}}px;
   height: {{h}}px;
   --sprite-rotation: {{rotation}}deg;
   /* source: {{path}} */
   /* name: {{name}} */
+  /* atlas_index: {{atlas_index}} */
   [rotated]
   transform: rotate(90deg);
   transform-origin: top left;
@@ -35,6 +39,7 @@ extension=.css
 [/sprites]
 
 [separator]
+
 [/separator]
 
 [footer]

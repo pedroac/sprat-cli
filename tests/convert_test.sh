@@ -47,17 +47,19 @@ for fmt in json csv xml css; do
 done
 
 "$convert_bin" --transform json < "$layout_file" > "$tmp_dir/out.json"
-grep -q '"atlases": \[{"width":64,"height":32}\]' "$tmp_dir/out.json"
+grep -q '"width": 64' "$tmp_dir/out.json"
+grep -q '"height": 32' "$tmp_dir/out.json"
 grep -q '"multipack": false' "$tmp_dir/out.json"
 grep -q '"extrude": 0' "$tmp_dir/out.json"
 grep -q '"path": "./frames/b.png"' "$tmp_dir/out.json"
 
 "$convert_bin" --transform csv < "$layout_file" > "$tmp_dir/out.csv"
-grep -q '^index,name,path,x,y,w,h,pivot_x,pivot_y,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json,rotation$' "$tmp_dir/out.csv"
-grep -q '^1,b,./frames/b.png,16,0,8,8,0,0,1,2,3,4,0,\[\],90$' "$tmp_dir/out.csv"
+grep -q '^index,name,path,atlas_index,atlas_path,x,y,w,h,pivot_x,pivot_y,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json,rotation$' "$tmp_dir/out.csv"
+grep -q '^1,b,./frames/b.png,0,,16,0,8,8,0,0,1,2,3,4,0,\[\],90$' "$tmp_dir/out.csv"
 
 "$convert_bin" --transform xml < "$layout_file" > "$tmp_dir/out.xml"
-grep -q '^<atlas width="64" height="32" multipack="false" scale="1" extrude="0">$' "$tmp_dir/out.xml"
+grep -q '<layout multipack="false" scale="1" extrude="0">$' "$tmp_dir/out.xml"
+grep -q '<atlas index="0" width="64" height="32" path="">' "$tmp_dir/out.xml"
 grep -q 'trim_left="1" trim_top="2" trim_right="3" trim_bottom="4"' "$tmp_dir/out.xml"
 
 "$convert_bin" --transform css < "$layout_file" > "$tmp_dir/out.css"
@@ -130,7 +132,7 @@ animation_count={{animation_count}}
 
 [sprites]
   [sprite]
-{{index}}|{{name}}|{{path}}|{{sprite_markers_count}}|{{sprite_markers_json}}
+{{index}}|{{name}}|{{path}}|{{sprite_markers_count}}|{{markers_json}}
   [/sprite]
 [/sprites]
 EXTRAS
@@ -210,7 +212,7 @@ A_BEGIN
 
 [animations]
   [animation]
-A{{animation_index}}={{animation_name}}:[{{animation_sprite_indexes}}]
+A{{animation_index}}={{animation_name}}:[{{sprite_indexes}}]
 
   [/animation]
 [/animations]
@@ -283,10 +285,10 @@ if grep -q '"index":' "$tmp_dir/out.builtin.json"; then
   echo "builtin json transform should not include index fields in sprite/animation objects" >&2
   exit 1
 fi
-sprites_line="$(grep -n '"sprites": \[' "$tmp_dir/out.builtin.json" | head -n1 | cut -d: -f1)"
+atlases_line="$(grep -n '"atlases": \[' "$tmp_dir/out.builtin.json" | head -n1 | cut -d: -f1)"
 animations_line="$(grep -n '"animations": \[' "$tmp_dir/out.builtin.json" | head -n1 | cut -d: -f1)"
-if [ "$animations_line" -le "$sprites_line" ]; then
-  echo "animations section must be outside and after sprites in json transform" >&2
+if [ "$animations_line" -le "$atlases_line" ]; then
+  echo "animations section must be after atlases in json transform" >&2
   exit 1
 fi
 

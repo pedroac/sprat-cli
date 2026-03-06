@@ -5,13 +5,13 @@ extension=.csv
 [/meta]
 
 [header]
-index,name,path,x,y,w,h,pivot_x,pivot_y,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json,rotation
+index,name,path,atlas_index,atlas_path,x,y,w,h,pivot_x,pivot_y,trim_left,trim_top,trim_right,trim_bottom,marker_count,markers_json,rotation
 
 [/header]
 
 [sprites]
   [sprite]
-{{index}},{{name}},{{path}},{{x}},{{y}},{{w}},{{h}},{{pivot_x}},{{pivot_y}},{{trim_left}},{{trim_top}},{{trim_right}},{{trim_bottom}},{{sprite_markers_count}},{{sprite_markers_json}},{{rotation}}
+{{index}},{{name}},{{path}},{{atlas_index}},{{atlas_path}},{{x}},{{y}},{{w}},{{h}},{{pivot_x}},{{pivot_y}},{{trim_left}},{{trim_top}},{{trim_right}},{{trim_bottom}},{{sprite_markers_count}},{{markers_json}},{{rotation}}
 
   [/sprite]
 
@@ -27,7 +27,7 @@ index,name,path,x,y,w,h,pivot_x,pivot_y,trim_left,trim_top,trim_right,trim_botto
 
 [markers]
   [marker]
-marker,{{marker_index}},{{marker_name}},{{marker_type}},{{marker_x}},{{marker_y}},{{marker_radius}},{{marker_w}},{{marker_h}},{{marker_vertices_json}},{{marker_sprite_index}},{{marker_sprite_name}},{{marker_sprite_path}}
+marker,{{marker_index}},{{marker_name}},{{marker_type}},{{marker_x}},{{marker_y}},{{marker_radius}},{{marker_w}},{{marker_h}},{{marker_vertices}},{{marker_sprite_index}},{{marker_sprite_name}},{{marker_sprite_path}}
 
   [/marker]
 
@@ -43,7 +43,7 @@ marker,{{marker_index}},{{marker_name}},{{marker_type}},{{marker_x}},{{marker_y}
 
 [animations]
   [animation]
-animation,{{animation_index}},{{animation_name}},{{fps}},{{animation_sprite_indexes}}
+animation,{{animation_index}},{{animation_name}},{{fps}},{{sprite_indexes}}
 
   [/animation]
 
