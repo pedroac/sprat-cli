@@ -3902,13 +3902,10 @@ int run_spratlayout(int argc, char** argv) {
             }
         }
 
-        if (!best_gpu_candidate.valid && !best_space_candidate.valid) {
-            std::cerr << "Error: failed to compute compact layout\n";
-            return 1;
-        }
-
             // Guided compact search (no brute-force width scan):
             // start from fast/seed anchors, then probe a small nearby window.
+            // Keep searching even when the seed width fails, because other widths
+            // can still produce a valid compact layout under tight atlas limits.
             int fast_target_width = max_width;
             if (total_area > 0) {
                 long double area_root = std::sqrt(static_cast<long double>(total_area));

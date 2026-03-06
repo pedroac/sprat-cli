@@ -93,3 +93,13 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/layout_limits_and_multipack_optimize_test
 else()
     message(WARNING "Skipping layout_limits_and_multipack_optimize test: script not found")
 endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/compact_seed_search_regression_test.sh")
+    add_test(
+        NAME compact_seed_search_regression
+        COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/compact_seed_search_regression_test.sh
+                $<TARGET_FILE:spratlayout>
+    )
+else()
+    message(WARNING "Skipping compact_seed_search_regression test: script not found")
+endif()
