@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies (Linux)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-dev gettext
+          sudo apt-get install -y libarchive-dev gettext python3-pillow imagemagick
 
       - name: Configure
         run: |
@@ -52,7 +52,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-dev gettext
+          sudo apt-get install -y libarchive-dev gettext python3-pillow imagemagick
 
       - name: Cache vcpkg (Windows)
         if: runner.os == 'Windows'
@@ -69,6 +69,10 @@ jobs:
         if: runner.os == 'Windows'
         uses: lukka/run-vcpkg@v11
 
+      - name: Install Python dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: pip install Pillow
+
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -76,7 +80,10 @@ jobs:
           brew list pkg-config > /dev/null 2>&1 || brew install pkg-config
           brew list libarchive > /dev/null 2>&1 || brew install libarchive
           brew list gettext > /dev/null 2>&1 || brew install gettext
+          brew list imagemagick > /dev/null 2>&1 || brew install imagemagick
+          pip3 install Pillow
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$(brew --prefix gettext)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix libarchive):$(brew --prefix gettext)" >> "$GITHUB_ENV"
 
       - name: Configure
         shell: bash
