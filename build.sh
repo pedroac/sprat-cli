@@ -4,7 +4,7 @@ set -euo pipefail
 
 echo "Updating VERSION..."
 
-TAG=$(git ls-remote --tags --sort="v:refname" https://github.com/pedroac/sprat-cli.git 2>/dev/null | tail -n 1 | awk -F/ '{print $3}' | head -n 1)
+TAG=$(git ls-remote --tags --sort="v:refname" https://github.com/pedroac/sprat-cli.git 2>/dev/null | awk '{print $2}' | sed 's|refs/tags/||' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | tail -n 1)
 
 if [ -z "$TAG" ]; then
     TAG=$(git rev-parse --short HEAD)

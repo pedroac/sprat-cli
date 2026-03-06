@@ -842,8 +842,10 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
     bool saw_animation_item = false;
 
     auto append_line = [&](std::string& target, const std::string& value) {
+        if (!target.empty()) {
+            target.push_back('\n');
+        }
         target.append(value);
-        target.push_back('\n');
     };
 
     auto is_known_section = [](const std::string& s) {
