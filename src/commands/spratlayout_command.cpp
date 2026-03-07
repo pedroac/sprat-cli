@@ -2885,6 +2885,14 @@ bool pack_atlases(
 }
 
 int run_spratlayout(int argc, char** argv) {
+#ifdef _WIN32
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1) {
+        std::cerr << tr("Failed to set stdin to binary mode\n");
+    }
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        std::cerr << tr("Failed to set stdout to binary mode\n");
+    }
+#endif
     bool debug = env_flag_enabled("SPRAT_DEBUG");
     fs::path folder;
     std::string requested_profile_name;
