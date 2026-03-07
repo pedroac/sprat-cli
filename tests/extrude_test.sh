@@ -63,7 +63,7 @@ if command -v python3 >/dev/null 2>&1; then
     python3 - <<EOF
 import sys
 from PIL import Image
-img = Image.open("$sheet_file").convert("RGBA")
+img = Image.open("$(fix_path "$sheet_file")").convert("RGBA")
 width, height = img.size
 if width != 4 or height != 4:
     print(f"Invalid atlas size: {width}x{height}")
@@ -86,7 +86,7 @@ if command -v python3 >/dev/null 2>&1; then
     python3 - <<EOF
 import sys
 from PIL import Image
-img = Image.open("$tmp_dir/no_extrude.png").convert("RGBA")
+img = Image.open("$(fix_path "$tmp_dir/no_extrude.png")").convert("RGBA")
 # Pixel 0,0 should be transparent (0,0,0,0)
 p = img.getpixel((0, 0))
 if p[3] != 0:
@@ -97,7 +97,7 @@ EOF
 fi
 
 # Test Rotated Extrusion
-python3 -c "from PIL import Image; img = Image.new('RGBA', (1, 2)); img.putpixel((0,0), (255,0,0,255)); img.putpixel((0,1), (0,255,0,255)); img.save('$frames_dir/rg.png')"
+python3 -c "from PIL import Image; img = Image.new('RGBA', (1, 2)); img.putpixel((0,0), (255,0,0,255)); img.putpixel((0,1), (0,255,0,255)); img.save('$(fix_path "$frames_dir/rg.png")')"
 
 cat > "$layout_file" <<EOF
 atlas 4,3
@@ -112,7 +112,7 @@ if command -v python3 >/dev/null 2>&1; then
     python3 - <<EOF
 import sys
 from PIL import Image
-img = Image.open("$tmp_dir/rotated_extrude.png").convert("RGBA")
+img = Image.open("$(fix_path "$tmp_dir/rotated_extrude.png")").convert("RGBA")
 # Original 1x2 rotated 90 deg clockwise:
 # col=0, row=0 -> sample_x=0+0=0, sample_y=0+(2-1-0)=1 -> Green
 # col=1, row=0 -> sample_x=0+0=0, sample_y=0+(2-1-1)=0 -> Red

@@ -81,7 +81,7 @@ jobs:
           brew list libarchive > /dev/null 2>&1 || brew install libarchive
           brew list gettext > /dev/null 2>&1 || brew install gettext
           brew list imagemagick > /dev/null 2>&1 || brew install imagemagick
-          pip3 install Pillow
+          pip3 install Pillow --break-system-packages
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$(brew --prefix gettext)/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$(brew --prefix libarchive):$(brew --prefix gettext)" >> "$GITHUB_ENV"
 
