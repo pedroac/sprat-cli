@@ -216,7 +216,9 @@ jobs:
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
           name: Release ${{ steps.release_tag.outputs.tag }}
-          target_commitish: ${{ github.sha }}
+          # Do not specify target_commitish if the release already exists to avoid "immutable" error
+          # Or ensure we are using the existing tag's commit
+          # Removing it is usually safer for existing tags
           generate_release_notes: true
           files: |
             dist/*.tar.gz
