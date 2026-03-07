@@ -800,11 +800,9 @@ int run_spratunpack(int argc, char** argv) {
         config.threads = std::max(1U, std::thread::hardware_concurrency());
     }
 
-    // Initialize binary mode for stdout if needed
+    // Initialize binary mode for stdin/stdout if needed
 #ifdef _WIN32
-    if (config.input_from_stdin) {
-        _setmode(_fileno(stdin), _O_BINARY);
-    }
+    _setmode(_fileno(stdin), _O_BINARY);
     if (config.stdout_mode) {
         _setmode(_fileno(stdout), _O_BINARY);
     }
