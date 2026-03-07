@@ -96,7 +96,10 @@ jobs:
           )
           if [ "${{ runner.os }}" == "Windows" ]; then
             VCPKG_TOOLCHAIN="${VCPKG_ROOT//\\//}/scripts/buildsystems/vcpkg.cmake"
-            CMAKE_OPTIONS+=("-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN")
+            CMAKE_OPTIONS+=(
+              "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_TOOLCHAIN"
+              "-DX_VCPKG_APPLOCAL_DEPS=ON"
+            )
           else
             CMAKE_OPTIONS+=("-DSPRAT_REQUIRE_GETTEXT=ON")
           fi
@@ -171,13 +174,12 @@ jobs:
         run: |
           $outDir = "dist/sprat-cli-windows-x64"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          Copy-Item -Path build/Release/spratlayout.exe -Destination $outDir -Force
-          Copy-Item -Path build/Release/spratpack.exe -Destination $outDir -Force
-          Copy-Item -Path build/Release/spratconvert.exe -Destination $outDir -Force
-          Copy-Item -Path build/Release/spratframes.exe -Destination $outDir -Force
-          Copy-Item -Path build/Release/spratunpack.exe -Destination $outDir -Force
+          Copy-Item -Path build/Release/*.exe -Destination $outDir -Force
+          Copy-Item -Path build/Release/*.dll -Destination $outDir -Force -ErrorAction SilentlyContinue
           Copy-Item -Path spratprofiles.cfg -Destination $outDir -Force
           Copy-Item -Path transforms -Destination $outDir -Recurse -Force
+          Copy-Item -Path LICENSE -Destination $outDir -Force
+          Copy-Item -Path README.md -Destination $outDir -Force
           Compress-Archive -Path "$outDir/*" -DestinationPath "dist/sprat-cli-windows-x64.zip" -Force
 
       - name: Upload packaged artifact
