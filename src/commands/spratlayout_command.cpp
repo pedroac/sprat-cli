@@ -835,6 +835,7 @@ enum class ContentType : std::uint8_t {
     ListFile,
     TarFile,
     CompressedTarFile,
+    ArchiveFile,
     Unknown
 };
 
@@ -858,6 +859,10 @@ ContentType detect_content_type_from_path(const fs::path& path) {
         return ContentType::TarFile;
     }
     
+    if (ext == ".zip" || ext == ".7z" || ext == ".rar") {
+        return ContentType::ArchiveFile;
+    }
+    
     std::string filename = path.filename().string();
     std::ranges::transform(filename, filename.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -877,7 +882,8 @@ ContentType detect_content_type_from_path(const fs::path& path) {
 }
 
 bool is_tar_file(const fs::path& path) {
-    return detect_content_type_from_path(path) == ContentType::TarFile;
+    ContentType type = detect_content_type_from_path(path);
+    return type == ContentType::TarFile || type == ContentType::ArchiveFile;
 }
 
 bool is_compressed_tar_file(const fs::path& path) {
@@ -896,7 +902,7 @@ bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
     archive_read_support_filter_all(a);
     
     if (archive_read_open_filename(a, tar_path.string().c_str(), k_tar_read_buffer_size) != ARCHIVE_OK) {
-        std::cerr << tr("Error: Failed to open tar file: ") << archive_error_string(a) << '\n';
+        std::cerr << tr("Error: Failed to open archive file: ") << archive_error_string(a) << '\n';
         archive_read_free(a);
         return false;
     }
@@ -994,7 +1000,7 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
     
     // Open from stdin
     if (archive_read_open_fd(a, STDIN_FILENO, k_tar_read_buffer_size) != ARCHIVE_OK) {
-        std::cerr << tr("Error: Failed to open stdin for tar extraction: ") << archive_error_string(a) << '\n';
+        std::cerr << tr("Error: Failed to open stdin for archive extraction: ") << archive_error_string(a) << '\n';
         archive_read_free(a);
         return false;
     }
@@ -1106,15 +1112,15 @@ bool detect_and_extract_tar_content(const fs::path& input_path, InputContext& ou
         std::error_code ec;
         fs::create_directories(temp_dir, ec);
         if (ec) {
-            std::cerr << tr("Error: Failed to create temporary directory for tar extraction\n");
+            std::cerr << tr("Error: Failed to create temporary directory for archive extraction\n");
             return false;
         }
         
         out_context.temp_dirs_to_cleanup.push_back(temp_dir);
         
-        // Extract the tar file
+        // Extract the archive file
         if (!extract_tar_file(input_path, temp_dir)) {
-            std::cerr << tr("Error: Failed to extract tar file: ") << to_quoted(input_path) << "\n";
+            std::cerr << tr("Error: Failed to extract archive file: ") << to_quoted(input_path) << "\n";
             // Cleanup on error
             for (const auto& dir : out_context.temp_dirs_to_cleanup) {
                 fs::remove_all(dir, ec);
@@ -1152,7 +1158,7 @@ bool load_content_from_stdin(InputContext& out_context) {
     
     // Extract from stdin
     if (!extract_tar_from_stdin(temp_dir)) {
-        std::cerr << tr("Error: Failed to extract tar from stdin\n");
+        std::cerr << tr("Error: Failed to extract archive from stdin\n");
         // Cleanup on error
         for (const auto& dir : out_context.temp_dirs_to_cleanup) {
             fs::remove_all(dir, ec);
