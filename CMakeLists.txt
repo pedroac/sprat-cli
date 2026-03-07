@@ -13,8 +13,13 @@ endif()
 
 if(WIN32)
     add_definitions(-DNOMINMAX)
+    option(SPRAT_STATIC "Prefer static linking for dependencies on Windows" OFF)
     if(MINGW)
         add_link_options(-static -static-libgcc -static-libstdc++)
+    endif()
+    if(SPRAT_STATIC)
+        # Prefer .lib/.a over .dll/.dll.a
+        set(CMAKE_FIND_LIBRARY_SUFFIXES .lib .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
     endif()
 endif()
 
@@ -168,10 +173,14 @@ target_compile_definitions(spratcore PUBLIC SPRAT_LOCALE_DIR="${CMAKE_INSTALL_FU
 # For Windows cross-compilation, PkgConfig often leaks host paths. 
 # We prefer find_package or explicit paths.
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    find_package(LibArchive)
+    find_package(LibArchive QUIET)
     if(LibArchive_FOUND)
         set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
-        set(LIBARCHIVE_INCLUDE_DIRS "")
+        if(NOT LIBARCHIVE_INCLUDE_DIRS)
+            find_path(LIBARCHIVE_INCLUDE_DIR NAMES archive.h)
+        else()
+            set(LIBARCHIVE_INCLUDE_DIR ${LIBARCHIVE_INCLUDE_DIRS})
+        endif()
     else()
         # Fallback for manual identification if find_package fails
         find_library(LIBARCHIVE_LIBRARY NAMES archive libarchive)
@@ -182,6 +191,14 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
         else()
             message(FATAL_ERROR "LibArchive not found. Please provide -DLibArchive_LIBRARY and -DLibArchive_INCLUDE_DIR")
         endif()
+    endif()
+    
+    # Attempt to locate libarchive DLL for copying
+    if(NOT SPRAT_STATIC AND LIBARCHIVE_INCLUDE_DIR)
+        get_filename_component(LIBARCHIVE_ROOT "${LIBARCHIVE_INCLUDE_DIR}/.." ABSOLUTE)
+        find_file(LIBARCHIVE_DLL NAMES archive.dll libarchive.dll
+                  HINTS "${LIBARCHIVE_ROOT}/bin" "${LIBARCHIVE_ROOT}" "${LIBARCHIVE_INCLUDE_DIR}"
+                  DOC "Path to libarchive DLL")
     endif()
 else()
     find_package(PkgConfig REQUIRED)
@@ -199,6 +216,14 @@ if(NOT ZOPFLIPNG_FOUND)
         set(ZOPFLIPNG_LIBRARIES ${ZOPFLIPNG_LIBRARY})
         set(ZOPFLIPNG_INCLUDE_DIRS ${ZOPFLIPNG_INCLUDE_DIR})
         set(ZOPFLIPNG_FOUND TRUE)
+        
+        # Attempt to locate zopflipng DLL for copying
+        if(WIN32 AND NOT SPRAT_STATIC)
+            get_filename_component(ZOPFLIPNG_ROOT "${ZOPFLIPNG_INCLUDE_DIR}/.." ABSOLUTE)
+            find_file(ZOPFLIPNG_DLL NAMES zopflipng.dll libzopflipng.dll
+                      HINTS "${ZOPFLIPNG_ROOT}/bin" "${ZOPFLIPNG_ROOT}" "${ZOPFLIPNG_INCLUDE_DIR}"
+                      DOC "Path to zopflipng DLL")
+        endif()
     endif()
 endif()
 
@@ -268,6 +293,31 @@ foreach(target spratlayout spratpack spratconvert spratframes spratunpack)
             $<TARGET_FILE_DIR:${target}>/transforms
         COMMENT "Copying transforms/ to $<TARGET_FILE_DIR:${target}>"
         VERBATIM)
+
+    if(WIN32)
+        if(SPRAT_STATIC)
+            if(target MATCHES "spratlayout|spratpack|spratunpack")
+                target_compile_definitions(${target} PRIVATE LIBARCHIVE_STATIC)
+            endif()
+        else()
+            if(LIBARCHIVE_DLL AND (target MATCHES "spratlayout|spratpack|spratunpack"))
+                add_custom_command(TARGET ${target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${LIBARCHIVE_DLL}"
+                        $<TARGET_FILE_DIR:${target}>/
+                    COMMENT "Copying libarchive DLL to $<TARGET_FILE_DIR:${target}>"
+                    VERBATIM)
+            endif()
+            if(ZOPFLIPNG_DLL AND (target STREQUAL "spratpack"))
+                add_custom_command(TARGET ${target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${ZOPFLIPNG_DLL}"
+                        $<TARGET_FILE_DIR:${target}>/
+                    COMMENT "Copying zopflipng DLL to $<TARGET_FILE_DIR:${target}>"
+                    VERBATIM)
+            endif()
+        endif()
+    endif()
 endforeach()
 
 install(TARGETS spratlayout spratpack spratconvert spratframes spratunpack
