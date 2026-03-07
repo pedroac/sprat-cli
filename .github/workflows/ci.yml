@@ -207,7 +207,7 @@ jobs:
 
       - name: Create release tag
         id: release_tag
-        run: echo "tag=v$(cat VERSION.txt)-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
