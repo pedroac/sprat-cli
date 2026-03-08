@@ -259,9 +259,16 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             s.atlas_index = static_cast<int>(parsed.atlases.size()) - 1;
             parsed.sprites.push_back(s);
         } else if (line.starts_with("path") || line.starts_with("- marker") || line.starts_with("- frame") || line.starts_with("animation") || line.starts_with("fps")) {
-            // Skip markers and animations, they are handled by spratconvert
+            // These lines are valid in the combined raw layout format but not needed for basic layout parsing
             continue;
         } else {
+            // If the line is just whitespace, skip it
+            std::string trimmed = line;
+            trimmed.erase(0, trimmed.find_first_not_of(" \t\r\n"));
+            trimmed.erase(trimmed.find_last_not_of(" \t\r\n") + 1);
+            if (trimmed.empty()) {
+                continue;
+            }
             error = "Unknown line: " + line;
             return false;
         }
