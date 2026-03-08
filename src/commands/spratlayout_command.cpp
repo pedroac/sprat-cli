@@ -3132,14 +3132,7 @@ int run_spratlayout(int argc, char** argv) {
     }
 
     fs::path cwd = fs::current_path();
-    fs::path exec_path(argv[0]);
-    if (exec_path.is_relative() && !cwd.empty()) {
-        exec_path = cwd / exec_path;
-    }
-    fs::path exec_dir = exec_path.parent_path();
-    if (exec_dir.empty()) {
-        exec_dir = cwd;
-    }
+    fs::path exec_dir = sprat::core::get_executable_dir(argv[0]);
 
     std::string config_error;
     std::vector<fs::path> config_candidates;

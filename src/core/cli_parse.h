@@ -21,6 +21,8 @@ std::string to_quoted(const std::string& s);
 std::string to_quoted(const char* s);
 std::string to_quoted(const std::filesystem::path& p);
 
+std::filesystem::path get_executable_dir(const char* argv0);
+
 int compare_natural(std::string_view a, std::string_view b);
 
 } // namespace sprat::core

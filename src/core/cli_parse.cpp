@@ -153,6 +153,22 @@ std::string to_quoted(const std::filesystem::path& p) {
     return to_quoted(p.string());
 }
 
+std::filesystem::path get_executable_dir(const char* argv0) {
+    if (argv0 == nullptr || argv0[0] == '\0') {
+        return std::filesystem::current_path();
+    }
+    std::filesystem::path exec_path(argv0);
+    std::filesystem::path cwd = std::filesystem::current_path();
+    if (exec_path.is_relative() && !cwd.empty()) {
+        exec_path = cwd / exec_path;
+    }
+    std::filesystem::path exec_dir = exec_path.parent_path();
+    if (exec_dir.empty()) {
+        return cwd;
+    }
+    return exec_dir;
+}
+
 int compare_natural(std::string_view a, std::string_view b) {
     size_t i = 0;
     size_t j = 0;

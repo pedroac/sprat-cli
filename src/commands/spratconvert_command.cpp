@@ -29,6 +29,8 @@ namespace fs = std::filesystem;
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <optional>
+#include <system_error>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
 #include "core/i18n.h"
@@ -1189,15 +1191,67 @@ std::string format_double(double value) {
     return oss.str();
 }
 
+#ifndef SPRAT_GLOBAL_TRANSFORMS_DIR
+#define SPRAT_GLOBAL_TRANSFORMS_DIR "/usr/local/share/sprat/transforms"
+#endif
+
+using sprat::core::to_quoted;
+
+fs::path g_exec_dir;
+
+std::optional<fs::path> resolve_user_transforms_dir() {
+#ifdef _WIN32
+    static const char* const envs[] = {"APPDATA", "LOCALAPPDATA"};
+    for (const char* env : envs) {
+        const char* val = std::getenv(env);
+        if (val != nullptr && val[0] != '\0') {
+            const fs::path dir = fs::path(val) / "sprat" / "transforms";
+            std::error_code ec;
+            if (fs::exists(dir, ec) && fs::is_directory(dir, ec)) {
+                return dir;
+            }
+        }
+    }
+#endif
+
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+        return std::nullopt;
+    }
+
+#ifdef __APPLE__
+    const fs::path mac_dir = fs::path(home) / "Library" / "Preferences" / "sprat" / "transforms";
+    std::error_code ec_mac;
+    if (fs::exists(mac_dir, ec_mac) && fs::is_directory(mac_dir, ec_mac)) {
+        return mac_dir;
+    }
+#endif
+
+    const fs::path home_dir = fs::path(home) / ".config" / "sprat" / "transforms";
+    std::error_code ec;
+    if (fs::exists(home_dir, ec) && fs::is_directory(home_dir, ec)) {
+        return home_dir;
+    }
+    return std::nullopt;
+}
+
 fs::path find_transforms_dir() {
     std::vector<fs::path> candidates;
     candidates.emplace_back("transforms");
+    if (std::optional<fs::path> user_dir = resolve_user_transforms_dir()) {
+        candidates.push_back(*user_dir);
+    }
+    if (!g_exec_dir.empty()) {
+        candidates.push_back(g_exec_dir / "transforms");
+    }
 #ifdef SPRAT_SOURCE_DIR
     candidates.push_back(fs::path(SPRAT_SOURCE_DIR) / "transforms");
 #endif
+    candidates.emplace_back(SPRAT_GLOBAL_TRANSFORMS_DIR);
 
     for (const auto& candidate : candidates) {
-        if (fs::exists(candidate) && fs::is_directory(candidate)) {
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && fs::is_directory(candidate, ec)) {
             return candidate;
         }
     }
@@ -1301,6 +1355,7 @@ int run_spratconvert(int argc, char** argv) {
         std::cerr << tr("Failed to set stdout to binary mode\n");
     }
 #endif
+    g_exec_dir = sprat::core::get_executable_dir(argv[0]);
     std::string transform_arg = "json";
     std::string markers_path_arg;
     std::string animations_path_arg;
