@@ -40,7 +40,6 @@ namespace fs = std::filesystem;
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 
-#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
 // Configuration

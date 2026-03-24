@@ -1,6 +1,4 @@
 #include <utility>
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image.h>
 #include <stb_image_write.h>
 
@@ -515,6 +513,9 @@ int run_spratpack(int argc, char** argv) {
         unsigned int atlas_worker_count = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
         if (atlas_worker_count == 0) atlas_worker_count = 1;
         atlas_worker_count = std::min<unsigned int>(atlas_worker_count, static_cast<unsigned int>(std::max<size_t>(1, atlas_sprites.size())));
+#ifdef __EMSCRIPTEN__
+        atlas_worker_count = 1;
+#endif
 
         const bool can_parallel = (atlas_worker_count > 1) && !sprites_have_overlap(atlas_sprites);
         if (!can_parallel) {

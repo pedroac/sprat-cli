@@ -56,7 +56,6 @@ namespace fs = std::filesystem;
 #include "core/i18n.h"
 
 #include <utility>
-#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
 constexpr int k_output_cache_format_version = 2;
@@ -3811,6 +3810,10 @@ int run_spratlayout(int argc, char** argv) {
         if (worker_count == 0) {
             worker_count = 1;
         }
+#ifdef __EMSCRIPTEN__
+        // Browser WASM builds typically lack pthreads; force single-threaded work.
+        worker_count = 1;
+#endif
 
         std::array<std::vector<Sprite>, k_sort_mode_count> sorted_sprites_by_mode;
         int sort_idx = 0;
@@ -3973,86 +3976,93 @@ int run_spratlayout(int argc, char** argv) {
                 worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
                 std::vector<LayoutCandidate> worker_gpu(worker_count);
                 std::vector<LayoutCandidate> worker_space(worker_count);
-                std::vector<std::thread> workers;
-                workers.reserve(worker_count);
-                for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
-                    workers.emplace_back([&, worker_index]() {
-                        const size_t begin = (width_candidates.size() * worker_index) / worker_count;
-                        const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
-
-                        LayoutCandidate local_best_gpu;
-                        LayoutCandidate local_best_space;
-                        auto consider_local = [&](LayoutCandidate&& candidate) {
-                            if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
-                                return;
-                            }
-                            const bool better_gpu =
-                                !local_best_gpu.valid ||
-                                pick_better_layout_candidate(
-                                    candidate.area, candidate.w, candidate.h, true,
-                                    local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
-                                    OptimizeTarget::GPU);
-                            const bool better_space =
-                                !local_best_space.valid ||
-                                pick_better_layout_candidate(
-                                    candidate.area, candidate.w, candidate.h, true,
-                                    local_best_space.area, local_best_space.w, local_best_space.h,
-                                    OptimizeTarget::SPACE);
-                            if (!better_gpu && !better_space) {
-                                return;
-                            }
-                            if (better_gpu && better_space) {
-                                local_best_gpu = candidate;
-                                local_best_space = std::move(candidate);
-                                return;
-                            }
-                            if (better_gpu) {
-                                local_best_gpu = std::move(candidate);
-                                return;
-                            }
+                auto run_guided_worker = [&](size_t begin, size_t end, LayoutCandidate& out_gpu, LayoutCandidate& out_space) {
+                    LayoutCandidate local_best_gpu;
+                    LayoutCandidate local_best_space;
+                    auto consider_local = [&](LayoutCandidate&& candidate) {
+                        if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
+                            return;
+                        }
+                        const bool better_gpu =
+                            !local_best_gpu.valid ||
+                            pick_better_layout_candidate(
+                                candidate.area, candidate.w, candidate.h, true,
+                                local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
+                                OptimizeTarget::GPU);
+                        const bool better_space =
+                            !local_best_space.valid ||
+                            pick_better_layout_candidate(
+                                candidate.area, candidate.w, candidate.h, true,
+                                local_best_space.area, local_best_space.w, local_best_space.h,
+                                OptimizeTarget::SPACE);
+                        if (!better_gpu && !better_space) {
+                            return;
+                        }
+                        if (better_gpu && better_space) {
+                            local_best_gpu = candidate;
                             local_best_space = std::move(candidate);
-                        };
+                            return;
+                        }
+                        if (better_gpu) {
+                            local_best_gpu = std::move(candidate);
+                            return;
+                        }
+                        local_best_space = std::move(candidate);
+                    };
 
-                        bool local_budget_exhausted = false;
-                        for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
-                            const int width = width_candidates[width_index];
-                            for (size_t sort_idx : k_guided_sort_indices) {
-                                if (enforce_name_order && sort_idx != k_sort_mode_index_none) {
-                                    continue;
-                                }
-                                if (local_budget_exhausted) {
+                    bool local_budget_exhausted = false;
+                    for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
+                        const int width = width_candidates[width_index];
+                        for (size_t sort_idx : k_guided_sort_indices) {
+                            if (enforce_name_order && sort_idx != k_sort_mode_index_none) {
+                                continue;
+                            }
+                            if (local_budget_exhausted) {
+                                break;
+                            }
+
+                            for (RectHeuristic rect_heuristic : k_guided_heuristics) {
+                                if (!consume_combination_budget()) {
+                                    local_budget_exhausted = true;
                                     break;
                                 }
-
-                                for (RectHeuristic rect_heuristic : k_guided_heuristics) {
-                                    if (!consume_combination_budget()) {
-                                        local_budget_exhausted = true;
-                                        break;
-                                    }
-                                    std::vector<Sprite> trial_sprites = sorted_sprites_by_mode[sort_idx];
-                                    int used_w = 0;
-                                    int used_h = 0;
-                                    if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, allow_rotate, used_w, used_h)) {
-                                        continue;
-                                    }
-                                    size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
-                                    LayoutCandidate candidate;
-                                    candidate.valid = true;
-                                    candidate.area = area;
-                                    candidate.w = used_w;
-                                    candidate.h = used_h;
-                                    candidate.sprites = std::move(trial_sprites);
-                                    consider_local(std::move(candidate));
+                                std::vector<Sprite> trial_sprites = sorted_sprites_by_mode[sort_idx];
+                                int used_w = 0;
+                                int used_h = 0;
+                                if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, allow_rotate, used_w, used_h)) {
+                                    continue;
                                 }
+                                size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
+                                LayoutCandidate candidate;
+                                candidate.valid = true;
+                                candidate.area = area;
+                                candidate.w = used_w;
+                                candidate.h = used_h;
+                                candidate.sprites = std::move(trial_sprites);
+                                consider_local(std::move(candidate));
                             }
                         }
+                    }
 
-                        worker_gpu[worker_index] = std::move(local_best_gpu);
-                        worker_space[worker_index] = std::move(local_best_space);
-                    });
-                }
-                for (auto& worker : workers) {
-                    worker.join();
+                    out_gpu = std::move(local_best_gpu);
+                    out_space = std::move(local_best_space);
+                };
+
+                if (worker_count == 1) {
+                    run_guided_worker(0, width_candidates.size(), worker_gpu[0], worker_space[0]);
+                } else {
+                    std::vector<std::thread> workers;
+                    workers.reserve(worker_count);
+                    for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
+                        workers.emplace_back([&, worker_index]() {
+                            const size_t begin = (width_candidates.size() * worker_index) / worker_count;
+                            const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
+                            run_guided_worker(begin, end, worker_gpu[worker_index], worker_space[worker_index]);
+                        });
+                    }
+                    for (auto& worker : workers) {
+                        worker.join();
+                    }
                 }
                 for (unsigned int i = 0; i < worker_count; ++i) {
                     if (worker_gpu[i].valid) {
@@ -4072,83 +4082,90 @@ int run_spratlayout(int argc, char** argv) {
                 worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
                 std::vector<LayoutCandidate> worker_gpu(worker_count);
                 std::vector<LayoutCandidate> worker_space(worker_count);
-                std::vector<std::thread> workers;
-                workers.reserve(worker_count);
-                for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
-                    workers.emplace_back([&, worker_index]() {
-                        const size_t begin = (width_candidates.size() * worker_index) / worker_count;
-                        const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
-
-                        LayoutCandidate local_best_gpu;
-                        LayoutCandidate local_best_space;
-                        auto consider_local = [&](LayoutCandidate&& candidate) {
-                            if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
-                                return;
-                            }
-                            const bool better_gpu =
-                                !local_best_gpu.valid ||
-                                pick_better_layout_candidate(
-                                    candidate.area, candidate.w, candidate.h, true,
-                                    local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
-                                    OptimizeTarget::GPU);
-                            const bool better_space =
-                                !local_best_space.valid ||
-                                pick_better_layout_candidate(
-                                    candidate.area, candidate.w, candidate.h, true,
-                                    local_best_space.area, local_best_space.w, local_best_space.h,
-                                    OptimizeTarget::SPACE);
-                            if (!better_gpu && !better_space) {
-                                return;
-                            }
-                            if (better_gpu && better_space) {
-                                local_best_gpu = candidate;
-                                local_best_space = std::move(candidate);
-                                return;
-                            }
-                            if (better_gpu) {
-                                local_best_gpu = std::move(candidate);
-                                return;
-                            }
-                            local_best_space = std::move(candidate);
-                        };
-
-                        bool local_budget_exhausted = false;
-                        for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
-                            const int width = width_candidates[width_index];
-                            for (size_t sort_idx : k_guided_sort_indices) {
-                                if (enforce_name_order && sort_idx != k_sort_mode_index_none) {
-                                    continue;
-                                }
-                                if (!consume_combination_budget()) {
-                                    local_budget_exhausted = true;
-                                    break;
-                                }
-                                std::vector<Sprite> shelf_sprites = sorted_sprites_by_mode[sort_idx];
-                                int shelf_w = 0;
-                                int shelf_h = 0;
-                                if (!pack_fast_shelf(shelf_sprites, width, padding, allow_rotate, shelf_w, shelf_h)) {
-                                    continue;
-                                }
-                                if (shelf_h > height_upper_bound) {
-                                    continue;
-                                }
-                                size_t shelf_area = static_cast<size_t>(shelf_w) * static_cast<size_t>(shelf_h);
-                                LayoutCandidate shelf_candidate;
-                                shelf_candidate.valid = true;
-                                shelf_candidate.area = shelf_area;
-                                shelf_candidate.w = shelf_w;
-                                shelf_candidate.h = shelf_h;
-                                shelf_candidate.sprites = std::move(shelf_sprites);
-                                consider_local(std::move(shelf_candidate));
-                            }
+                auto run_shelf_worker = [&](size_t begin, size_t end, LayoutCandidate& out_gpu, LayoutCandidate& out_space) {
+                    LayoutCandidate local_best_gpu;
+                    LayoutCandidate local_best_space;
+                    auto consider_local = [&](LayoutCandidate&& candidate) {
+                        if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
+                            return;
                         }
+                        const bool better_gpu =
+                            !local_best_gpu.valid ||
+                            pick_better_layout_candidate(
+                                candidate.area, candidate.w, candidate.h, true,
+                                local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
+                                OptimizeTarget::GPU);
+                        const bool better_space =
+                            !local_best_space.valid ||
+                            pick_better_layout_candidate(
+                                candidate.area, candidate.w, candidate.h, true,
+                                local_best_space.area, local_best_space.w, local_best_space.h,
+                                OptimizeTarget::SPACE);
+                        if (!better_gpu && !better_space) {
+                            return;
+                        }
+                        if (better_gpu && better_space) {
+                            local_best_gpu = candidate;
+                            local_best_space = std::move(candidate);
+                            return;
+                        }
+                        if (better_gpu) {
+                            local_best_gpu = std::move(candidate);
+                            return;
+                        }
+                        local_best_space = std::move(candidate);
+                    };
 
-                        worker_gpu[worker_index] = std::move(local_best_gpu);
-                        worker_space[worker_index] = std::move(local_best_space);
-                    });
-                }
-                for (auto& worker : workers) {
-                    worker.join();
+                    bool local_budget_exhausted = false;
+                    for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
+                        const int width = width_candidates[width_index];
+                        for (size_t sort_idx : k_guided_sort_indices) {
+                            if (enforce_name_order && sort_idx != k_sort_mode_index_none) {
+                                continue;
+                            }
+                            if (!consume_combination_budget()) {
+                                local_budget_exhausted = true;
+                                break;
+                            }
+                            std::vector<Sprite> shelf_sprites = sorted_sprites_by_mode[sort_idx];
+                            int shelf_w = 0;
+                            int shelf_h = 0;
+                            if (!pack_fast_shelf(shelf_sprites, width, padding, allow_rotate, shelf_w, shelf_h)) {
+                                continue;
+                            }
+                            if (shelf_h > height_upper_bound) {
+                                continue;
+                            }
+                            size_t shelf_area = static_cast<size_t>(shelf_w) * static_cast<size_t>(shelf_h);
+                            LayoutCandidate shelf_candidate;
+                            shelf_candidate.valid = true;
+                            shelf_candidate.area = shelf_area;
+                            shelf_candidate.w = shelf_w;
+                            shelf_candidate.h = shelf_h;
+                            shelf_candidate.sprites = std::move(shelf_sprites);
+                            consider_local(std::move(shelf_candidate));
+                        }
+                    }
+
+                    out_gpu = std::move(local_best_gpu);
+                    out_space = std::move(local_best_space);
+                };
+
+                if (worker_count == 1) {
+                    run_shelf_worker(0, width_candidates.size(), worker_gpu[0], worker_space[0]);
+                } else {
+                    std::vector<std::thread> workers;
+                    workers.reserve(worker_count);
+                    for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
+                        workers.emplace_back([&, worker_index]() {
+                            const size_t begin = (width_candidates.size() * worker_index) / worker_count;
+                            const size_t end = (width_candidates.size() * (worker_index + 1)) / worker_count;
+                            run_shelf_worker(begin, end, worker_gpu[worker_index], worker_space[worker_index]);
+                        });
+                    }
+                    for (auto& worker : workers) {
+                        worker.join();
+                    }
                 }
                 for (unsigned int i = 0; i < worker_count; ++i) {
                     if (worker_gpu[i].valid) {

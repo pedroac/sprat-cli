@@ -123,7 +123,16 @@ add_library(spratcore STATIC
     src/core/layout_parser.cpp
     src/core/output_pattern.cpp
     src/core/i18n.cpp
+    src/core/stb_impl.cpp
+    src/commands/spratlayout_command.cpp
+    src/commands/spratpack_command.cpp
+    src/commands/spratconvert_command.cpp
+    src/commands/spratframes_command.cpp
+    src/commands/spratunpack_command.cpp
 )
+target_include_directories(spratcore PUBLIC src)
+target_include_directories(spratcore SYSTEM PRIVATE ${STB_DIR})
+target_include_directories(spratcore PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 
 option(SPRAT_ENABLE_NLS "Enable gettext-based translations when available" ON)
 option(SPRAT_REQUIRE_GETTEXT "Fail configure if gettext support is requested but unavailable" OFF)
@@ -172,7 +181,13 @@ target_compile_definitions(spratcore PUBLIC SPRAT_LOCALE_DIR="${CMAKE_INSTALL_FU
 # Binaries
 # For Windows cross-compilation, PkgConfig often leaks host paths. 
 # We prefer find_package or explicit paths.
-if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
+if(TARGET LibArchive::LibArchive)
+    set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
+    set(LIBARCHIVE_FOUND TRUE)
+    if(NOT LIBARCHIVE_INCLUDE_DIRS)
+        get_target_property(LIBARCHIVE_INCLUDE_DIRS LibArchive::LibArchive INTERFACE_INCLUDE_DIRECTORIES)
+    endif()
+elseif(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Windows" OR EMSCRIPTEN)
     find_package(LibArchive QUIET)
     if(LibArchive_FOUND)
         set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
@@ -329,5 +344,7 @@ install(DIRECTORY transforms/
 install(FILES man/sprat-cli.1
     DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
-enable_testing()
-add_subdirectory(tests)
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

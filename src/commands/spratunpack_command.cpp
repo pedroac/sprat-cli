@@ -43,10 +43,10 @@ typedef SSIZE_T ssize_t;
 #endif
 #endif
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image.h>
+extern "C" {
 #include <stb_image_write.h>
+}
 
 // Libarchive for proper tar format
 #include <archive.h>
@@ -799,6 +799,9 @@ int run_spratunpack(int argc, char** argv) {
     if (config.threads == 0) {
         config.threads = std::max(1U, std::thread::hardware_concurrency());
     }
+#ifdef __EMSCRIPTEN__
+    config.threads = 1;
+#endif
 
     // Initialize binary mode for stdin/stdout if needed
 #ifdef _WIN32
