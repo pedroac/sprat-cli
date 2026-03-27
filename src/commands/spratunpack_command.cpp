@@ -44,9 +44,7 @@ typedef SSIZE_T ssize_t;
 #endif
 
 #include <stb_image.h>
-extern "C" {
 #include <stb_image_write.h>
-}
 
 // Libarchive for proper tar format
 #include <archive.h>
