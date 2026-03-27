@@ -621,13 +621,16 @@ private:
         }
 
         // Encode as PNG in memory
-        int png_size = 0;
-        unsigned char* png_buffer_raw = stbi_write_png_to_mem(sprite_data.data(), out_w * NUM_CHANNELS,
-                                                       out_w, out_h, NUM_CHANNELS, &png_size);
-        if (png_buffer_raw == nullptr) {
+        std::vector<unsigned char> png_buffer;
+        auto write_to_vec = [](void* context, void* data, int size) {
+            auto* vec = static_cast<std::vector<unsigned char>*>(context);
+            const auto* bytes = static_cast<const unsigned char*>(data);
+            vec->insert(vec->end(), bytes, bytes + size);
+        };
+
+        if (!stbi_write_png_to_func(write_to_vec, &png_buffer, out_w, out_h, NUM_CHANNELS, sprite_data.data(), out_w * NUM_CHANNELS)) {
             return false;
         }
-        std::unique_ptr<unsigned char, void(*)(void*)> png_buffer(png_buffer_raw, std::free);
 
         std::string filename = frame.name;
         if (filename.find('.') == std::string::npos) {
@@ -640,7 +643,7 @@ private:
         }
 
         archive_entry_set_pathname(entry, filename.c_str());
-        archive_entry_set_size(entry, png_size);
+        archive_entry_set_size(entry, static_cast<la_int64_t>(png_buffer.size()));
         archive_entry_set_filetype(entry, AE_IFREG);
         constexpr int DEFAULT_FILE_PERMISSIONS = 0644;
         archive_entry_set_perm(entry, DEFAULT_FILE_PERMISSIONS);
@@ -652,7 +655,7 @@ private:
             return false;
         }
 
-        if (archive_write_data(a, png_buffer.get(), png_size) != static_cast<ssize_t>(png_size)) {
+        if (archive_write_data(a, png_buffer.data(), png_buffer.size()) != static_cast<ssize_t>(png_buffer.size())) {
             std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(a) << '\n';
             archive_entry_free(entry);
             return false;
