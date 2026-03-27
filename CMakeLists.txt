@@ -118,22 +118,6 @@ endfunction()
 ensure_stb_header(stb_image.h)
 ensure_stb_header(stb_image_write.h)
 
-add_library(spratcore STATIC
-    src/core/cli_parse.cpp
-    src/core/layout_parser.cpp
-    src/core/output_pattern.cpp
-    src/core/i18n.cpp
-    src/core/stb_impl.cpp
-    src/commands/spratlayout_command.cpp
-    src/commands/spratpack_command.cpp
-    src/commands/spratconvert_command.cpp
-    src/commands/spratframes_command.cpp
-    src/commands/spratunpack_command.cpp
-)
-target_include_directories(spratcore PUBLIC src)
-target_include_directories(spratcore SYSTEM PRIVATE ${STB_DIR})
-target_include_directories(spratcore PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
-
 option(SPRAT_ENABLE_NLS "Enable gettext-based translations when available" ON)
 option(SPRAT_REQUIRE_GETTEXT "Fail configure if gettext support is requested but unavailable" OFF)
 
@@ -143,12 +127,11 @@ if(SPRAT_ENABLE_NLS)
     find_package(Intl QUIET)
     if(Intl_FOUND)
         set(SPRAT_GETTEXT_AVAILABLE TRUE)
-        target_compile_definitions(spratcore PUBLIC SPRAT_ENABLE_GETTEXT)
         if(TARGET Intl::Intl)
-            target_link_libraries(spratcore PUBLIC Intl::Intl)
+            set(SPRAT_INTL_LIBRARIES Intl::Intl)
         else()
-            target_link_libraries(spratcore PUBLIC ${Intl_LIBRARIES})
-            target_include_directories(spratcore PUBLIC ${Intl_INCLUDE_DIRS})
+            set(SPRAT_INTL_LIBRARIES ${Intl_LIBRARIES})
+            set(SPRAT_INTL_INCLUDE_DIRS ${Intl_INCLUDE_DIRS})
         endif()
         message(STATUS "gettext support enabled (via Intl)")
     else()
@@ -158,13 +141,11 @@ if(SPRAT_ENABLE_NLS)
             # Some platforms provide libintl through gettext
             if(TARGET Gettext::Gettext)
                 set(SPRAT_GETTEXT_AVAILABLE TRUE)
-                target_compile_definitions(spratcore PUBLIC SPRAT_ENABLE_GETTEXT)
-                target_link_libraries(spratcore PUBLIC Gettext::Gettext)
+                set(SPRAT_INTL_LIBRARIES Gettext::Gettext)
                 message(STATUS "gettext support enabled (via Gettext target)")
             elseif(GETTEXT_LIBRARIES)
                 set(SPRAT_GETTEXT_AVAILABLE TRUE)
-                target_compile_definitions(spratcore PUBLIC SPRAT_ENABLE_GETTEXT)
-                target_link_libraries(spratcore PUBLIC ${GETTEXT_LIBRARIES})
+                set(SPRAT_INTL_LIBRARIES ${GETTEXT_LIBRARIES})
                 message(STATUS "gettext support enabled (via GETTEXT_LIBRARIES)")
             endif()
         endif()
@@ -176,11 +157,8 @@ if(SPRAT_ENABLE_NLS)
         message(STATUS "gettext not found; translations will fallback to source strings")
     endif()
 endif()
-target_compile_definitions(spratcore PUBLIC SPRAT_LOCALE_DIR="${CMAKE_INSTALL_FULL_LOCALEDIR}")
 
-# Binaries
-# For Windows cross-compilation, PkgConfig often leaks host paths. 
-# We prefer find_package or explicit paths.
+# LibArchive detection
 if(TARGET LibArchive::LibArchive)
     set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
     set(LIBARCHIVE_FOUND TRUE)
@@ -193,6 +171,7 @@ elseif(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Windows" OR EMSCRIPTEN)
         set(LIBARCHIVE_LIBRARIES LibArchive::LibArchive)
         if(NOT LIBARCHIVE_INCLUDE_DIRS)
             find_path(LIBARCHIVE_INCLUDE_DIR NAMES archive.h)
+            set(LIBARCHIVE_INCLUDE_DIRS ${LIBARCHIVE_INCLUDE_DIR})
         else()
             set(LIBARCHIVE_INCLUDE_DIR ${LIBARCHIVE_INCLUDE_DIRS})
         endif()
@@ -220,6 +199,7 @@ else()
     pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
 endif()
 
+# Zopfli detection
 if(PkgConfig_FOUND)
     pkg_check_modules(ZOPFLIPNG zopflipng)
 endif()
@@ -242,19 +222,38 @@ if(NOT ZOPFLIPNG_FOUND)
     endif()
 endif()
 
-add_executable(spratlayout
-    src/spratlayout.cpp
+# Target definitions
+add_library(spratcore STATIC
+    src/core/cli_parse.cpp
+    src/core/layout_parser.cpp
+    src/core/output_pattern.cpp
+    src/core/i18n.cpp
+    src/core/stb_impl.cpp
     src/commands/spratlayout_command.cpp
+    src/commands/spratpack_command.cpp
+    src/commands/spratconvert_command.cpp
+    src/commands/spratframes_command.cpp
+    src/commands/spratunpack_command.cpp
 )
+
+target_include_directories(spratcore PUBLIC src)
+target_include_directories(spratcore SYSTEM PRIVATE ${STB_DIR})
+target_include_directories(spratcore PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
+if(SPRAT_GETTEXT_AVAILABLE)
+    target_compile_definitions(spratcore PUBLIC SPRAT_ENABLE_GETTEXT)
+    target_link_libraries(spratcore PUBLIC ${SPRAT_INTL_LIBRARIES})
+    if(SPRAT_INTL_INCLUDE_DIRS)
+        target_include_directories(spratcore PUBLIC ${SPRAT_INTL_INCLUDE_DIRS})
+    endif()
+endif()
+target_compile_definitions(spratcore PUBLIC SPRAT_LOCALE_DIR="${CMAKE_INSTALL_FULL_LOCALEDIR}")
+
+add_executable(spratlayout src/spratlayout.cpp)
 target_link_libraries(spratlayout PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratlayout PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratlayout SYSTEM PRIVATE ${STB_DIR})
-target_include_directories(spratlayout PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratpack
-    src/spratpack.cpp
-    src/commands/spratpack_command.cpp
-)
+add_executable(spratpack src/spratpack.cpp)
 target_link_libraries(spratpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 if(ZOPFLIPNG_FOUND)
     target_link_libraries(spratpack PRIVATE ${ZOPFLIPNG_LIBRARIES})
@@ -263,32 +262,20 @@ if(ZOPFLIPNG_FOUND)
 endif()
 target_include_directories(spratpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratpack SYSTEM PRIVATE ${STB_DIR})
-target_include_directories(spratpack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratconvert
-    src/spratconvert.cpp
-    src/commands/spratconvert_command.cpp
-)
+add_executable(spratconvert src/spratconvert.cpp)
 target_link_libraries(spratconvert PRIVATE spratcore)
 target_include_directories(spratconvert SYSTEM PRIVATE ${STB_DIR})
-target_include_directories(spratconvert PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratframes
-    src/spratframes.cpp
-    src/commands/spratframes_command.cpp
-)
+add_executable(spratframes src/spratframes.cpp)
 target_link_libraries(spratframes PRIVATE spratcore)
 target_include_directories(spratframes SYSTEM PRIVATE ${STB_DIR})
-target_include_directories(spratframes PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(spratunpack
-    src/spratunpack.cpp
-    src/commands/spratunpack_command.cpp
-)
+add_executable(spratunpack src/spratunpack.cpp)
 target_link_libraries(spratunpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratunpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratunpack SYSTEM PRIVATE ${STB_DIR})
-target_include_directories(spratunpack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(spratlayout PRIVATE
     SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")
