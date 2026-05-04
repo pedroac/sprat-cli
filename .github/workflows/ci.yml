@@ -29,13 +29,22 @@ jobs:
             -B build \
             -DSPRAT_DOWNLOAD_STB=ON \
             -DSPRAT_REQUIRE_GETTEXT=ON \
+            -DBUILD_TESTING=ON \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build --parallel --config Release
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -C Release
+        run: ctest --test-dir build --output-on-failure -C Release --output-junit build/test-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ runner.os }}
+          path: build/test-results.xml
+          retention-days: 7
 
   release-build-package:
     if: github.event_name == 'push' && github.ref == 'refs/heads/release'
@@ -48,11 +57,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache apt packages
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-libarchive-gettext-pillow-imagemagick
+
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-dev gettext python3-pillow imagemagick
+          sudo apt-get install -y --no-upgrade libarchive-dev gettext python3-pillow imagemagick
 
       - name: Cache vcpkg (Windows)
         if: runner.os == 'Windows'
@@ -73,6 +89,13 @@ jobs:
         if: runner.os == 'Windows'
         run: pip install Pillow
 
+      - name: Cache Homebrew packages
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-libarchive-gettext-imagemagick
+
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -92,6 +115,7 @@ jobs:
             -S .
             -B build
             -DSPRAT_DOWNLOAD_STB=ON
+            -DBUILD_TESTING=ON
             -DCMAKE_BUILD_TYPE=Release
           )
           if [ "${{ runner.os }}" == "Windows" ]; then
@@ -125,11 +149,19 @@ jobs:
           HOME: ${{ runner.temp }}\sprat-home
           USERPROFILE: ${{ runner.temp }}\sprat-home
           APPDATA: ${{ runner.temp }}\sprat-appdata
-        run: ctest --test-dir build --output-on-failure -C Release
+        run: ctest --test-dir build --output-on-failure -C Release --output-junit build/test-results.xml
 
       - name: Test (Non-Windows)
         if: runner.os != 'Windows'
-        run: ctest --test-dir build --output-on-failure -C Release
+        run: ctest --test-dir build --output-on-failure -C Release --output-junit build/test-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ runner.os }}
+          path: build/test-results.xml
+          retention-days: 7
 
       - name: Package Linux (.tar.gz)
         if: runner.os == 'Linux'
@@ -190,6 +222,7 @@ jobs:
             dist/*.tar.gz
             dist/*.dmg
             dist/*.zip
+          retention-days: 30
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/release'
