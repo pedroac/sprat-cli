@@ -140,6 +140,32 @@ void test_validate_output_pattern() {
     std::cout << "test_validate_output_pattern passed" << std::endl;
 }
 
+void test_compare_natural() {
+    // Basic string comparison
+    assert(sprat::core::compare_natural("a", "b") < 0);
+    assert(sprat::core::compare_natural("b", "a") > 0);
+    assert(sprat::core::compare_natural("a", "a") == 0);
+
+    // Natural number sorting (key feature)
+    assert(sprat::core::compare_natural("sprite_2.png", "sprite_10.png") < 0);
+    assert(sprat::core::compare_natural("sprite_10.png", "sprite_2.png") > 0);
+    assert(sprat::core::compare_natural("sprite_01.png", "sprite_02.png") < 0);
+
+    // Mixed text and numbers
+    assert(sprat::core::compare_natural("file1name", "file10name") < 0);
+    assert(sprat::core::compare_natural("file10name", "file1name") > 0);
+
+    // Empty and single character
+    assert(sprat::core::compare_natural("", "a") < 0);
+    assert(sprat::core::compare_natural("a", "") > 0);
+    assert(sprat::core::compare_natural("", "") == 0);
+
+    // Case sensitivity
+    assert(sprat::core::compare_natural("Sprite", "sprite") != 0);
+
+    std::cout << "test_compare_natural passed" << std::endl;
+}
+
 int main() {
     test_parse_positive_int();
     test_parse_non_negative_int();
@@ -150,6 +176,7 @@ int main() {
     test_to_quoted();
     test_format_index_pattern();
     test_validate_output_pattern();
+    test_compare_natural();
     std::cout << "All core tests passed!" << std::endl;
     return 0;
 }

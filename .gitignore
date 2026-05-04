@@ -64,6 +64,8 @@ spratunpack
 spratframes
 README-assets/*
 !README-assets/*.png
+# Exclude temporary documentation snapshots
+README-assets/snapshot_*.png
 test_background/
 compile_commands.json
 fixes.json
