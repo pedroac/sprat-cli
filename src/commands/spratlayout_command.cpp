@@ -1385,7 +1385,7 @@ void print_usage() {
               << tr("  --trim-transparent         Enable transparent-border trimming\n")
               << tr("  --rotate                   Allow 90-degree sprite rotation during packing\n")
               << tr("  --multipack                Split into multiple atlases if they don't fit\n")
-              << tr("  --deduplicate              Hash-detect identical sprites and create aliases\n")
+              << tr("  --deduplicate <mode>       Deduplication mode: none, exact, perceptual\n")
               << tr("  --sort name|none           Order of sprites in layout (default: name for folders)\n")
               << tr("  --threads N                Number of worker threads\n")
               << tr("  --debug                    Enable detailed error reporting and debug visualization\n")
@@ -1425,7 +1425,7 @@ std::string build_layout_signature(const std::string& profile_name,
                                    bool trim_transparent,
                                    bool allow_rotate,
                                    bool preserve_source_order,
-                                   bool deduplicate,
+                                   const std::string& deduplicateMode,
                                    const std::vector<ImageSource>& sources) {
     std::vector<std::string> parts;
     parts.reserve(sources.size());
@@ -1451,7 +1451,7 @@ std::string build_layout_signature(const std::string& profile_name,
         << (trim_transparent ? 1 : 0) << "|"
         << (allow_rotate ? 1 : 0) << "|"
         << (preserve_source_order ? 1 : 0) << "|"
-        << (deduplicate ? 1 : 0);
+        << deduplicateMode;
     for (const std::string& part : parts) {
         sig << "\n" << part;
     }
@@ -2946,7 +2946,7 @@ int run_spratlayout(int argc, char** argv) {
     bool has_rotate_override = false;
     bool multipack = false;
     bool has_multipack_override = false;
-    bool deduplicate = false;
+    std::string deduplicateMode = "none";
     bool has_deduplicate_override = false;
     FrameSort frame_sort = FrameSort::Name;
     bool has_frame_sort_override = false;
@@ -3075,8 +3075,13 @@ int run_spratlayout(int argc, char** argv) {
         } else if (arg == "--multipack") {
             multipack = true;
             has_multipack_override = true;
-        } else if (arg == "--deduplicate") {
-            deduplicate = true;
+        } else if (arg == "--deduplicate" && i + 1 < argc) {
+            deduplicateMode = argv[++i];
+            if (deduplicateMode != "none" && deduplicateMode != "exact" && deduplicateMode != "perceptual") {
+                std::cerr << tr("Invalid deduplication mode: ") << deduplicateMode << "\n";
+                std::cerr << tr("Valid modes: none, exact, perceptual\n");
+                return 1;
+            }
             has_deduplicate_override = true;
         } else if (arg == "--sort" && i + 1 < argc) {
             std::string value = argv[++i];
@@ -3461,7 +3466,7 @@ int run_spratlayout(int argc, char** argv) {
     const bool is_file = !do_sort;
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        padding, extrude, max_combinations, scale, trim_transparent, allow_rotate, is_file, deduplicate, sources);
+        padding, extrude, max_combinations, scale, trim_transparent, allow_rotate, is_file, deduplicateMode, sources);
     const std::string layout_seed_signature = build_layout_seed_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         extrude, max_combinations, scale, trim_transparent, allow_rotate, is_file, sources);
@@ -4260,7 +4265,7 @@ int run_spratlayout(int argc, char** argv) {
                         prewarm_trim_transparent,
                         allow_rotate,
                         is_file,
-                        deduplicate,
+                        deduplicateMode,
                         sources
                     );
                     if (prewarm_signature == layout_signature) {
