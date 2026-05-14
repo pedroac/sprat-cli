@@ -32,6 +32,7 @@
 namespace fs = std::filesystem;
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cerrno>
 #include <cctype>
 #include <functional>
@@ -724,15 +725,19 @@ bool compute_trim_bounds(const unsigned char* rgba,
         return false;
     }
 
+    // Use direct pointer arithmetic for alpha channel access.
+    // Bounds are already validated above (w > 0, h > 0, w/h <= k_max_image_dimension).
+    const size_t stride = static_cast<size_t>(w) * 4;
+
     int top_hit_x = -1;
     for (int y = 0; y < h; ++y) {
+        const unsigned char* row_alpha = rgba + static_cast<size_t>(y) * stride + 3;
         for (int x = 0; x < w; ++x) {
-            if (!pixel_is_opaque(rgba, w, x, y)) {
-                continue;
+            if (row_alpha[static_cast<size_t>(x) * 4] != 0) {
+                min_y = y;
+                top_hit_x = x;
+                break;
             }
-            min_y = y;
-            top_hit_x = x;
-            break;
         }
         if (top_hit_x >= 0) {
             break;
@@ -744,13 +749,13 @@ bool compute_trim_bounds(const unsigned char* rgba,
 
     int bottom_hit_x = -1;
     for (int y = h - 1; y >= min_y; --y) {
+        const unsigned char* row_alpha = rgba + static_cast<size_t>(y) * stride + 3;
         for (int x = w - 1; x >= 0; --x) {
-            if (!pixel_is_opaque(rgba, w, x, y)) {
-                continue;
+            if (row_alpha[static_cast<size_t>(x) * 4] != 0) {
+                max_y = y;
+                bottom_hit_x = x;
+                break;
             }
-            max_y = y;
-            bottom_hit_x = x;
-            break;
         }
         if (bottom_hit_x >= 0) {
             break;
@@ -761,13 +766,13 @@ bool compute_trim_bounds(const unsigned char* rgba,
     min_x = left_search_end;
     for (int x = 0; x <= left_search_end; ++x) {
         bool found = false;
+        const unsigned char* col_alpha = rgba + static_cast<size_t>(x) * 4 + 3;
         for (int y = min_y; y <= max_y; ++y) {
-            if (!pixel_is_opaque(rgba, w, x, y)) {
-                continue;
+            if (col_alpha[static_cast<size_t>(y) * stride] != 0) {
+                min_x = x;
+                found = true;
+                break;
             }
-            min_x = x;
-            found = true;
-            break;
         }
         if (found) {
             break;
@@ -778,13 +783,13 @@ bool compute_trim_bounds(const unsigned char* rgba,
     max_x = right_search_start;
     for (int x = w - 1; x >= right_search_start; --x) {
         bool found = false;
+        const unsigned char* col_alpha = rgba + static_cast<size_t>(x) * 4 + 3;
         for (int y = min_y; y <= max_y; ++y) {
-            if (!pixel_is_opaque(rgba, w, x, y)) {
-                continue;
+            if (col_alpha[static_cast<size_t>(y) * stride] != 0) {
+                max_x = x;
+                found = true;
+                break;
             }
-            max_x = x;
-            found = true;
-            break;
         }
         if (found) {
             break;
@@ -1355,9 +1360,9 @@ fs::path build_seed_cache_path(const fs::path& base_cache_path,
 }
 
 std::string to_hex_size_t(size_t value) {
-    std::ostringstream oss;
-    oss << std::hex << value;
-    return oss.str();
+    std::array<char, 20> buf{};
+    int n = std::snprintf(buf.data(), buf.size(), "%zx", value);
+    return std::string(buf.data(), n > 0 ? static_cast<size_t>(n) : 0);
 }
 
 void print_usage() {
@@ -1430,32 +1435,52 @@ std::string build_layout_signature(const std::string& profile_name,
     std::vector<std::string> parts;
     parts.reserve(sources.size());
     for (const auto& source : sources) {
-        std::ostringstream line;
-        line << source.path << "|" << source.meta.file_size << "|" << source.meta.mtime_ticks;
-        parts.push_back(line.str());
+        std::string line;
+        line += source.path;
+        line += '|';
+        line += std::to_string(source.meta.file_size);
+        line += '|';
+        line += std::to_string(source.meta.mtime_ticks);
+        parts.push_back(std::move(line));
     }
     if (!preserve_source_order) {
         std::ranges::sort(parts);
     }
 
-    std::ostringstream sig;
-    sig << profile_name << "|"
-        << static_cast<int>(mode) << "|"
-        << static_cast<int>(optimize_target) << "|"
-        << max_width_limit << "|"
-        << max_height_limit << "|"
-        << padding << "|"
-        << extrude << "|"
-        << max_combinations << "|"
-        << std::setprecision(k_floating_point_precision) << scale << "|"
-        << (trim_transparent ? 1 : 0) << "|"
-        << (allow_rotate ? 1 : 0) << "|"
-        << (preserve_source_order ? 1 : 0) << "|"
-        << deduplicateMode;
+    std::array<char, 32> scale_buf{};
+    std::snprintf(scale_buf.data(), scale_buf.size(), "%.*g", k_floating_point_precision, scale);
+
+    std::string sig;
+    sig += profile_name;
+    sig += '|';
+    sig += std::to_string(static_cast<int>(mode));
+    sig += '|';
+    sig += std::to_string(static_cast<int>(optimize_target));
+    sig += '|';
+    sig += std::to_string(max_width_limit);
+    sig += '|';
+    sig += std::to_string(max_height_limit);
+    sig += '|';
+    sig += std::to_string(padding);
+    sig += '|';
+    sig += std::to_string(extrude);
+    sig += '|';
+    sig += std::to_string(max_combinations);
+    sig += '|';
+    sig += scale_buf.data();
+    sig += '|';
+    sig += (trim_transparent ? '1' : '0');
+    sig += '|';
+    sig += (allow_rotate ? '1' : '0');
+    sig += '|';
+    sig += (preserve_source_order ? '1' : '0');
+    sig += '|';
+    sig += deduplicateMode;
     for (const std::string& part : parts) {
-        sig << "\n" << part;
+        sig += '\n';
+        sig += part;
     }
-    return to_hex_size_t(std::hash<std::string>{}(sig.str()));
+    return to_hex_size_t(std::hash<std::string>{}(sig));
 }
 
 std::string build_layout_seed_signature(const std::string& profile_name,
@@ -1473,30 +1498,48 @@ std::string build_layout_seed_signature(const std::string& profile_name,
     std::vector<std::string> parts;
     parts.reserve(sources.size());
     for (const auto& source : sources) {
-        std::ostringstream line;
-        line << source.path << "|" << source.meta.file_size << "|" << source.meta.mtime_ticks;
-        parts.push_back(line.str());
+        std::string line;
+        line += source.path;
+        line += '|';
+        line += std::to_string(source.meta.file_size);
+        line += '|';
+        line += std::to_string(source.meta.mtime_ticks);
+        parts.push_back(std::move(line));
     }
     if (!preserve_source_order) {
         std::ranges::sort(parts);
     }
 
-    std::ostringstream sig;
-    sig << profile_name << "|"
-        << static_cast<int>(mode) << "|"
-        << static_cast<int>(optimize_target) << "|"
-        << max_width_limit << "|"
-        << max_height_limit << "|"
-        << extrude << "|"
-        << max_combinations << "|"
-        << std::setprecision(k_floating_point_precision) << scale << "|"
-        << (trim_transparent ? 1 : 0) << "|"
-        << (allow_rotate ? 1 : 0) << "|"
-        << (preserve_source_order ? 1 : 0);
+    std::array<char, 32> scale_buf{};
+    std::snprintf(scale_buf.data(), scale_buf.size(), "%.*g", k_floating_point_precision, scale);
+
+    std::string sig;
+    sig += profile_name;
+    sig += '|';
+    sig += std::to_string(static_cast<int>(mode));
+    sig += '|';
+    sig += std::to_string(static_cast<int>(optimize_target));
+    sig += '|';
+    sig += std::to_string(max_width_limit);
+    sig += '|';
+    sig += std::to_string(max_height_limit);
+    sig += '|';
+    sig += std::to_string(extrude);
+    sig += '|';
+    sig += std::to_string(max_combinations);
+    sig += '|';
+    sig += scale_buf.data();
+    sig += '|';
+    sig += (trim_transparent ? '1' : '0');
+    sig += '|';
+    sig += (allow_rotate ? '1' : '0');
+    sig += '|';
+    sig += (preserve_source_order ? '1' : '0');
     for (const std::string& part : parts) {
-        sig << "\n" << part;
+        sig += '\n';
+        sig += part;
     }
-    return to_hex_size_t(std::hash<std::string>{}(sig.str()));
+    return to_hex_size_t(std::hash<std::string>{}(sig));
 }
 
 bool load_output_cache(const fs::path& cache_path,
@@ -1967,12 +2010,18 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
     if (multipack) {
         output << "multipack true\n";
     }
+    // Pre-group sprite indices by atlas_index to avoid O(sprites * atlases) scan.
+    std::vector<std::vector<size_t>> sprites_by_atlas(atlases.size());
+    for (size_t si = 0; si < sprites.size(); ++si) {
+        int ai = sprites[si].atlas_index;
+        if (ai >= 0 && static_cast<size_t>(ai) < atlases.size()) {
+            sprites_by_atlas[static_cast<size_t>(ai)].push_back(si);
+        }
+    }
     for (size_t i = 0; i < atlases.size(); ++i) {
         output << "atlas " << atlases[i].width << "," << atlases[i].height << "\n";
-        for (const auto& s : sprites) {
-            if (s.atlas_index != static_cast<int>(i)) {
-                continue;
-            }
+        for (size_t si : sprites_by_atlas[i]) {
+            const auto& s = sprites[si];
             std::string path = s.path;
             // Standardize path separators to forward slashes for output consistency
             std::replace(path.begin(), path.end(), '\\', '/');
@@ -2232,27 +2281,38 @@ bool split_free_rect(const Rect& free_rect, const Rect& used_rect, std::vector<R
     return true;
 }
 
-void prune_free_rects(std::vector<Rect>& free_rects) {
-    size_t i = 0;
-    while (i < free_rects.size()) {
-        bool removed_i = false;
-        size_t j = i + 1;
-        while (j < free_rects.size()) {
-            if (rect_contains(free_rects[i], free_rects[j])) {
-                free_rects.erase(free_rects.begin() + static_cast<std::ptrdiff_t>(j));
+void prune_free_rects(std::vector<Rect>& free_rects, std::vector<bool>& dead) {
+    const size_t n = free_rects.size();
+    if (n <= 1) {
+        return;
+    }
+    dead.assign(n, false);
+    for (size_t i = 0; i < n; ++i) {
+        if (dead[i]) {
+            continue;
+        }
+        for (size_t j = i + 1; j < n; ++j) {
+            if (dead[j]) {
                 continue;
             }
-            if (rect_contains(free_rects[j], free_rects[i])) {
-                free_rects.erase(free_rects.begin() + static_cast<std::ptrdiff_t>(i));
-                removed_i = true;
+            if (rect_contains(free_rects[i], free_rects[j])) {
+                dead[j] = true;
+            } else if (rect_contains(free_rects[j], free_rects[i])) {
+                dead[i] = true;
                 break;
             }
-            ++j;
-        }
-        if (!removed_i) {
-            ++i;
         }
     }
+    size_t write = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (!dead[i]) {
+            if (write != i) {
+                free_rects[write] = free_rects[i];
+            }
+            ++write;
+        }
+    }
+    free_rects.resize(write);
 }
 
 bool pack_compact_maxrects(
@@ -2274,6 +2334,8 @@ bool pack_compact_maxrects(
 
     int used_w = 0;
     int used_h = 0;
+    std::vector<Rect> next_free;
+    std::vector<bool> prune_dead;
 
     for (auto& s : sprites) {
         int rw = 0;
@@ -2368,22 +2430,25 @@ bool pack_compact_maxrects(
         used_w = std::max(used.x + used.w, used_w);
         used_h = std::max(used.y + used.h, used_h);
 
-        std::vector<Rect> next_free;
-        next_free.reserve(free_rects.size() * 2);
+        next_free.clear();
         for (const auto& fr : free_rects) {
             if (!split_free_rect(fr, used, next_free)) {
                 return false;
             }
         }
 
-        free_rects.clear();
-        free_rects.reserve(next_free.size());
-        for (const auto& r : next_free) {
-            if (r.w > 0 && r.h > 0) {
-                free_rects.push_back(r);
+        std::swap(free_rects, next_free);
+        size_t write = 0;
+        for (size_t ri = 0; ri < free_rects.size(); ++ri) {
+            if (free_rects[ri].w > 0 && free_rects[ri].h > 0) {
+                if (write != ri) {
+                    free_rects[write] = free_rects[ri];
+                }
+                ++write;
             }
         }
-        prune_free_rects(free_rects);
+        free_rects.resize(write);
+        prune_free_rects(free_rects, prune_dead);
     }
 
     out_width = used_w;
@@ -2415,6 +2480,8 @@ bool pack_compact_maxrects_partial(
 
     std::vector<Rect> free_rects;
     free_rects.push_back({0, 0, width_limit, max_height});
+    std::vector<Rect> next_free;
+    std::vector<bool> prune_dead;
 
     for (const auto& src : sprites) {
         Sprite s = src;
@@ -2516,21 +2583,24 @@ bool pack_compact_maxrects_partial(
         }
         out.packed_area += sprite_area;
 
-        std::vector<Rect> next_free;
-        next_free.reserve(free_rects.size() * 2);
+        next_free.clear();
         for (const auto& fr : free_rects) {
             if (!split_free_rect(fr, used, next_free)) {
                 return false;
             }
         }
-        free_rects.clear();
-        free_rects.reserve(next_free.size());
-        for (const auto& r : next_free) {
-            if (r.w > 0 && r.h > 0) {
-                free_rects.push_back(r);
+        std::swap(free_rects, next_free);
+        size_t write = 0;
+        for (size_t ri = 0; ri < free_rects.size(); ++ri) {
+            if (free_rects[ri].w > 0 && free_rects[ri].h > 0) {
+                if (write != ri) {
+                    free_rects[write] = free_rects[ri];
+                }
+                ++write;
             }
         }
-        prune_free_rects(free_rects);
+        free_rects.resize(write);
+        prune_free_rects(free_rects, prune_dead);
         out.packed.push_back(s);
     }
 
@@ -3701,6 +3771,19 @@ int run_spratlayout(int argc, char** argv) {
                 return 1;
             }
 
+            // Pre-build sorted sprite arrays for each sort mode.
+            std::array<std::vector<Sprite>, k_sort_mode_count> pot_sorted;
+            pot_sorted[0] = sprites;
+            if (!(enforce_name_order && sort_modes[0] != SortMode::None)) {
+                sort_sprites_by_mode(pot_sorted[0], sort_modes[0]);
+            }
+            for (size_t si = 1; si < sort_modes.size(); ++si) {
+                pot_sorted[si] = pot_sorted[0]; // copy already-allocated vector
+                if (!(enforce_name_order && sort_modes[si] != SortMode::None)) {
+                    sort_sprites_by_mode(pot_sorted[si], sort_modes[si]);
+                }
+            }
+
             // First, find an upper bound that can pack, then search all POT
             // rectangles up to that area and pick the least wasteful successful fit.
             int side = std::max(min_pot_width, min_pot_height);
@@ -3710,6 +3793,7 @@ int run_spratlayout(int argc, char** argv) {
             size_t best_area = 0;
             size_t max_candidate_area = 0;
             bool have_best = false;
+            std::vector<Sprite> trial_sprites;
 
             while (true) {
                 if (max_width_limit > 0 && side > max_width_limit) {
@@ -3720,12 +3804,11 @@ int run_spratlayout(int argc, char** argv) {
                     std::cerr << tr("Error: no POT layout fits within max height\n");
                     return 1;
                 }
-                for (SortMode sort_mode : sort_modes) {
-                    if (enforce_name_order && sort_mode != SortMode::None) {
+                for (size_t si = 0; si < sort_modes.size(); ++si) {
+                    if (enforce_name_order && sort_modes[si] != SortMode::None) {
                         continue;
                     }
-                    std::vector<Sprite> trial_sprites = sprites;
-                    sort_sprites_by_mode(trial_sprites, sort_mode);
+                    trial_sprites.assign(pot_sorted[si].begin(), pot_sorted[si].end());
                     root = std::make_unique<Node>(0, 0, side, side);
                     if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
                         continue;
@@ -3780,12 +3863,11 @@ int run_spratlayout(int argc, char** argv) {
                         continue;
                     }
 
-                    for (SortMode sort_mode : sort_modes) {
-                        if (enforce_name_order && sort_mode != SortMode::None) {
+                    for (size_t si = 0; si < sort_modes.size(); ++si) {
+                        if (enforce_name_order && sort_modes[si] != SortMode::None) {
                             continue;
                         }
-                        std::vector<Sprite> trial_sprites = sprites;
-                        sort_sprites_by_mode(trial_sprites, sort_mode);
+                        trial_sprites.assign(pot_sorted[si].begin(), pot_sorted[si].end());
                         root = std::make_unique<Node>(0, 0, w, h);
                         if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
                             continue;
@@ -3838,16 +3920,15 @@ int run_spratlayout(int argc, char** argv) {
 #endif
 
         std::array<std::vector<Sprite>, k_sort_mode_count> sorted_sprites_by_mode;
-        int sort_idx = 0;
-        for (SortMode sm : sort_modes) {
-            if (enforce_name_order && sm != SortMode::None) {
-                // We must still populate the index for the array, but we can skip sorting
-                sorted_sprites_by_mode[sort_idx] = sprites;
-            } else {
-                sorted_sprites_by_mode[sort_idx] = sprites;
-                sort_sprites_by_mode(sorted_sprites_by_mode[sort_idx], sm);
+        sorted_sprites_by_mode[0] = sprites;
+        if (!(enforce_name_order && sort_modes[0] != SortMode::None)) {
+            sort_sprites_by_mode(sorted_sprites_by_mode[0], sort_modes[0]);
+        }
+        for (size_t sort_idx = 1; sort_idx < sort_modes.size(); ++sort_idx) {
+            sorted_sprites_by_mode[sort_idx] = sorted_sprites_by_mode[0];
+            if (!(enforce_name_order && sort_modes[sort_idx] != SortMode::None)) {
+                sort_sprites_by_mode(sorted_sprites_by_mode[sort_idx], sort_modes[sort_idx]);
             }
-            ++sort_idx;
         }
 
         int seed_width = max_width;
@@ -3911,6 +3992,7 @@ int run_spratlayout(int argc, char** argv) {
         };
 
         bool budget_exhausted = false;
+        std::vector<Sprite> seed_sprites;
         for (size_t sort_idx = 0; sort_idx < sort_modes.size() && !budget_exhausted; ++sort_idx) {
             if (enforce_name_order && sort_modes[sort_idx] != SortMode::None) {
                 continue;
@@ -3920,7 +4002,7 @@ int run_spratlayout(int argc, char** argv) {
                     budget_exhausted = true;
                     break;
                 }
-                std::vector<Sprite> seed_sprites = sorted_sprites_by_mode[sort_idx];
+                seed_sprites.assign(sorted_sprites_by_mode[sort_idx].begin(), sorted_sprites_by_mode[sort_idx].end());
                 int seed_used_w = 0;
                 int seed_used_h = 0;
                 if (!pack_compact_maxrects(seed_sprites, seed_width, padding, height_upper_bound, rect_heuristic, allow_rotate, seed_used_w, seed_used_h)) {
@@ -4032,6 +4114,7 @@ int run_spratlayout(int argc, char** argv) {
                         local_best_space = std::move(candidate);
                     };
 
+                    std::vector<Sprite> trial_sprites;
                     bool local_budget_exhausted = false;
                     for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                         const int width = width_candidates[width_index];
@@ -4048,7 +4131,7 @@ int run_spratlayout(int argc, char** argv) {
                                     local_budget_exhausted = true;
                                     break;
                                 }
-                                std::vector<Sprite> trial_sprites = sorted_sprites_by_mode[sort_idx];
+                                trial_sprites.assign(sorted_sprites_by_mode[sort_idx].begin(), sorted_sprites_by_mode[sort_idx].end());
                                 int used_w = 0;
                                 int used_h = 0;
                                 if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, allow_rotate, used_w, used_h)) {
@@ -4138,6 +4221,7 @@ int run_spratlayout(int argc, char** argv) {
                         local_best_space = std::move(candidate);
                     };
 
+                    std::vector<Sprite> shelf_sprites;
                     bool local_budget_exhausted = false;
                     for (size_t width_index = begin; width_index < end && !local_budget_exhausted; ++width_index) {
                         const int width = width_candidates[width_index];
@@ -4149,7 +4233,7 @@ int run_spratlayout(int argc, char** argv) {
                                 local_budget_exhausted = true;
                                 break;
                             }
-                            std::vector<Sprite> shelf_sprites = sorted_sprites_by_mode[sort_idx];
+                            shelf_sprites.assign(sorted_sprites_by_mode[sort_idx].begin(), sorted_sprites_by_mode[sort_idx].end());
                             int shelf_w = 0;
                             int shelf_h = 0;
                             if (!pack_fast_shelf(shelf_sprites, width, padding, allow_rotate, shelf_w, shelf_h)) {
