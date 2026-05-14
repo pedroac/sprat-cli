@@ -593,30 +593,38 @@ private:
         return false;
     }
 
-    bool write_sprite_to_archive_entry(struct archive* a, const SpriteFrame& frame) {
+    std::vector<unsigned char> extract_sprite_pixels(const SpriteFrame& frame) {
         const auto& bounds = frame.frame;
         const int out_w = frame.rotated ? bounds.h : bounds.w;
         const int out_h = frame.rotated ? bounds.w : bounds.h;
-        
-        std::vector<unsigned char> sprite_data(static_cast<size_t>(out_w) * out_h * NUM_CHANNELS);
-        for (int oy = 0; oy < out_h; oy++) {
-            for (int ox = 0; ox < out_w; ox++) {
-                int atlas_x = 0;
-                int atlas_y = 0;
-                if (frame.rotated) {
-                    atlas_x = bounds.x + (out_h - 1 - oy);
-                    atlas_y = bounds.y + ox;
-                } else {
-                    atlas_x = bounds.x + ox;
-                    atlas_y = bounds.y + oy;
-                }
 
-                const size_t dst_idx = (static_cast<size_t>(oy) * out_w + ox) * NUM_CHANNELS;
-                const size_t src_idx = (static_cast<size_t>(atlas_y) * width_ + atlas_x) * NUM_CHANNELS;
-                
-                std::memcpy(&sprite_data[dst_idx], &image_data_[src_idx], NUM_CHANNELS);
+        std::vector<unsigned char> sprite_data(static_cast<size_t>(out_w) * out_h * NUM_CHANNELS);
+        if (!frame.rotated) {
+            const size_t row_bytes = static_cast<size_t>(out_w) * NUM_CHANNELS;
+            for (int oy = 0; oy < out_h; oy++) {
+                const size_t dst_offset = static_cast<size_t>(oy) * out_w * NUM_CHANNELS;
+                const size_t src_offset = (static_cast<size_t>(bounds.y + oy) * width_ + bounds.x) * NUM_CHANNELS;
+                std::memcpy(&sprite_data[dst_offset], &image_data_[src_offset], row_bytes);
+            }
+        } else {
+            for (int oy = 0; oy < out_h; oy++) {
+                for (int ox = 0; ox < out_w; ox++) {
+                    const int atlas_x = bounds.x + (out_h - 1 - oy);
+                    const int atlas_y = bounds.y + ox;
+                    const size_t dst_idx = (static_cast<size_t>(oy) * out_w + ox) * NUM_CHANNELS;
+                    const size_t src_idx = (static_cast<size_t>(atlas_y) * width_ + atlas_x) * NUM_CHANNELS;
+                    std::memcpy(&sprite_data[dst_idx], &image_data_[src_idx], NUM_CHANNELS);
+                }
             }
         }
+        return sprite_data;
+    }
+
+    bool write_sprite_to_archive_entry(struct archive* a, const SpriteFrame& frame) {
+        const int out_w = frame.rotated ? frame.frame.h : frame.frame.w;
+        const int out_h = frame.rotated ? frame.frame.w : frame.frame.h;
+
+        std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
 
         // Encode as PNG in memory
         std::vector<unsigned char> png_buffer;
@@ -664,35 +672,16 @@ private:
     }
 
     bool save_sprite_image(const SpriteFrame& frame) {
-        const auto& bounds = frame.frame;
-        const int out_w = frame.rotated ? bounds.h : bounds.w;
-        const int out_h = frame.rotated ? bounds.w : bounds.h;
-        
-        std::vector<unsigned char> sprite_data(static_cast<size_t>(out_w) * out_h * NUM_CHANNELS);
-        for (int oy = 0; oy < out_h; oy++) {
-            for (int ox = 0; ox < out_w; ox++) {
-                int atlas_x = 0;
-                int atlas_y = 0;
-                if (frame.rotated) {
-                    atlas_x = bounds.x + (out_h - 1 - oy);
-                    atlas_y = bounds.y + ox;
-                } else {
-                    atlas_x = bounds.x + ox;
-                    atlas_y = bounds.y + oy;
-                }
+        const int out_w = frame.rotated ? frame.frame.h : frame.frame.w;
+        const int out_h = frame.rotated ? frame.frame.w : frame.frame.h;
 
-                const size_t dst_idx = (static_cast<size_t>(oy) * out_w + ox) * NUM_CHANNELS;
-                const size_t src_idx = (static_cast<size_t>(atlas_y) * width_ + atlas_x) * NUM_CHANNELS;
-                
-                std::memcpy(&sprite_data[dst_idx], &image_data_[src_idx], NUM_CHANNELS);
-            }
-        }
+        std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
 
         fs::path output_path = config_.output_dir / frame.name;
         if (output_path.extension().empty()) {
             output_path += ".png";
         }
-        
+
         fs::create_directories(output_path.parent_path());
 
         return stbi_write_png(output_path.string().c_str(),

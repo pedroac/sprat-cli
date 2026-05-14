@@ -266,15 +266,16 @@ void dilate_sprite_colors(
         return;
     }
 
-    // Make a copy of the atlas for reading during dilate
-    std::vector<unsigned char> atlas_snapshot = atlas;
+    // Two-buffer approach: read_buf holds the previous pass state, atlas is the write target.
+    // After each pass we copy only the affected sprite region back instead of the full atlas.
+    std::vector<unsigned char> read_buf = atlas;
 
-    auto get_pixel = [&](int px, int py, size_t channel) -> unsigned char {
+    auto get_pixel = [&](const std::vector<unsigned char>& buf, int px, int py, size_t channel) -> unsigned char {
         if (px < 0 || py < 0 || px >= atlas_width || py >= atlas_height) {
             return 0;
         }
         size_t offset = (static_cast<size_t>(py) * atlas_width + px) * NUM_CHANNELS + channel;
-        return atlas_snapshot[offset];
+        return buf[offset];
     };
 
     auto set_pixel_rgb = [&](int px, int py, unsigned char r, unsigned char g, unsigned char b) {
@@ -292,31 +293,41 @@ void dilate_sprite_colors(
             continue;
         }
 
+        // Clamp the dilate region to atlas bounds (sprite bbox expanded by 1 pixel)
+        const int region_y0 = std::max(0, s.y - 1);
+        const int region_y1 = std::min(atlas_height - 1, s.y + s.h);
+        const int region_x0 = std::max(0, s.x - 1);
+        const int region_x1 = std::min(atlas_width - 1, s.x + s.w);
+        const size_t region_row_bytes = static_cast<size_t>(region_x1 - region_x0 + 1) * NUM_CHANNELS;
+
         // For each pass, dilate colors from opaque pixels to transparent neighbors
         for (int pass = 0; pass < radius; ++pass) {
-            // Take snapshot after previous pass
-            atlas_snapshot = atlas;
+            // Copy only the affected region from atlas to read_buf
+            for (int y = region_y0; y <= region_y1; ++y) {
+                size_t row_offset = (static_cast<size_t>(y) * atlas_width + region_x0) * NUM_CHANNELS;
+                std::memcpy(&read_buf[row_offset], &atlas[row_offset], region_row_bytes);
+            }
 
             // Check pixels around (and outside) each sprite
-            for (int y = s.y - 1; y <= s.y + s.h; ++y) {
-                for (int x = s.x - 1; x <= s.x + s.w; ++x) {
+            for (int y = region_y0; y <= region_y1; ++y) {
+                for (int x = region_x0; x <= region_x1; ++x) {
                     // Only process transparent pixels
-                    if (get_pixel(x, y, CHANNEL_A) != 0) {
+                    if (get_pixel(read_buf, x, y, CHANNEL_A) != 0) {
                         continue;
                     }
 
                     // Check 4 cardinal directions for opaque neighbors
-                    const int dx[] = {-1, 1, 0, 0};
-                    const int dy[] = {0, 0, -1, 1};
+                    constexpr int dx[] = {-1, 1, 0, 0};
+                    constexpr int dy[] = {0, 0, -1, 1};
                     for (int dir = 0; dir < 4; ++dir) {
                         int nx = x + dx[dir];
                         int ny = y + dy[dir];
-                        unsigned char alpha = get_pixel(nx, ny, CHANNEL_A);
+                        unsigned char alpha = get_pixel(read_buf, nx, ny, CHANNEL_A);
                         if (alpha != 0) {
                             // Found opaque neighbor, copy its RGB
-                            unsigned char r = get_pixel(nx, ny, CHANNEL_R);
-                            unsigned char g = get_pixel(nx, ny, CHANNEL_G);
-                            unsigned char b = get_pixel(nx, ny, CHANNEL_B);
+                            unsigned char r = get_pixel(read_buf, nx, ny, CHANNEL_R);
+                            unsigned char g = get_pixel(read_buf, nx, ny, CHANNEL_G);
+                            unsigned char b = get_pixel(read_buf, nx, ny, CHANNEL_B);
                             set_pixel_rgb(x, y, r, g, b);
                             break;  // Only copy from first opaque neighbor
                         }
@@ -589,6 +600,14 @@ int run_spratpack(int argc, char** argv) {
         }
     }
 
+    // Pre-group sprites by atlas index
+    std::vector<std::vector<Sprite>> sprites_by_atlas(layout.atlases.size());
+    for (const auto& s : layout.sprites) {
+        if (s.atlas_index >= 0 && static_cast<size_t>(s.atlas_index) < layout.atlases.size()) {
+            sprites_by_atlas[static_cast<size_t>(s.atlas_index)].push_back(s);
+        }
+    }
+
     for (size_t atlas_idx = 0; atlas_idx < layout.atlases.size(); ++atlas_idx) {
         if (requested_atlas_index >= 0 && static_cast<size_t>(requested_atlas_index) != atlas_idx) {
             continue;
@@ -596,12 +615,7 @@ int run_spratpack(int argc, char** argv) {
 
         const int atlas_width = layout.atlases[atlas_idx].width;
         const int atlas_height = layout.atlases[atlas_idx].height;
-        std::vector<Sprite> atlas_sprites;
-        for (const auto& s : layout.sprites) {
-            if (s.atlas_index == static_cast<int>(atlas_idx)) {
-                atlas_sprites.push_back(s);
-            }
-        }
+        const std::vector<Sprite>& atlas_sprites = sprites_by_atlas[atlas_idx];
 
         size_t pixel_count = 0;
         size_t byte_count = 0;

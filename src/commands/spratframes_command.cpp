@@ -36,7 +36,6 @@ namespace fs = std::filesystem;
 #include <cstddef>
 #include <sstream>
 #include <thread>
-#include <queue>
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 
@@ -137,6 +136,9 @@ private:
     std::vector<int> component_labels_;
     std::vector<Rectangle> component_bounds_;
     std::vector<int> component_sizes_;
+
+    // Reusable flood fill stack
+    std::vector<std::pair<int, int>> fill_stack_;
     
     // Rectangle detection
     std::vector<Rectangle> detected_rectangles_;
@@ -257,45 +259,45 @@ private:
     }
     
     Rectangle flood_fill_rectangle(int start_x, int start_y, std::vector<std::uint8_t>& visited) {
-        Rectangle bounds{.x=start_x, .y=start_y, .w=1, .h=1};
-        std::queue<std::pair<int, int>> queue;
-        queue.emplace(start_x, start_y);
+        fill_stack_.clear();
+        fill_stack_.emplace_back(start_x, start_y);
         visited.at((static_cast<size_t>(start_y) * width_) + start_x) = 1;
-        
+
         int min_x = start_x;
         int max_x = start_x;
         int min_y = start_y;
         int max_y = start_y;
-        
-        const std::array<int, 4> dx = {-1, 1, 0, 0};
-        const std::array<int, 4> dy = {0, 0, -1, 1};
-        
-        while (!queue.empty()) {
-            auto [x, y] = queue.front();
-            queue.pop();
-            
+
+        constexpr std::array<int, 4> dx = {-1, 1, 0, 0};
+        constexpr std::array<int, 4> dy = {0, 0, -1, 1};
+
+        while (!fill_stack_.empty()) {
+            auto [x, y] = fill_stack_.back();
+            fill_stack_.pop_back();
+
             min_x = std::min(min_x, x);
             max_x = std::max(max_x, x);
             min_y = std::min(min_y, y);
             max_y = std::max(max_y, y);
-            
+
             for (size_t i = 0; i < 4; ++i) {
-                int nx = x + dx.at(i);
-                int ny = y + dy.at(i);
-                
+                int nx = x + dx[i];
+                int ny = y + dy[i];
+
                 if (nx >= 0 && nx < width_ && ny >= 0 && ny < height_
                     && (visited.at((static_cast<size_t>(ny) * width_) + nx) == 0U) && is_rectangle_pixel(nx, ny)) {
                     visited.at((static_cast<size_t>(ny) * width_) + nx) = 1;
-                    queue.emplace(nx, ny);
+                    fill_stack_.emplace_back(nx, ny);
                 }
             }
         }
-        
+
+        Rectangle bounds{};
         bounds.x = min_x;
         bounds.y = min_y;
         bounds.w = max_x - min_x + 1;
         bounds.h = max_y - min_y + 1;
-        
+
         return bounds;
     }
     
@@ -442,47 +444,47 @@ private:
     }
     
     int flood_fill_component(int start_x, int start_y, int component_id, Rectangle& bounds) {
-        std::queue<std::pair<int, int>> queue;
-        queue.emplace(start_x, start_y);
+        fill_stack_.clear();
+        fill_stack_.emplace_back(start_x, start_y);
         component_labels_.at((static_cast<size_t>(start_y) * width_) + start_x) = component_id;
-        
+
         int min_x = start_x;
         int max_x = start_x;
         int min_y = start_y;
         int max_y = start_y;
         int size = 0;
-        
-        const std::array<int, 8> dx = {-1, 1, 0, 0, -1, 1, -1, 1};
-        const std::array<int, 8> dy = {0, 0, -1, 1, -1, -1, 1, 1};
-        
-        while (!queue.empty()) {
-            auto [x, y] = queue.front();
-            queue.pop();
+
+        constexpr std::array<int, 8> dx = {-1, 1, 0, 0, -1, 1, -1, 1};
+        constexpr std::array<int, 8> dy = {0, 0, -1, 1, -1, -1, 1, 1};
+
+        while (!fill_stack_.empty()) {
+            auto [x, y] = fill_stack_.back();
+            fill_stack_.pop_back();
             size++;
-            
+
             min_x = std::min(min_x, x);
             max_x = std::max(max_x, x);
             min_y = std::min(min_y, y);
             max_y = std::max(max_y, y);
-            
+
             for (size_t i = 0; i < dx.size(); ++i) {
-                int nx = x + dx.at(i);
-                int ny = y + dy.at(i);
-                
+                int nx = x + dx[i];
+                int ny = y + dy[i];
+
                 if (nx >= 0 && nx < width_ && ny >= 0 && ny < height_
                     && component_labels_.at((static_cast<size_t>(ny) * width_) + nx) == -1
                     && (is_sprite_pixel(nx, ny) || is_near_sprite_pixel(nx, ny))) {
                     component_labels_.at((static_cast<size_t>(ny) * width_) + nx) = component_id;
-                    queue.emplace(nx, ny);
+                    fill_stack_.emplace_back(nx, ny);
                 }
             }
         }
-        
+
         bounds.x = min_x;
         bounds.y = min_y;
         bounds.w = max_x - min_x + 1;
         bounds.h = max_y - min_y + 1;
-        
+
         return size;
     }
     

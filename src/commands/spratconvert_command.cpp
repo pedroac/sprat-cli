@@ -16,9 +16,11 @@
 #endif
 #endif
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 namespace fs = std::filesystem;
 #include <fstream>
@@ -123,18 +125,23 @@ std::string trim_copy(const std::string& s) {
 }
 
 bool read_text_file(const fs::path& path, std::string& out, std::string& error) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in) {
         error = "Failed to open file: " + path.string();
         return false;
     }
-    std::ostringstream buffer;
-    buffer << in.rdbuf();
+    const auto size = in.tellg();
+    if (size < 0) {
+        error = "Failed to read file: " + path.string();
+        return false;
+    }
+    in.seekg(0);
+    out.resize(static_cast<size_t>(size));
+    in.read(out.data(), size);
     if (!in.good() && !in.eof()) {
         error = "Failed to read file: " + path.string();
         return false;
     }
-    out = buffer.str();
     return true;
 }
 
@@ -152,11 +159,10 @@ std::string escape_json(const std::string& s) {
             case '\t': out += "\\t"; break;
             default:
                 if (static_cast<unsigned char>(c) < k_json_control_char_limit) {
-                    std::ostringstream hex;
-                    hex << "\\u";
                     auto uc = static_cast<unsigned char>(c);
-                    hex << '0' << '0' << HEX_DIGITS[(uc >> BITS_PER_NIBBLE) & HEX_NIBBLE_MASK] << HEX_DIGITS[uc & HEX_NIBBLE_MASK];
-                    out += hex.str();
+                    out += "\\u00";
+                    out += HEX_DIGITS[(uc >> BITS_PER_NIBBLE) & HEX_NIBBLE_MASK];
+                    out += HEX_DIGITS[uc & HEX_NIBBLE_MASK];
                 } else {
                     out.push_back(c);
                 }
@@ -477,81 +483,82 @@ std::string format_sprite_indexes(const std::vector<int>& values, PlaceholderEnc
     if (values.empty()) {
         return (encoding == PlaceholderEncoding::json) ? "[]" : "";
     }
-    std::ostringstream oss;
+    const char* sep = (encoding == PlaceholderEncoding::csv) ? "|" : ",";
+    std::string out;
     if (encoding == PlaceholderEncoding::json) {
-        oss << "[";
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0) oss << ",";
-            oss << values[i];
-        }
-        oss << "]";
-    } else if (encoding == PlaceholderEncoding::csv) {
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0) oss << "|";
-            oss << values[i];
-        }
-    } else {
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0) oss << ",";
-            oss << values[i];
-        }
+        out += '[';
     }
-    return oss.str();
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) out += sep;
+        out += std::to_string(values[i]);
+    }
+    if (encoding == PlaceholderEncoding::json) {
+        out += ']';
+    }
+    return out;
 }
 
 std::string format_markers_json(const std::vector<MarkerItem>& markers) {
-    std::ostringstream oss;
-    oss << "[";
-    bool first_marker = true;
-    for (const auto& marker : markers) {
-        if (!first_marker) {
-            oss << ",";
-        }
-        oss << R"({"name":")" << escape_json(marker.name) << R"(","type":")" << escape_json(marker.type) << "\"";
+    std::string out = "[";
+    for (size_t mi = 0; mi < markers.size(); ++mi) {
+        if (mi > 0) out += ',';
+        const auto& marker = markers[mi];
+        out += R"({"name":")";
+        out += escape_json(marker.name);
+        out += R"(","type":")";
+        out += escape_json(marker.type);
+        out += '"';
         if (marker.type == "point") {
-            oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y;
+            out += ",\"x\":"; out += std::to_string(marker.x);
+            out += ",\"y\":"; out += std::to_string(marker.y);
         } else if (marker.type == "circle") {
-            oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y << ",\"radius\":" << marker.radius;
+            out += ",\"x\":"; out += std::to_string(marker.x);
+            out += ",\"y\":"; out += std::to_string(marker.y);
+            out += ",\"radius\":"; out += std::to_string(marker.radius);
         } else if (marker.type == "rectangle") {
-            oss << ",\"x\":" << marker.x << ",\"y\":" << marker.y << ",\"w\":" << marker.w << ",\"h\":" << marker.h;
+            out += ",\"x\":"; out += std::to_string(marker.x);
+            out += ",\"y\":"; out += std::to_string(marker.y);
+            out += ",\"w\":"; out += std::to_string(marker.w);
+            out += ",\"h\":"; out += std::to_string(marker.h);
         } else if (marker.type == "polygon") {
-            oss << ",\"vertices\":[";
-            bool first_vertex = true;
-            for (const auto& vertex : marker.vertices) {
-                if (!first_vertex) {
-                    oss << ",";
-                }
-                oss << "{\"x\":" << vertex.first << ",\"y\":" << vertex.second << "}";
-                first_vertex = false;
+            out += ",\"vertices\":[";
+            for (size_t vi = 0; vi < marker.vertices.size(); ++vi) {
+                if (vi > 0) out += ',';
+                out += "{\"x\":"; out += std::to_string(marker.vertices[vi].first);
+                out += ",\"y\":"; out += std::to_string(marker.vertices[vi].second);
+                out += '}';
             }
-            oss << "]";
+            out += ']';
         }
-        oss << "}";
-        first_marker = false;
+        out += '}';
     }
-    oss << "]";
-    return oss.str();
+    out += ']';
+    return out;
 }
 
 std::string format_vertices(const std::vector<std::pair<int, int>>& vertices, PlaceholderEncoding encoding) {
     if (vertices.empty()) {
         return (encoding == PlaceholderEncoding::json) ? "[]" : "";
     }
-    std::ostringstream oss;
+    std::string out;
     if (encoding == PlaceholderEncoding::json) {
-        oss << "[";
+        out += '[';
         for (size_t i = 0; i < vertices.size(); ++i) {
-            if (i > 0) oss << ",";
-            oss << "{\"x\":" << vertices[i].first << ",\"y\":" << vertices[i].second << "}";
+            if (i > 0) out += ',';
+            out += "{\"x\":"; out += std::to_string(vertices[i].first);
+            out += ",\"y\":"; out += std::to_string(vertices[i].second);
+            out += '}';
         }
-        oss << "]";
+        out += ']';
     } else {
         for (size_t i = 0; i < vertices.size(); ++i) {
-            if (i > 0) oss << "|";
-            oss << vertices[i].first << "," << vertices[i].second;
+            if (i > 0) out += '|';
+            out += std::to_string(vertices[i].first);
+            out += ',';
+            out += std::to_string(vertices[i].second);
         }
     }
-    return oss.str();
+    return out;
 }
 
 std::string sprite_name_from_path(const std::string& path) {
@@ -1184,11 +1191,9 @@ bool parse_transform_file(const fs::path& path, Transform& out, std::string& err
 }
 
 std::string format_double(double value) {
-    std::ostringstream oss;
-    oss.unsetf(std::ios::floatfield);
-    oss.precision(k_default_precision);
-    oss << value;
-    return oss.str();
+    std::array<char, 32> buf{};
+    int n = std::snprintf(buf.data(), buf.size(), "%.*g", k_default_precision, value);
+    return std::string(buf.data(), n > 0 ? static_cast<size_t>(n) : 0);
 }
 
 #ifndef SPRAT_GLOBAL_TRANSFORMS_DIR
@@ -1405,9 +1410,8 @@ int run_spratconvert(int argc, char** argv) {
 
     std::string input_text;
     {
-        std::ostringstream buffer;
-        buffer << std::cin.rdbuf();
-        input_text = buffer.str();
+        input_text.assign(std::istreambuf_iterator<char>(std::cin),
+                          std::istreambuf_iterator<char>());
     }
     std::istringstream layout_iss(input_text);
     Layout layout;
@@ -1521,30 +1525,36 @@ int run_spratconvert(int argc, char** argv) {
     global_vars["multipack"] = layout.multipack ? "true" : "false";
     global_vars["output_pattern"] = output_pattern_arg;
     
-    std::ostringstream atlases_oss;
-    if (placeholder_encoding == PlaceholderEncoding::json) {
-        atlases_oss << "[";
-        for (size_t i = 0; i < layout.atlases.size(); ++i) {
-            if (i > 0) atlases_oss << ",";
-            std::string a_path = format_atlas_path(output_pattern_arg, static_cast<int>(i));
-            atlases_oss << "{\"width\":" << layout.atlases[i].width << ",\"height\":" << layout.atlases[i].height;
-            if (!a_path.empty()) {
-                atlases_oss << ",\"path\":\"" << escape_json(a_path) << "\"";
+    {
+        std::string atlases_str;
+        if (placeholder_encoding == PlaceholderEncoding::json) {
+            atlases_str += '[';
+            for (size_t i = 0; i < layout.atlases.size(); ++i) {
+                if (i > 0) atlases_str += ',';
+                std::string a_path = format_atlas_path(output_pattern_arg, static_cast<int>(i));
+                atlases_str += "{\"width\":"; atlases_str += std::to_string(layout.atlases[i].width);
+                atlases_str += ",\"height\":"; atlases_str += std::to_string(layout.atlases[i].height);
+                if (!a_path.empty()) {
+                    atlases_str += ",\"path\":\""; atlases_str += escape_json(a_path); atlases_str += '"';
+                }
+                atlases_str += '}';
             }
-            atlases_oss << "}";
-        }
-        atlases_oss << "]";
-    } else if (placeholder_encoding == PlaceholderEncoding::xml) {
-        for (size_t i = 0; i < layout.atlases.size(); ++i) {
-            std::string a_path = format_atlas_path(output_pattern_arg, static_cast<int>(i));
-            atlases_oss << "<atlas index=\"" << i << "\" width=\"" << layout.atlases[i].width << "\" height=\"" << layout.atlases[i].height << "\"";
-            if (!a_path.empty()) {
-                atlases_oss << " path=\"" << escape_xml(a_path) << "\"";
+            atlases_str += ']';
+        } else if (placeholder_encoding == PlaceholderEncoding::xml) {
+            for (size_t i = 0; i < layout.atlases.size(); ++i) {
+                std::string a_path = format_atlas_path(output_pattern_arg, static_cast<int>(i));
+                atlases_str += "<atlas index=\""; atlases_str += std::to_string(i);
+                atlases_str += "\" width=\""; atlases_str += std::to_string(layout.atlases[i].width);
+                atlases_str += "\" height=\""; atlases_str += std::to_string(layout.atlases[i].height);
+                atlases_str += '"';
+                if (!a_path.empty()) {
+                    atlases_str += " path=\""; atlases_str += escape_xml(a_path); atlases_str += '"';
+                }
+                atlases_str += " />\n";
             }
-            atlases_oss << " />\n";
         }
+        global_vars["atlases"] = std::move(atlases_str);
     }
-    global_vars["atlases"] = atlases_oss.str();
     global_vars["scale"] = format_double(layout.scale);
     global_vars["extrude"] = std::to_string(layout.extrude);
     global_vars["sprite_count"] = std::to_string(layout.sprites.size());
@@ -1577,6 +1587,7 @@ int run_spratconvert(int argc, char** argv) {
         vars["marker_sprite_path"] = marker.sprite_path;
     };
 
+    std::map<std::string, std::string> marker_vars_buf;
     auto populate_sprite_vars = [&](std::map<std::string, std::string>& vars, size_t i) {
         const Sprite& s = layout.sprites[i];
         vars["index"] = std::to_string(i);
@@ -1623,9 +1634,9 @@ int run_spratconvert(int argc, char** argv) {
                     if (j > 0 && !transform.sprite_markers_separator.empty()) {
                         sprite_markers_formatted += replace_tokens(transform.sprite_markers_separator, vars, placeholder_encoding);
                     }
-                    std::map<std::string, std::string> mvars = vars;
-                    populate_marker_vars(mvars, sprite_markers[i][j], j);
-                    sprite_markers_formatted += replace_tokens(transform.sprite_marker, mvars, placeholder_encoding);
+                    marker_vars_buf = vars;
+                    populate_marker_vars(marker_vars_buf, sprite_markers[i][j], j);
+                    sprite_markers_formatted += replace_tokens(transform.sprite_marker, marker_vars_buf, placeholder_encoding);
                 }
                 if (!transform.sprite_markers_footer.empty()) {
                     sprite_markers_formatted += replace_tokens(transform.sprite_markers_footer, vars, placeholder_encoding);
@@ -1646,11 +1657,11 @@ int run_spratconvert(int argc, char** argv) {
             std::cout << replace_tokens(transform.markers_header, global_vars, placeholder_encoding);
         }
         if (!transform.markers.empty()) {
+            std::map<std::string, std::string> vars = global_vars;
             for (size_t i = 0; i < marker_items.size(); ++i) {
                 if (i > 0 && !transform.markers_separator.empty()) {
                     std::cout << replace_tokens(transform.markers_separator, global_vars, placeholder_encoding);
                 }
-                std::map<std::string, std::string> vars = global_vars;
                 populate_marker_vars(vars, marker_items[i], i);
                 std::cout << replace_tokens(transform.markers, vars, placeholder_encoding);
             }
@@ -1663,14 +1674,24 @@ int run_spratconvert(int argc, char** argv) {
     }
 
     if (!transform.atlas.empty()) {
+        // Pre-group sprite indices by atlas_index
+        std::vector<std::vector<size_t>> sprites_by_atlas(layout.atlases.size());
+        for (size_t j = 0; j < layout.sprites.size(); ++j) {
+            int ai = layout.sprites[j].atlas_index;
+            if (ai >= 0 && static_cast<size_t>(ai) < layout.atlases.size()) {
+                sprites_by_atlas[static_cast<size_t>(ai)].push_back(j);
+            }
+        }
+
         if (!transform.atlas_header.empty()) {
             std::cout << replace_tokens(transform.atlas_header, global_vars, placeholder_encoding);
         }
+        std::map<std::string, std::string> avars = global_vars;
+        std::map<std::string, std::string> svars;
         for (size_t i = 0; i < layout.atlases.size(); ++i) {
             if (i > 0 && !transform.atlas_separator.empty()) {
                 std::cout << replace_tokens(transform.atlas_separator, global_vars, placeholder_encoding);
             }
-            std::map<std::string, std::string> avars = global_vars;
             avars["atlas_index"] = std::to_string(i);
             avars["atlas_width"] = std::to_string(layout.atlases[i].width);
             avars["atlas_height"] = std::to_string(layout.atlases[i].height);
@@ -1682,15 +1703,14 @@ int run_spratconvert(int argc, char** argv) {
             avars["atlas_path_css"] = escape_css_string(a_path);
 
             std::string sprites_in_atlas;
-            for (size_t j = 0; j < layout.sprites.size(); ++j) {
-                if (layout.sprites[j].atlas_index == (int)i) {
-                    if (!sprites_in_atlas.empty() && !transform.separator.empty()) {
-                        sprites_in_atlas += replace_tokens(transform.separator, avars, placeholder_encoding);
-                    }
-                    std::map<std::string, std::string> svars = avars;
-                    populate_sprite_vars(svars, j);
-                    sprites_in_atlas += replace_tokens(transform.sprite, svars, placeholder_encoding);
+            const auto& atlas_sprite_indices = sprites_by_atlas[i];
+            for (size_t si = 0; si < atlas_sprite_indices.size(); ++si) {
+                if (si > 0 && !transform.separator.empty()) {
+                    sprites_in_atlas += replace_tokens(transform.separator, avars, placeholder_encoding);
                 }
+                svars = avars;
+                populate_sprite_vars(svars, atlas_sprite_indices[si]);
+                sprites_in_atlas += replace_tokens(transform.sprite, svars, placeholder_encoding);
             }
             avars["sprites"] = sprites_in_atlas;
             std::cout << replace_tokens(transform.atlas, avars, placeholder_encoding);
@@ -1699,11 +1719,11 @@ int run_spratconvert(int argc, char** argv) {
             std::cout << replace_tokens(transform.atlas_footer, global_vars, placeholder_encoding);
         }
     } else {
+        std::map<std::string, std::string> vars = global_vars;
         for (size_t i = 0; i < layout.sprites.size(); ++i) {
             if (i > 0 && !transform.separator.empty()) {
                 std::cout << replace_tokens(transform.separator, global_vars, placeholder_encoding);
             }
-            std::map<std::string, std::string> vars = global_vars;
             populate_sprite_vars(vars, i);
             std::cout << replace_tokens(transform.sprite, vars, placeholder_encoding);
         }
@@ -1717,19 +1737,19 @@ int run_spratconvert(int argc, char** argv) {
             std::cout << replace_tokens(transform.animations_header, global_vars, placeholder_encoding);
         }
         if (!transform.animations.empty()) {
+            std::map<std::string, std::string> vars = global_vars;
             for (size_t i = 0; i < normalized_animation_items.size(); ++i) {
                 if (i > 0 && !transform.animations_separator.empty()) {
                     std::cout << replace_tokens(transform.animations_separator, global_vars, placeholder_encoding);
                 }
                 const AnimationItem& animation = normalized_animation_items[i];
-                std::map<std::string, std::string> vars = global_vars;
                 vars["animation_index"] = std::to_string(i);
                 vars["animation_name"] = animation.name;
                 vars["animation_sprite_count"] = std::to_string(animation.sprite_indexes.size());
                 vars["sprite_indexes"] = format_sprite_indexes(animation.sprite_indexes, placeholder_encoding);
                 vars["fps"] = std::to_string(animation.fps);
                 vars["animation_fps"] = vars["fps"];
-        std::cout << replace_tokens(transform.animations, vars, placeholder_encoding);
+                std::cout << replace_tokens(transform.animations, vars, placeholder_encoding);
             }
         }
         if (!transform.animations_footer.empty()) {
