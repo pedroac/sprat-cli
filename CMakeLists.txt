@@ -315,10 +315,16 @@ target_compile_definitions(spratlayout PRIVATE
 # when multiple executables complete simultaneously in a parallel build.
 # NOTE: Use a static path instead of $<TARGET_FILE_DIR:spratlayout> to avoid a
 # cyclic dependency (sprat_copy_transforms -> spratlayout -> sprat_copy_transforms).
+# On multi-config generators (MSVC, Xcode) binaries land in a per-config subdir
+# (e.g. build/Release/), so append /$<CONFIG> to match $<TARGET_FILE_DIR:...>.
 if(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(_sprat_bin_dir ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 else()
     set(_sprat_bin_dir ${CMAKE_CURRENT_BINARY_DIR})
+endif()
+get_property(_sprat_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_sprat_multi_config)
+    string(APPEND _sprat_bin_dir "/$<CONFIG>")
 endif()
 add_custom_target(sprat_copy_transforms ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
