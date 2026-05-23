@@ -69,7 +69,7 @@ extension=.json
 
 [animations]
   [animation]
-    {"name": "{{animation_name}}", "fps": {{fps}}, "sprite_indexes": {{sprite_indexes}}, "sprite_names": {{sprite_names}}}
+    {"name": "{{animation_name}}"[if is_alias="false"], "fps": {{fps}}, "sprite_indexes": {{sprite_indexes}}, "sprite_names": {{sprite_names}}[/if][if is_alias="true"], "alias": "{{animation_alias}}"[/if][if flip!=""], "flip": "{{flip}}"[/if]}
   [/animation]
 [/animations]
 

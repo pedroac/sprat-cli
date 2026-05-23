@@ -1467,7 +1467,9 @@ void print_usage() {
               << tr("  --rotate                   Allow 90-degree sprite rotation during packing\n")
               << tr("  --multipack                Split into multiple atlases if they don't fit\n")
               << tr("  --deduplicate <mode>       Deduplication mode: none, exact, perceptual\n")
-              << tr("  --sort name|none           Order of sprites in layout (default: none)\n")
+              << tr("  --sort name|none|stable[:<metric>]  Order of sprites in layout (default: none)\n")
+              << tr("                             stable: deterministic sort by size then path; <metric> is\n")
+              << tr("                             area (default), maxside, height, width, or perimeter\n")
               << tr("  --threads N                Number of worker threads\n")
               << tr("  --debug                    Enable detailed error reporting and debug visualization\n")
               << tr("  Directory inputs honor .spratlayoutignore; list files may use exclude \"path\"\n")
@@ -2221,9 +2223,17 @@ bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int pad
     return true;
 }
 
-enum class FrameSort : std::uint8_t { Name, None };
+enum class FrameSort : std::uint8_t { Name, None, Stable };
 
-bool parse_frame_sort_from_string(const std::string& value, FrameSort& out) {
+enum class StableMetric : std::uint8_t {
+    Area,
+    MaxSide,
+    Height,
+    Width,
+    Perimeter
+};
+
+bool parse_frame_sort_from_string(const std::string& value, FrameSort& out, StableMetric& out_metric) {
     std::string lower = to_lower_copy(value);
     if (lower == "name") {
         out = FrameSort::Name;
@@ -2232,6 +2242,16 @@ bool parse_frame_sort_from_string(const std::string& value, FrameSort& out) {
     if (lower == "none") {
         out = FrameSort::None;
         return true;
+    }
+    if (lower == "stable" || lower.starts_with("stable:")) {
+        out = FrameSort::Stable;
+        const std::string metric_str = lower.size() > 7 ? lower.substr(7) : "area";
+        if (metric_str == "area")      { out_metric = StableMetric::Area;      return true; }
+        if (metric_str == "maxside")   { out_metric = StableMetric::MaxSide;   return true; }
+        if (metric_str == "height")    { out_metric = StableMetric::Height;    return true; }
+        if (metric_str == "width")     { out_metric = StableMetric::Width;     return true; }
+        if (metric_str == "perimeter") { out_metric = StableMetric::Perimeter; return true; }
+        return false;
     }
     return false;
 }
@@ -2304,6 +2324,60 @@ bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
             return true;
     }
     return false;
+}
+
+void sort_sprites_stable(std::vector<Sprite>& sprites, StableMetric metric) {
+    auto path_cmp = [](const Sprite& a, const Sprite& b) {
+        return sprat::core::compare_natural(a.path, b.path) < 0;
+    };
+    switch (metric) {
+        case StableMetric::Area:
+            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+                const long long area_a = static_cast<long long>(a.w) * a.h;
+                const long long area_b = static_cast<long long>(b.w) * b.h;
+                if (area_a != area_b) { return area_a > area_b; }
+                if (a.h != b.h) { return a.h > b.h; }
+                if (a.w != b.w) { return a.w > b.w; }
+                return path_cmp(a, b);
+            });
+            break;
+        case StableMetric::MaxSide:
+            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+                const int max_a = std::max(a.w, a.h);
+                const int max_b = std::max(b.w, b.h);
+                if (max_a != max_b) { return max_a > max_b; }
+                const long long area_a = static_cast<long long>(a.w) * a.h;
+                const long long area_b = static_cast<long long>(b.w) * b.h;
+                if (area_a != area_b) { return area_a > area_b; }
+                return path_cmp(a, b);
+            });
+            break;
+        case StableMetric::Height:
+            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+                if (a.h != b.h) { return a.h > b.h; }
+                if (a.w != b.w) { return a.w > b.w; }
+                return path_cmp(a, b);
+            });
+            break;
+        case StableMetric::Width:
+            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+                if (a.w != b.w) { return a.w > b.w; }
+                if (a.h != b.h) { return a.h > b.h; }
+                return path_cmp(a, b);
+            });
+            break;
+        case StableMetric::Perimeter:
+            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+                const int p_a = a.w + a.h;
+                const int p_b = b.w + b.h;
+                if (p_a != p_b) { return p_a > p_b; }
+                const long long area_a = static_cast<long long>(a.w) * a.h;
+                const long long area_b = static_cast<long long>(b.w) * b.h;
+                if (area_a != area_b) { return area_a > area_b; }
+                return path_cmp(a, b);
+            });
+            break;
+    }
 }
 
 struct Rect {
@@ -3104,6 +3178,7 @@ int run_spratlayout(int argc, char** argv) {
     std::string deduplicateMode = "none";
     bool has_deduplicate_override = false;
     FrameSort frame_sort = FrameSort::Name;
+    StableMetric stable_metric = StableMetric::Area;
     bool has_frame_sort_override = false;
     unsigned int thread_limit = 0;
     bool has_threads_override = false;
@@ -3244,7 +3319,7 @@ int run_spratlayout(int argc, char** argv) {
             has_deduplicate_override = true;
         } else if (arg == "--sort" && i + 1 < argc) {
             std::string value = argv[++i];
-            if (!parse_frame_sort_from_string(value, frame_sort)) {
+            if (!parse_frame_sort_from_string(value, frame_sort, stable_metric)) {
                 std::cerr << tr("Invalid sort value: ") << value << "\n";
                 return 1;
             }
@@ -3752,9 +3827,10 @@ int run_spratlayout(int argc, char** argv) {
         do_sort = (frame_sort == FrameSort::Name);
     }
 
-    const bool enforce_name_order = (has_frame_sort_override && frame_sort == FrameSort::Name);
+    const bool enforce_name_order   = (has_frame_sort_override && frame_sort == FrameSort::Name);
+    const bool enforce_stable_order = (has_frame_sort_override && frame_sort == FrameSort::Stable);
 
-    if (do_sort) {
+    if (do_sort || enforce_stable_order) {
         std::ranges::sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
             int cmp = sprat::core::compare_natural(lhs.path, rhs.path);
             if (cmp != 0) {
@@ -3772,7 +3848,7 @@ int run_spratlayout(int argc, char** argv) {
         return 1;
     }
 
-    const bool is_file = !do_sort;
+    const bool is_file = !do_sort && !enforce_stable_order;
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         padding, extrude, scale, trim_transparent, allow_rotate, is_file, deduplicateMode, sources);
@@ -4189,6 +4265,10 @@ int run_spratlayout(int argc, char** argv) {
         return 1;
     }
 
+    if (enforce_stable_order) {
+        sort_sprites_stable(sprites, stable_metric);
+    }
+
     bool reused_layout_seed = false;
     bool have_layout_seed = false;
     LayoutSeedCache seed_cache;
@@ -4210,7 +4290,7 @@ int run_spratlayout(int argc, char** argv) {
         atlases.push_back({atlas_width, atlas_height});
         for (auto& s : sprites) { s.atlas_index = 0; }
     } else if (multipack) {
-        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, enforce_name_order, atlases)) {
+        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, enforce_name_order || enforce_stable_order, atlases)) {
             std::cerr << tr("Error: failed to compute multipack layout\n");
             return 1;
         }
@@ -4239,14 +4319,15 @@ int run_spratlayout(int argc, char** argv) {
             }
 
             // Pre-build sorted sprite arrays for each sort mode.
+            const bool enforce_sort_order_pot = enforce_name_order || enforce_stable_order;
             std::array<std::vector<Sprite>, k_sort_mode_count> pot_sorted;
             pot_sorted[0] = sprites;
-            if (!(enforce_name_order && sort_modes[0] != SortMode::None)) {
+            if (!(enforce_sort_order_pot && sort_modes[0] != SortMode::None)) {
                 sort_sprites_by_mode(pot_sorted[0], sort_modes[0]);
             }
             for (size_t si = 1; si < sort_modes.size(); ++si) {
                 pot_sorted[si] = pot_sorted[0]; // copy already-allocated vector
-                if (!(enforce_name_order && sort_modes[si] != SortMode::None)) {
+                if (!(enforce_sort_order_pot && sort_modes[si] != SortMode::None)) {
                     sort_sprites_by_mode(pot_sorted[si], sort_modes[si]);
                 }
             }
@@ -4279,7 +4360,7 @@ int run_spratlayout(int argc, char** argv) {
                     return 1;
                 }
                 for (size_t si = 0; si < sort_modes.size(); ++si) {
-                    if (enforce_name_order && sort_modes[si] != SortMode::None) {
+                    if (enforce_sort_order_pot && sort_modes[si] != SortMode::None) {
                         continue;
                     }
                     trial_sprites.assign(pot_sorted[si].begin(), pot_sorted[si].end());
@@ -4341,7 +4422,7 @@ int run_spratlayout(int argc, char** argv) {
                     }
 
                     for (size_t si = 0; si < sort_modes.size(); ++si) {
-                        if (enforce_name_order && sort_modes[si] != SortMode::None) {
+                        if (enforce_sort_order_pot && sort_modes[si] != SortMode::None) {
                             continue;
                         }
                         trial_sprites.assign(pot_sorted[si].begin(), pot_sorted[si].end());
@@ -4417,14 +4498,15 @@ int run_spratlayout(int argc, char** argv) {
         worker_count = 1;
 #endif
 
+        const bool enforce_sort_order_compact = enforce_name_order || enforce_stable_order;
         std::array<std::vector<Sprite>, k_sort_mode_count> sorted_sprites_by_mode;
         sorted_sprites_by_mode[0] = sprites;
-        if (!(enforce_name_order && sort_modes[0] != SortMode::None)) {
+        if (!(enforce_sort_order_compact && sort_modes[0] != SortMode::None)) {
             sort_sprites_by_mode(sorted_sprites_by_mode[0], sort_modes[0]);
         }
         for (size_t sort_idx = 1; sort_idx < sort_modes.size(); ++sort_idx) {
             sorted_sprites_by_mode[sort_idx] = sorted_sprites_by_mode[0];
-            if (!(enforce_name_order && sort_modes[sort_idx] != SortMode::None)) {
+            if (!(enforce_sort_order_compact && sort_modes[sort_idx] != SortMode::None)) {
                 sort_sprites_by_mode(sorted_sprites_by_mode[sort_idx], sort_modes[sort_idx]);
             }
         }
@@ -4491,7 +4573,7 @@ int run_spratlayout(int argc, char** argv) {
 
         std::vector<Sprite> seed_sprites;
         for (size_t sort_idx = 0; sort_idx < sort_modes.size(); ++sort_idx) {
-            if (enforce_name_order && sort_modes[sort_idx] != SortMode::None) {
+            if (enforce_sort_order_compact && sort_modes[sort_idx] != SortMode::None) {
                 continue;
             }
             for (RectHeuristic rect_heuristic : rect_heuristics) {
@@ -4668,7 +4750,7 @@ int run_spratlayout(int argc, char** argv) {
 
                         bool continue_width_search = true;
                         for (size_t sort_idx : k_guided_sort_indices) {
-                            if (enforce_name_order && sort_idx != k_sort_mode_index_none) {
+                            if (enforce_sort_order_compact && sort_idx != k_sort_mode_index_none) {
                                 continue;
                             }
 
@@ -4884,9 +4966,10 @@ int run_spratlayout(int argc, char** argv) {
             }
 
             std::vector<Sprite> sorted_sprites = sprites;
-            const bool enforce_fast_order = has_frame_sort_override ? (frame_sort == FrameSort::Name) : do_sort;
-            if (enforce_fast_order) {
+            if (enforce_name_order) {
                 sort_sprites_by_mode(sorted_sprites, SortMode::None);
+            } else if (enforce_stable_order) {
+                sort_sprites_stable(sorted_sprites, stable_metric);
             } else {
                 sort_sprites_by_mode(sorted_sprites, SortMode::Height);
             }

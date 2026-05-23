@@ -67,7 +67,7 @@ extension=.xml
 
 [animations]
   [animation]
-    <animation index="{{animation_index}}" name="{{animation_name}}" fps="{{fps}}" sprite_indexes="{{sprite_indexes}}" />
+    [if is_alias="false"]<animation index="{{animation_index}}" name="{{animation_name}}" fps="{{fps}}" sprite_indexes="{{sprite_indexes}}" />[/if][if is_alias="true"]<animation index="{{animation_index}}" name="{{animation_name}}" alias="{{animation_alias}}" flip="{{flip}}" />[/if]
   [/animation]
 [/animations]
 

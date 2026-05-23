@@ -98,6 +98,8 @@ struct AnimationItem {
     std::string name;
     std::vector<int> sprite_indexes;
     int fps = DEFAULT_ANIMATION_FPS;
+    std::string alias_source;
+    std::string flip;
 };
 
 using Sprite = sprat::core::Sprite;
@@ -868,19 +870,49 @@ std::vector<AnimationItem> parse_animations_data(
                 pos = trimmed.find(name, pos) + name.length();
             }
 
-            int fps = animation_fps_out > 0 ? animation_fps_out : DEFAULT_ANIMATION_FPS;
-            int custom_fps = 0;
-            std::istringstream rest(trimmed.substr(pos));
-            if (rest >> custom_fps) {
-                fps = custom_fps;
-            }
-
             AnimationItem item;
             item.index = animations.size();
             item.name = name;
-            item.fps = fps;
-            animations.push_back(std::move(item));
-            current_anim = &animations.back();
+            item.fps = animation_fps_out > 0 ? animation_fps_out : DEFAULT_ANIMATION_FPS;
+
+            std::string next_token;
+            {
+                std::istringstream rest(trimmed.substr(pos));
+                rest >> next_token;
+            }
+
+            if (next_token == "alias") {
+                size_t alias_kw_pos = trimmed.find("alias", pos);
+                size_t alias_src_pos = alias_kw_pos + 5;
+                while (alias_src_pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[alias_src_pos]))) {
+                    alias_src_pos++;
+                }
+                if (alias_src_pos < trimmed.size() && trimmed[alias_src_pos] == '"') {
+                    std::string error;
+                    std::string alias_source;
+                    if (parse_quoted(trimmed, alias_src_pos, alias_source, error)) {
+                        item.alias_source = alias_source;
+                    }
+                }
+                std::string tok;
+                std::istringstream flip_rest(trimmed.substr(alias_src_pos));
+                while (flip_rest >> tok) {
+                    if (tok == "flip") {
+                        std::string val;
+                        if (flip_rest >> val) item.flip = val;
+                    }
+                }
+                animations.push_back(std::move(item));
+                current_anim = nullptr;
+            } else {
+                int custom_fps = 0;
+                std::istringstream fps_iss(next_token);
+                if (fps_iss >> custom_fps) {
+                    item.fps = custom_fps;
+                }
+                animations.push_back(std::move(item));
+                current_anim = &animations.back();
+            }
         } else if (cmd == "-") {
             std::string subcmd;
             if (!(liss >> subcmd) || subcmd != "frame") {
@@ -1759,6 +1791,8 @@ int run_spratconvert(int argc, char** argv) {
         vars["trim_bottom"] = std::to_string(s.trim_bottom);
         const bool has_trim = (s.src_x != 0) || (s.src_y != 0) || (s.trim_right != 0) || (s.trim_bottom != 0);
         vars["has_trim"] = has_trim ? "true" : "false";
+        vars["source_w"] = std::to_string(s.w + s.src_x + s.trim_right);
+        vars["source_h"] = std::to_string(s.h + s.src_y + s.trim_bottom);
         vars["sprite_markers_count"] = std::to_string(sprite_markers[i].size());
         vars["markers_json"] = format_markers_json(sprite_markers[i]); // Shortcut for quick JSON inclusion
 
@@ -1903,6 +1937,9 @@ int run_spratconvert(int argc, char** argv) {
                 vars["sprite_names"] = format_sprite_names(animation.sprite_indexes, sprite_names, placeholder_encoding);
                 vars["fps"] = std::to_string(animation.fps);
                 vars["animation_fps"] = vars["fps"];
+                vars["animation_alias"] = animation.alias_source;
+                vars["is_alias"]        = animation.alias_source.empty() ? "false" : "true";
+                vars["flip"]            = animation.flip;
                 std::cout << replace_tokens(transform.animations, vars, placeholder_encoding);
             }
         }

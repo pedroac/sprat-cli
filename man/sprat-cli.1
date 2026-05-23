@@ -173,6 +173,10 @@ Placeholders:
 .IP "\(bu" 2
 \fBSprite fields\fR: \fB{{name}}\fR (basename without extension), \fB{{path}}\fR, \fB{{x}}\fR, \fB{{y}}\fR, \fB{{w}}\fR, \fB{{h}}\fR.
 .IP "\(bu" 2
+\fBSource size\fR: \fB{{source_w}}\fR, \fB{{source_h}}\fR \(em original sprite dimensions before trimming (\fBw\fR + \fBtrim_left\fR + \fBtrim_right\fR, and \fBh\fR + \fBtrim_top\fR + \fBtrim_bottom\fR). Required by formats such as Phaser Atlas JSON and Unity TexturePacker JSON.
+.IP "\(bu" 2
+\fBTrim fields\fR: \fB{{trim_left}}\fR, \fB{{trim_top}}\fR, \fB{{trim_right}}\fR, \fB{{trim_bottom}}\fR (pixels removed from each edge), \fB{{src_x}}\fR/\fB{{src_y}}\fR (aliases for \fBtrim_left\fR/\fBtrim_top\fR), \fB{{has_trim}}\fR (\fBtrue\fR when any trim value is non-zero).
+.IP "\(bu" 2
 \fBPivot points\fR: \fB{{pivot_x}}\fR, \fB{{pivot_y}}\fR. These are resolved from markers named \fBpivot\fR of type \fBpoint\fR (either per-sprite or global).
 .IP "\(bu" 2
 \fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR).
@@ -336,6 +340,15 @@ Supported marker types: \fBpoint\fR (\fBx,y\fR), \fBcircle\fR (\fBx,y radius\fR)
 \fB\-\-animations\fR \fIPATH\fR
 Load external animations plaintext file using the \fBanimation\fR and \fB- frame\fR DSL.
 An optional \fBroot\fR directive sets a base directory; relative quoted frame paths are resolved against it.
+.PP
+An animation can be declared as an alias of another animation using the \fBalias\fR keyword:
+.PP
+animation \fI"name"\fR alias \fI"source"\fR [\fBh-flip\fR] [\fBv-flip\fR]
+.PP
+Alias declarations carry no frame list; instead they reference another animation by name and attach optional rendering hints.
+\fBh-flip\fR and \fBv-flip\fR are independent and order-insensitive.
+The source name is stored as metadata; validation is the runtime's responsibility.
+In the output, alias entries carry an \fBalias\fR field in place of \fBfps\fR and \fBsprite_indexes\fR.
 .TP
 \fB\-\-auto\-animations\fR
 Automatically group frames into animations by name pattern.

@@ -98,6 +98,25 @@ grep -q '^BEGIN 64x32 count=2' "$tmp_dir/out.custom"
 grep -q '0|./frames/a.png|0,0 16x16 rotated=false' "$tmp_dir/out.custom"
 grep -q '1|./frames/b.png|16,0 8x8 rotated=true' "$tmp_dir/out.custom"
 
+source_size_transform="$tmp_dir/source_size.transform"
+cat > "$source_size_transform" <<'SRCSIZE'
+[meta]
+name=source_size
+[/meta]
+
+[sprites]
+  [sprite]
+{{index}}|{{source_w}}x{{source_h}}|{{has_trim}}
+  [/sprite]
+[/sprites]
+SRCSIZE
+
+"$convert_bin" --transform "$(fix_path "$source_size_transform")" < "$layout_file" > "$tmp_dir/out.source_size"
+# sprite a: no trim, source size equals packed size (16x16)
+grep -q '0|16x16|false' "$tmp_dir/out.source_size"
+# sprite b: trim_left=1 trim_top=2 trim_right=3 trim_bottom=4, packed 8x8 => source 12x14
+grep -q '1|12x14|true' "$tmp_dir/out.source_size"
+
 markers_file="$tmp_dir/markers.txt"
 cat > "$markers_file" <<'MARKERS'
 path "./frames/a.png"
@@ -356,5 +375,37 @@ fi
 grep -Fq '"name":"a\"q"' "$tmp_dir/out.json.autoescape"
 grep -Fq '"path":"./frames/a\"q.png"' "$tmp_dir/out.json.autoescape"
 grep -Fq '"name":"hit\"zone"' "$tmp_dir/out.json.autoescape"
+
+# --- Animation alias test ---
+animations_alias_file="$tmp_dir/animations_alias.txt"
+cat > "$animations_alias_file" <<'ALIASANIMS'
+animation "run"
+- frame "./frames/a.png"
+- frame "b"
+animation "idle"
+- frame 1
+animation "run-alias" alias "run" flip h
+ALIASANIMS
+
+"$convert_bin" --transform json --animations "$(fix_path "$animations_alias_file")" < "$layout_file" > "$tmp_dir/out.alias.json"
+grep -q '"name": "run-alias"' "$tmp_dir/out.alias.json"
+grep -q '"alias": "run"' "$tmp_dir/out.alias.json"
+grep -q '"flip": "h"' "$tmp_dir/out.alias.json"
+if grep -q '"flip": "v' "$tmp_dir/out.alias.json"; then
+  echo "alias with h-only flip should not have v in flip value" >&2
+  exit 1
+fi
+if grep -q '"name": "run-alias".*"fps"' "$tmp_dir/out.alias.json"; then
+  echo "alias entry should not have fps field" >&2
+  exit 1
+fi
+if grep -q '"name": "run-alias".*"sprite_indexes"' "$tmp_dir/out.alias.json"; then
+  echo "alias entry should not have sprite_indexes field" >&2
+  exit 1
+fi
+# regular animations unaffected
+grep -q '"name": "run"' "$tmp_dir/out.alias.json"
+grep -q '"fps": 8' "$tmp_dir/out.alias.json"
+grep -q '"sprite_indexes": \[0,1\]' "$tmp_dir/out.alias.json"
 
 echo "convert_test.sh: ok"

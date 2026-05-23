@@ -30,7 +30,7 @@ marker,{{marker_index}},{{marker_name}},{{marker_type}},{{marker_x}},{{marker_y}
 
 [animations]
   [animation]
-animation,{{animation_index}},{{animation_name}},{{fps}},{{sprite_indexes}}
+[if is_alias="false"]animation,{{animation_index}},{{animation_name}},{{fps}},{{sprite_indexes}}[/if][if is_alias="true"]animation,{{animation_index}},{{animation_name}},alias,{{animation_alias}}[/if][if flip!=""],{{flip}}[/if]
   [/animation]
 [/animations]
 
