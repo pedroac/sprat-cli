@@ -1145,7 +1145,8 @@ enum class InputType : std::uint8_t {
     Directory,
     ListFile,
     TarFile,
-    StdinTar
+    StdinTar,
+    StdinList
 };
 
 struct InputContext {
@@ -1225,6 +1226,13 @@ bool load_content_from_stdin(InputContext& out_context) {
     out_context.type = InputType::StdinTar;
     out_context.working_folder = temp_dir;
     
+    return true;
+}
+
+bool load_list_from_stdin(InputContext& out_context, const fs::path& cwd) {
+    out_context.type = InputType::StdinList;
+    out_context.working_folder = cwd;
+    out_context.temp_dirs_to_cleanup.clear();
     return true;
 }
 
@@ -1437,6 +1445,7 @@ std::string to_hex_size_t(size_t value) {
 
 void print_usage() {
     std::cout << tr("Usage: spratlayout <folder> [OPTIONS]\n")
+              << tr("       spratlayout --stdin-list [OPTIONS]\n")
               << tr("\n")
               << tr("Scan an image folder/list/tar and write a text layout to standard output.\n")
               << tr("Rotated sprites are emitted with a trailing 'rotated' token.\n")
@@ -1472,6 +1481,7 @@ void print_usage() {
               << tr("                             area (default), maxside, height, width, or perimeter\n")
               << tr("  --threads N                Number of worker threads\n")
               << tr("  --debug                    Enable detailed error reporting and debug visualization\n")
+              << tr("  --stdin-list               Read image paths from stdin (one per line) instead of <folder>\n")
               << tr("  Directory inputs honor .spratlayoutignore; list files may use exclude \"path\"\n")
               << tr("  --help, -h                 Show this help message\n")
               << tr("  --version, -v              Show version\n");
@@ -3183,6 +3193,7 @@ int run_spratlayout(int argc, char** argv) {
     unsigned int thread_limit = 0;
     bool has_threads_override = false;
     bool show_profiles_config = false;
+    bool stdin_list = false;
 
     // parse args
     for (int i = 1; i < argc; ++i) {
@@ -3331,6 +3342,8 @@ int run_spratlayout(int argc, char** argv) {
                 return 1;
             }
             has_threads_override = true;
+        } else if (arg == "--stdin-list") {
+            stdin_list = true;
         } else if (arg.starts_with("-")) {
             std::cerr << tr("Unknown argument: ") << arg << "\n";
             return 1;
@@ -3358,7 +3371,7 @@ int run_spratlayout(int argc, char** argv) {
         return 0;
     }
 
-    if (folder.empty()) {
+    if (folder.empty() && !stdin_list) {
         print_usage();
         return 1;
     }
@@ -3585,9 +3598,16 @@ int run_spratlayout(int argc, char** argv) {
     }
 
     InputContext input_context;
-    
-    // Check if we should read from stdin (when folder is "-")
-    if (folder == "-") {
+
+    if (stdin_list) {
+#ifdef _WIN32
+        _setmode(_fileno(stdin), _O_TEXT);
+#endif
+        if (!load_list_from_stdin(input_context, cwd)) {
+            std::cerr << tr("Error: Failed to initialize stdin list mode\n");
+            return 1;
+        }
+    } else if (folder == "-") {
         if (!load_content_from_stdin(input_context)) {
             std::cerr << tr("Error: Failed to load content from stdin\n");
             return 1;
@@ -3742,81 +3762,94 @@ int run_spratlayout(int argc, char** argv) {
             }
         }
     } else {
-        std::ifstream list_file(input_context.working_folder);
-        if (!list_file) {
-            std::cerr << tr("Failed to open list file: ") << input_context.working_folder << "\n";
-            return 1;
-        }
-        std::string line;
-        size_t line_number = 0;
-        fs::path list_root; // optional root override from "root" directive
-        while (std::getline(list_file, line)) {
-            ++line_number;
-            std::string trimmed = trim_copy(line);
-            if (trimmed.empty() || trimmed.front() == '#') {
-                continue;
-            }
-            if (trimmed.size() >= 7 && trimmed.compare(0, 7, "exclude") == 0 &&
-                (trimmed.size() == 7 || std::isspace(static_cast<unsigned char>(trimmed[7])))) {
-                size_t pos = 7;
-                while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos])) != 0) {
-                    ++pos;
+        // Parse a list-format stream (used for both ListFile and StdinList).
+        // base_dir is used to resolve relative paths when no "root" directive is present.
+        auto parse_list_stream = [&](std::istream& stream, const fs::path& base_dir) -> bool {
+            std::string line;
+            size_t line_number = 0;
+            fs::path list_root; // optional root override from "root" directive
+            while (std::getline(stream, line)) {
+                ++line_number;
+                std::string trimmed = trim_copy(line);
+                if (trimmed.empty() || trimmed.front() == '#') {
+                    continue;
                 }
-                std::string excluded_path_text;
-                if (pos < trimmed.size() && trimmed[pos] == '"') {
-                    std::string error;
-                    if (!sprat::core::parse_quoted(trimmed, pos, excluded_path_text, error)) {
-                        std::cerr << tr("Invalid exclude path at line ") << line_number << tr(": ") << error << "\n";
-                        return 1;
+                if (trimmed.size() >= 7 && trimmed.compare(0, 7, "exclude") == 0 &&
+                    (trimmed.size() == 7 || std::isspace(static_cast<unsigned char>(trimmed[7])))) {
+                    size_t pos = 7;
+                    while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos])) != 0) {
+                        ++pos;
                     }
-                } else if (pos < trimmed.size()) {
-                    excluded_path_text = trimmed.substr(pos);
-                }
-                if (excluded_path_text.empty()) {
-                    std::cerr << tr("Invalid exclude path at line ") << line_number << tr(": ") << to_quoted(trimmed) << "\n";
-                    return 1;
-                }
-                fs::path excluded_path(excluded_path_text);
-                if (excluded_path.is_relative()) {
-                    const fs::path& base = !list_root.empty() ? list_root
-                                                              : input_context.working_folder.parent_path();
-                    excluded_path = base / excluded_path;
-                }
-                add_excluded_source(excluded_path);
-                continue;
-            }
-            // "root <path>" directive: sets the base directory for resolving relative paths
-            if (trimmed.size() >= 4 && trimmed.compare(0, 4, "root") == 0 &&
-                (trimmed.size() == 4 || std::isspace(static_cast<unsigned char>(trimmed[4])))) {
-                size_t pos = 4;
-                while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) ++pos;
-                std::string root_str;
-                if (pos < trimmed.size() && trimmed[pos] == '"') {
-                    std::string error;
-                    sprat::core::parse_quoted(trimmed, pos, root_str, error);
-                } else if (pos < trimmed.size()) {
-                    root_str = trimmed.substr(pos);
-                }
-                if (!root_str.empty()) {
-                    fs::path rp(root_str);
-                    if (rp.is_relative()) {
-                        rp = input_context.working_folder.parent_path() / rp;
+                    std::string excluded_path_text;
+                    if (pos < trimmed.size() && trimmed[pos] == '"') {
+                        std::string error;
+                        if (!sprat::core::parse_quoted(trimmed, pos, excluded_path_text, error)) {
+                            std::cerr << tr("Invalid exclude path at line ") << line_number << tr(": ") << error << "\n";
+                            return false;
+                        }
+                    } else if (pos < trimmed.size()) {
+                        excluded_path_text = trimmed.substr(pos);
                     }
-                    list_root = rp;
+                    if (excluded_path_text.empty()) {
+                        std::cerr << tr("Invalid exclude path at line ") << line_number << tr(": ") << to_quoted(trimmed) << "\n";
+                        return false;
+                    }
+                    fs::path excluded_path(excluded_path_text);
+                    if (excluded_path.is_relative()) {
+                        const fs::path& base = !list_root.empty() ? list_root : base_dir;
+                        excluded_path = base / excluded_path;
+                    }
+                    add_excluded_source(excluded_path);
+                    continue;
                 }
-                continue;
+                // "root <path>" directive: sets the base directory for resolving relative paths
+                if (trimmed.size() >= 4 && trimmed.compare(0, 4, "root") == 0 &&
+                    (trimmed.size() == 4 || std::isspace(static_cast<unsigned char>(trimmed[4])))) {
+                    size_t pos = 4;
+                    while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) ++pos;
+                    std::string root_str;
+                    if (pos < trimmed.size() && trimmed[pos] == '"') {
+                        std::string error;
+                        sprat::core::parse_quoted(trimmed, pos, root_str, error);
+                    } else if (pos < trimmed.size()) {
+                        root_str = trimmed.substr(pos);
+                    }
+                    if (!root_str.empty()) {
+                        fs::path rp(root_str);
+                        if (rp.is_relative()) {
+                            rp = base_dir / rp;
+                        }
+                        list_root = rp;
+                    }
+                    continue;
+                }
+                fs::path entry_path(trimmed);
+                if (entry_path.is_relative()) {
+                    const fs::path& base = !list_root.empty() ? list_root : base_dir;
+                    entry_path = base / entry_path;
+                }
+                if (!fs::exists(entry_path) || !fs::is_regular_file(entry_path)) {
+                    std::cerr << tr("Invalid image path at line ") << line_number << tr(": ") << to_quoted(trimmed) << "\n";
+                    return false;
+                }
+                if (!add_source(entry_path, true)) {
+                    return false;
+                }
             }
-            fs::path entry_path(trimmed);
-            if (entry_path.is_relative()) {
-                const fs::path& base = !list_root.empty() ? list_root
-                                                           : input_context.working_folder.parent_path();
-                entry_path = base / entry_path;
-            }
-            if (!fs::exists(entry_path) || !fs::is_regular_file(entry_path)) {
-                std::cerr << tr("Invalid image path at line ") << line_number << tr(": ") << to_quoted(trimmed) << "\n";
+            return true;
+        };
+
+        if (input_context.type == InputType::StdinList) {
+            if (!parse_list_stream(std::cin, input_context.working_folder)) {
                 return 1;
             }
-            if (!add_source(entry_path, true)) {
+        } else {
+            std::ifstream list_file(input_context.working_folder);
+            if (!list_file) {
+                std::cerr << tr("Failed to open list file: ") << input_context.working_folder << "\n";
+                return 1;
+            }
+            if (!parse_list_stream(list_file, input_context.working_folder.parent_path())) {
                 return 1;
             }
         }
