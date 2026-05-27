@@ -1523,7 +1523,7 @@ void print_usage() {
               << tr("\n")
               << tr("Options:\n")
               << tr("  --transform NAME|PATH      Transform name or path (default: json)\n")
-              << tr("  --output, -o PATTERN       Atlas path pattern for atlas_* placeholders\n")
+              << tr("  --atlas, -a PATTERN        Atlas path pattern for atlas_* placeholders\n")
               << tr("  --output-dir PATH          Write output to PATH/{variant}{extension} instead of stdout\n")
               << tr("  --list-transforms          Print available transforms and exit\n")
               << tr("  --transforms-dir           Print the transforms directory and exit\n")
@@ -1920,7 +1920,7 @@ int run_spratconvert(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--transform" && i + 1 < argc) {
             transform_arg = argv[++i];
-        } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
+        } else if ((arg == "--atlas" || arg == "-a" || arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern_arg = argv[++i];
         } else if (arg == "--output-dir" && i + 1 < argc) {
             output_dir_arg = argv[++i];

@@ -437,7 +437,7 @@ void print_usage() {
               << tr("Writes PNG to stdout for single-atlas input; TAR to stdout for multipack input.\n")
               << tr("\n")
               << tr("Options:\n")
-              << tr("  -o, --output PATTERN   Output filename pattern (e.g. atlas_%d.png)\n")
+              << tr("  -a, --atlas PATTERN    Output filename pattern (e.g. atlas_%d.png)\n")
               << tr("  --atlas-index N        Pick a specific atlas index to output\n")
               << tr("  --extrude N            Repeat edge pixels N times (overrides layout)\n")
               << tr("  --dilate N             Bleed opaque pixels into transparent neighbors (N passes)\n")
@@ -485,7 +485,7 @@ int run_spratpack(int argc, char** argv) {
             protect = true;
         } else if (arg == "--zopfli") {
             use_zopfli = true;
-        } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
+        } else if ((arg == "--atlas" || arg == "-a" || arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern = argv[++i];
         } else if (arg == "--atlas-index" && i + 1 < argc) {
             std::string value = argv[++i];

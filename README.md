@@ -270,7 +270,7 @@ The layout file will contain multiple `atlas` lines. `spratpack` can then genera
 
 ```sh
 # Output atlas_0.png, atlas_1.png, etc.
-./build/spratpack -o atlas_%d.png < layout.txt
+./build/spratpack -a atlas_%d.png < layout.txt
 ```
 
 You can also extract a specific atlas index:
@@ -471,10 +471,10 @@ Use a built-in transform:
 ./build/spratconvert --transform json < layout.txt > layout.json
 ```
 
-If your template uses `{{atlas_path}}`/`{{atlas_index}}`, provide `--output` so paths are deterministic:
+If your template uses `{{atlas_path}}`/`{{atlas_index}}`, provide `--atlas` so paths are deterministic:
 
 ```sh
-./build/spratconvert --transform json --output atlas_%d.png < layout.txt > layout.json
+./build/spratconvert --transform json --atlas atlas_%d.png < layout.txt > layout.json
 ```
 
 ### Automatic Animations

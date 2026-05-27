@@ -24,7 +24,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-debug\fR]
 .PP
 .B spratpack
-[\fB\-o\fR \fIPATTERN\fR]
+[\fB\-a\fR \fIPATTERN\fR]
 [\fB\-\-atlas\-index\fR \fIN\fR]
 [\fB\-\-extrude\fR \fIN\fR]
 [\fB\-\-protect\fR]
@@ -37,7 +37,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 .PP
 .B spratconvert
 [\fB\-\-transform\fR \fINAME|PATH\fR]
-[\fB\-\-output\fR \fIPATTERN\fR]
+[\fB\-\-atlas\fR \fIPATTERN\fR]
 [\fB\-\-output\-dir\fR \fIPATH\fR]
 [\fB\-\-list\-transforms\fR]
 [\fB\-\-markers\fR \fIPATH\fR]
@@ -64,7 +64,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 .PP
 \fBspratlayout\fR scans an image folder, list file, or TAR stream from stdin and writes a text layout to standard output.
 .PP
-\fBspratpack\fR reads the layout from standard input and writes one or more PNG atlases to standard output (or to files when \fB\-o\fR is used).
+\fBspratpack\fR reads the layout from standard input and writes one or more PNG atlases to standard output (or to files when \fB\-a\fR is used).
 .PP
 \fBspratconvert\fR reads the same layout format from standard input and transforms it into text formats (for example JSON, CSV, XML, CSS) using template-driven transforms, writing the result to standard output.
 .PP
@@ -141,7 +141,7 @@ By default, writes a single PNG to stdout.
 .IP "\(bu" 2
 If multiple atlases are produced and output is stdout, result is written as a TAR stream.
 .IP "\(bu" 2
-If \fB\-o\fR (or \fB\-\-output\fR) is used with a pattern like \fBatlas_%d.png\fR, multiple atlases are written to files.
+If \fB\-a\fR (or \fB\-\-atlas\fR) is used with a pattern like \fBatlas_%d.png\fR, multiple atlases are written to files.
 .IP "\(bu" 2
 If \fB\-\-atlas\-index\fR is used, only the specified atlas index is processed and written to stdout.
 .SS spratconvert
@@ -328,7 +328,7 @@ Config keys available per profile section:
 \fBscale\fR (\fB0 < scale <= 1\fR), \fBtrim_transparent\fR, \fBthreads\fR, \fBmultipack\fR
 .SS spratpack
 .TP
-\fB\-o\fR, \fB\-\-output\fR \fIPATTERN\fR
+\fB\-a\fR, \fB\-\-atlas\fR \fIPATTERN\fR
 Output filename pattern (e.g. \fBatlas_%d.png\fR). Required for multipack layouts when not writing to stdout.
 .TP
 \fB\-\-atlas\-index\fR \fIN\fR
@@ -362,7 +362,7 @@ Enable detailed error reporting and debug visualization.
 \fB\-\-transform\fR \fINAME|PATH\fR
 Transform name or path to a custom transform file. Default: \fBjson\fR.
 .TP
-\fB\-o\fR, \fB\-\-output\fR \fIPATTERN\fR
+\fB\-a\fR, \fB\-\-atlas\fR \fIPATTERN\fR
 Atlas path pattern used by \fB{{atlas_path}}\fR/\fB{{atlas_*}}\fR placeholders. Example: \fBatlas_%d.png\fR.
 .TP
 \fB\-\-output\-dir\fR \fIPATH\fR
@@ -444,7 +444,7 @@ Full pipeline (layout and pack in one step):
 .B spratlayout ./frames | spratpack > spritesheet.png
 .TP
 Multipack to multiple files:
-.B spratlayout ./frames --multipack --max-width 1024 --max-height 1024 | spratpack -o atlas_%d.png
+.B spratlayout ./frames --multipack --max-width 1024 --max-height 1024 | spratpack -a atlas_%d.png
 .TP
 Convert layout to JSON:
 .B spratconvert --transform json < layout.txt > layout.json
