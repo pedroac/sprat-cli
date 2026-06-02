@@ -264,24 +264,25 @@ if(NOT jsonnet_POPULATED)
         cmake_policy(SET CMP0169 OLD)
     endif()
     FetchContent_Populate(jsonnet)
+    # jsonnet hardcodes CMAKE_CXX_STANDARD 11; its headers use nested namespaces
+    # (a C++17 feature), causing -Wc++17-extensions warnings on GCC/Clang and
+    # build failures on MSVC. Raise the standard to 17 unconditionally.
+    file(READ "${jsonnet_SOURCE_DIR}/CMakeLists.txt" _jcml)
+    string(REPLACE
+        "set(CMAKE_CXX_STANDARD 11)"
+        "set(CMAKE_CXX_STANDARD 17)"
+        _jcml "${_jcml}")
     if(MSVC)
         # jsonnet v0.20.0 rejects non-GCC/Clang compilers with a FATAL_ERROR in
         # the else() branch of its compiler-flags check (CMakeLists.txt:43).
         # Downgrade it to STATUS so MSVC can configure and build with defaults.
-        file(READ "${jsonnet_SOURCE_DIR}/CMakeLists.txt" _jcml)
         string(REGEX REPLACE
             "message[(]FATAL_ERROR \"Compiler [^\"]+not supported\"[)]"
             "message(STATUS \"MSVC detected; using default compiler flags\")"
             _jcml "${_jcml}")
-        # jsonnet hardcodes CMAKE_CXX_STANDARD 11 unconditionally, which maps to
-        # no /std:c++ flag on MSVC (MSVC has no /std:c++11). Its headers use
-        # nested namespaces (C++17), so raise the standard to 17.
-        string(REPLACE
-            "set(CMAKE_CXX_STANDARD 11)"
-            "set(CMAKE_CXX_STANDARD 17)"
-            _jcml "${_jcml}")
-        file(WRITE "${jsonnet_SOURCE_DIR}/CMakeLists.txt" "${_jcml}")
-
+    endif()
+    file(WRITE "${jsonnet_SOURCE_DIR}/CMakeLists.txt" "${_jcml}")
+    if(MSVC)
         # jsonnet's stdlib/CMakeLists.txt invokes to_c_array via
         # ${GLOBAL_OUTPUT_PATH}/to_c_array, which is wrong for MSVC multi-config
         # generators: those place the executable in a per-config subdirectory
