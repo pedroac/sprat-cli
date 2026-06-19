@@ -58,10 +58,6 @@ struct Layout {
     std::vector<std::pair<std::string, std::string>> aliases;  // (alias_path, canonical_path) pairs
 };
 
-bool parse_int(const std::string& token, int& out);
-bool parse_double(const std::string& token, double& out);
-bool parse_pair(const std::string& token, int& a, int& b);
-bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::string& error);
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error);
 bool parse_atlas_line(const std::string& line, int& width, int& height);
 bool parse_scale_line(const std::string& line, double& scale);

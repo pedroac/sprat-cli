@@ -1,9 +1,27 @@
 #include "layout_parser.h"
 #include "cli_parse.h"
 
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <sstream>
+#include <string_view>
+
+// Returns true for line prefixes that appear in the combined raw-layout format
+// produced by spratconvert but carry no meaning for the basic layout parser.
+// Adding a new prefix here is the only change needed if the format gains a
+// new ignored token type.
+static bool is_combined_format_passthrough(const std::string& line) {
+    constexpr std::array<std::string_view, 5> k_prefixes = {
+        "path", "- marker", "- frame", "animation", "fps"
+    };
+    for (const auto& prefix : k_prefixes) {
+        if (line.starts_with(prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 namespace sprat::core {
 
@@ -328,8 +346,9 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             parsed.aliases.push_back({alias_path, canonical_path});
-        } else if (line.starts_with("path") || line.starts_with("- marker") || line.starts_with("- frame") || line.starts_with("animation") || line.starts_with("fps")) {
-            // These lines are valid in the combined raw layout format but not needed for basic layout parsing
+        } else if (is_combined_format_passthrough(line)) {
+            // These lines are valid in the combined raw layout format but carry no
+            // meaning for the basic layout parser. See is_combined_format_passthrough.
             continue;
         } else {
             // If the line is just whitespace, skip it

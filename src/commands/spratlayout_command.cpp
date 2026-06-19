@@ -66,7 +66,6 @@ namespace fs = std::filesystem;
 #include "core/i18n.h"
 #include "core/fnv1a.h"
 
-#include <utility>
 #include <stb_image.h>
 
 constexpr int k_output_cache_format_version = 3;
@@ -348,6 +347,192 @@ bool parse_bool_value(const std::string& value, bool& out) {
     return false;
 }
 
+// Parses a [profile <name>] section header.  On success, initialises `out`
+// with default values and the parsed name and returns true.
+bool parse_profile_section_header(const std::string& header_content,
+                                  std::unordered_set<std::string>& seen_names,
+                                  size_t line_number,
+                                  ProfileDefinition& out,
+                                  std::string& error) {
+    std::istringstream iss(header_content);
+    std::string section_type;
+    if (!(iss >> section_type)) {
+        error = "empty section header at line " + std::to_string(line_number);
+        return false;
+    }
+    section_type = to_lower_copy(section_type);
+    if (section_type != "profile") {
+        error = "unsupported section '" + section_type + "' at line " + std::to_string(line_number);
+        return false;
+    }
+
+    std::string remainder;
+    std::getline(iss, remainder);
+    remainder = trim_copy(remainder);
+    if (remainder.empty()) {
+        error = "missing profile name at line " + std::to_string(line_number);
+        return false;
+    }
+
+    std::string name;
+    if (remainder.front() == '"') {
+        size_t pos = 0;
+        std::string parse_error;
+        if (!sprat::core::parse_quoted(remainder, pos, name, parse_error)) {
+            error = "invalid quoted profile name at line " + std::to_string(line_number) + ": " + parse_error;
+            return false;
+        }
+        if (!trim_copy(remainder.substr(pos)).empty()) {
+            error = "unexpected token after quoted profile name at line " + std::to_string(line_number);
+            return false;
+        }
+    } else {
+        std::istringstream name_iss(remainder);
+        std::string extra;
+        if (!(name_iss >> name)) {
+            error = "missing profile name at line " + std::to_string(line_number);
+            return false;
+        }
+        if (name_iss >> extra) {
+            error = "unexpected token '" + extra + "' in profile name (use quotes for names with spaces) at line " +
+                    std::to_string(line_number);
+            return false;
+        }
+    }
+
+    if (seen_names.contains(name)) {
+        error = "duplicate profile '" + name + "' at line " + std::to_string(line_number);
+        return false;
+    }
+    seen_names.insert(name);
+    out = ProfileDefinition{};
+    out.name = name;
+    out.mode = Mode::COMPACT;
+    out.optimize_target = OptimizeTarget::GPU;
+    return true;
+}
+
+// Applies a single key=value entry to `def`.  Returns false and sets `error`
+// on any validation failure.
+bool apply_profile_entry(ProfileDefinition& def,
+                         const std::string& key,
+                         const std::string& value,
+                         size_t line_number,
+                         std::string& error) {
+    const std::string lower_key = to_lower_copy(key);
+    if (lower_key == "mode") {
+        Mode parsed_mode;
+        if (!parse_mode_from_string(value, parsed_mode, error)) {
+            error += " at line " + std::to_string(line_number);
+            return false;
+        }
+        def.mode = parsed_mode;
+    } else if (lower_key == "optimize") {
+        OptimizeTarget parsed_target;
+        if (!parse_optimize_target_from_string(value, parsed_target, error)) {
+            error += " at line " + std::to_string(line_number);
+            return false;
+        }
+        def.optimize_target = parsed_target;
+    } else if (lower_key == "max_width" || lower_key == "default_max_width") {
+        int parsed_width = 0;
+        if (!parse_positive_int(value, parsed_width)) {
+            error = "invalid max_width '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.max_width = parsed_width;
+    } else if (lower_key == "max_height" || lower_key == "default_max_height") {
+        int parsed_height = 0;
+        if (!parse_positive_int(value, parsed_height)) {
+            error = "invalid max_height '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.max_height = parsed_height;
+    } else if (lower_key == "padding") {
+        int parsed_padding = 0;
+        if (!parse_non_negative_int(value, parsed_padding)) {
+            error = "invalid padding '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.padding = parsed_padding;
+    } else if (lower_key == "extrude") {
+        int parsed_extrude = 0;
+        if (!parse_non_negative_int(value, parsed_extrude)) {
+            error = "invalid extrude '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.extrude = parsed_extrude;
+    } else if (lower_key == "scale") {
+        double parsed_scale = 0.0;
+        if (!parse_scale_factor(value, parsed_scale)) {
+            error = "invalid scale '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.scale = parsed_scale;
+    } else if (lower_key == "trim_transparent") {
+        bool parsed_trim = false;
+        if (!parse_bool_value(value, parsed_trim)) {
+            error = "invalid trim_transparent '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.trim_transparent = parsed_trim;
+    } else if (lower_key == "rotate") {
+        bool parsed_rotate = false;
+        if (!parse_bool_value(value, parsed_rotate)) {
+            error = "invalid rotate '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.rotate = parsed_rotate;
+    } else if (lower_key == "threads") {
+        unsigned int parsed_threads = 0;
+        if (!parse_positive_uint(value, parsed_threads)) {
+            error = "invalid threads '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.threads = parsed_threads;
+    } else if (lower_key == "multipack") {
+        bool parsed_multipack = false;
+        if (!parse_bool_value(value, parsed_multipack)) {
+            error = "invalid multipack '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.multipack = parsed_multipack;
+    } else if (lower_key == "source_resolution") {
+        int w = 0;
+        int h = 0;
+        if (!parse_resolution(value, w, h)) {
+            error = "invalid source_resolution '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.source_resolution = std::make_pair(w, h);
+    } else if (lower_key == "target_resolution") {
+        if (to_lower_copy(value) == "source") {
+            def.target_resolution = std::make_pair(-1, -1);
+        } else {
+            int w = 0;
+            int h = 0;
+            if (!parse_resolution(value, w, h)) {
+                error = "invalid target_resolution '" + value + "' at line " + std::to_string(line_number);
+                return false;
+            }
+            def.target_resolution = std::make_pair(w, h);
+        }
+    } else if (lower_key == "resolution_reference") {
+        ResolutionReference ref;
+        if (!parse_resolution_reference_from_string(value, ref, error)) {
+            error += " at line " + std::to_string(line_number);
+            return false;
+        }
+        def.resolution_reference = ref;
+    } else if (lower_key == "label") {
+        def.label = value;
+    } else {
+        error = "unknown key '" + key + "' at line " + std::to_string(line_number);
+        return false;
+    }
+    return true;
+}
+
 bool parse_profiles_config(std::istream& input,
                            std::vector<ProfileDefinition>& out,
                            std::string& error) {
@@ -356,9 +541,10 @@ bool parse_profiles_config(std::istream& input,
     std::optional<ProfileDefinition> current;
     std::string line;
     size_t line_number = 0;
+
     while (std::getline(input, line)) {
         ++line_number;
-        std::string trimmed = trim_copy(line);
+        const std::string trimmed = trim_copy(line);
         if (trimmed.empty() || trimmed.front() == '#' || trimmed.front() == ';') {
             continue;
         }
@@ -366,66 +552,13 @@ bool parse_profiles_config(std::istream& input,
         if (trimmed.front() == '[' && trimmed.back() == ']') {
             if (current) {
                 out.push_back(*current);
-                current.reset();
             }
-            std::string header = trimmed.substr(1, trimmed.size() - 2);
-            std::istringstream iss(header);
-            std::string section_type;
-            if (!(iss >> section_type)) {
-                error = "empty section header at line " + std::to_string(line_number);
-                return false;
-            }
-            section_type = to_lower_copy(section_type);
-            if (section_type != "profile") {
-                error = "unsupported section '" + section_type + "' at line " + std::to_string(line_number);
-                return false;
-            }
-
-            std::string name;
-            std::string remainder;
-            std::getline(iss, remainder);
-            remainder = trim_copy(remainder);
-
-            if (remainder.empty()) {
-                error = "missing profile name at line " + std::to_string(line_number);
-                return false;
-            }
-
-            if (remainder.front() == '"') {
-                size_t pos = 0;
-                std::string parse_error;
-                if (!sprat::core::parse_quoted(remainder, pos, name, parse_error)) {
-                    error = "invalid quoted profile name at line " + std::to_string(line_number) + ": " + parse_error;
-                    return false;
-                }
-                std::string extra = trim_copy(remainder.substr(pos));
-                if (!extra.empty()) {
-                    error = "unexpected token '" + extra + "' after quoted profile name at line " + std::to_string(line_number);
-                    return false;
-                }
-            } else {
-                std::istringstream name_iss(remainder);
-                if (!(name_iss >> name)) {
-                    error = "missing profile name at line " + std::to_string(line_number);
-                    return false;
-                }
-                std::string extra;
-                if (name_iss >> extra) {
-                    error = "unexpected token '" + extra + "' in profile name (use quotes for names with spaces) at line " +
-                            std::to_string(line_number);
-                    return false;
-                }
-            }
-
-            if (seen_names.contains(name)) {
-                error = "duplicate profile '" + name + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            seen_names.insert(name);
+            current.reset();
             ProfileDefinition def;
-            def.name = name;
-            def.mode = Mode::COMPACT;
-            def.optimize_target = OptimizeTarget::GPU;
+            if (!parse_profile_section_header(trimmed.substr(1, trimmed.size() - 2),
+                                              seen_names, line_number, def, error)) {
+                return false;
+            }
             current = def;
             continue;
         }
@@ -435,13 +568,13 @@ bool parse_profiles_config(std::istream& input,
             return false;
         }
 
-        size_t equals = trimmed.find('=');
+        const size_t equals = trimmed.find('=');
         if (equals == std::string::npos) {
             error = "invalid line '" + trimmed + "' at line " + std::to_string(line_number);
             return false;
         }
-        std::string key = trim_copy(trimmed.substr(0, equals));
-        std::string value = trim_copy(trimmed.substr(equals + 1));
+        const std::string key = trim_copy(trimmed.substr(0, equals));
+        const std::string value = trim_copy(trimmed.substr(equals + 1));
         if (key.empty()) {
             error = "empty key at line " + std::to_string(line_number);
             return false;
@@ -450,118 +583,7 @@ bool parse_profiles_config(std::istream& input,
             error = "empty value for key '" + key + "' at line " + std::to_string(line_number);
             return false;
         }
-
-        std::string lower_key = to_lower_copy(key);
-        if (lower_key == "mode") {
-            Mode parsed_mode;
-            if (!parse_mode_from_string(value, parsed_mode, error)) {
-                error += " at line " + std::to_string(line_number);
-                return false;
-            }
-            current->mode = parsed_mode;
-        } else if (lower_key == "optimize") {
-            OptimizeTarget parsed_target;
-            if (!parse_optimize_target_from_string(value, parsed_target, error)) {
-                error += " at line " + std::to_string(line_number);
-                return false;
-            }
-            current->optimize_target = parsed_target;
-        } else if (lower_key == "max_width" || lower_key == "default_max_width") {
-            int parsed_width = 0;
-            if (!parse_positive_int(value, parsed_width)) {
-                error = "invalid max_width '" + value + "' at line " +
-                        std::to_string(line_number);
-                return false;
-            }
-            current->max_width = parsed_width;
-        } else if (lower_key == "max_height" || lower_key == "default_max_height") {
-            int parsed_height = 0;
-            if (!parse_positive_int(value, parsed_height)) {
-                error = "invalid max_height '" + value + "' at line " +
-                        std::to_string(line_number);
-                return false;
-            }
-            current->max_height = parsed_height;
-        } else if (lower_key == "padding") {
-            int parsed_padding = 0;
-            if (!parse_non_negative_int(value, parsed_padding)) {
-                error = "invalid padding '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->padding = parsed_padding;
-        } else if (lower_key == "extrude") {
-            int parsed_extrude = 0;
-            if (!parse_non_negative_int(value, parsed_extrude)) {
-                error = "invalid extrude '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->extrude = parsed_extrude;
-        } else if (lower_key == "scale") {
-            double parsed_scale = 0.0;
-            if (!parse_scale_factor(value, parsed_scale)) {
-                error = "invalid scale '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->scale = parsed_scale;
-        } else if (lower_key == "trim_transparent") {
-            bool parsed_trim = false;
-            if (!parse_bool_value(value, parsed_trim)) {
-                error = "invalid trim_transparent '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->trim_transparent = parsed_trim;
-        } else if (lower_key == "rotate") {
-            bool parsed_rotate = false;
-            if (!parse_bool_value(value, parsed_rotate)) {
-                error = "invalid rotate '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->rotate = parsed_rotate;
-        } else if (lower_key == "threads") {
-            unsigned int parsed_threads = 0;
-            if (!parse_positive_uint(value, parsed_threads)) {
-                error = "invalid threads '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->threads = parsed_threads;
-        } else if (lower_key == "multipack") {
-            bool parsed_multipack = false;
-            if (!parse_bool_value(value, parsed_multipack)) {
-                error = "invalid multipack '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->multipack = parsed_multipack;
-        } else if (lower_key == "source_resolution") {
-            int w = 0;
-            int h = 0;
-            if (!parse_resolution(value, w, h)) {
-                error = "invalid source_resolution '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            current->source_resolution = std::make_pair(w, h);
-        } else if (lower_key == "target_resolution") {
-            if (to_lower_copy(value) == "source") {
-                current->target_resolution = std::make_pair(-1, -1);
-            } else {
-                int w = 0;
-                int h = 0;
-                if (!parse_resolution(value, w, h)) {
-                    error = "invalid target_resolution '" + value + "' at line " + std::to_string(line_number);
-                    return false;
-                }
-                current->target_resolution = std::make_pair(w, h);
-            }
-        } else if (lower_key == "resolution_reference") {
-            ResolutionReference ref;
-            if (!parse_resolution_reference_from_string(value, ref, error)) {
-                error += " at line " + std::to_string(line_number);
-                return false;
-            }
-            current->resolution_reference = ref;
-        } else if (lower_key == "label") {
-            current->label = value;
-        } else {
-            error = "unknown key '" + key + "' at line " + std::to_string(line_number);
+        if (!apply_profile_entry(*current, key, value, line_number, error)) {
             return false;
         }
     }
@@ -569,7 +591,6 @@ bool parse_profiles_config(std::istream& input,
     if (current) {
         out.push_back(*current);
     }
-
     if (out.empty()) {
         error = "no profiles defined";
         return false;
@@ -1456,6 +1477,7 @@ std::string to_hex_size_t(size_t value) {
     int n = std::snprintf(buf.data(), buf.size(), "%zx", value);
     return std::string(buf.data(), n > 0 ? static_cast<size_t>(n) : 0);
 }
+
 
 void print_usage() {
     std::cout << tr("Usage: spratlayout <folder> [OPTIONS]\n")
@@ -3295,30 +3317,24 @@ static uint64_t compute_dhash(const unsigned char* rgba, int w, int h) {
     return hash;
 }
 
-int run_spratlayout(int argc, char** argv) {
-#ifdef _WIN32
-    if (_setmode(_fileno(stdin), _O_BINARY) == -1) {
-        std::cerr << tr("Failed to set stdin to binary mode\n");
-    }
-    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-        std::cerr << tr("Failed to set stdout to binary mode\n");
-    }
-#endif
-    bool debug = env_flag_enabled("SPRAT_DEBUG");
+// All settings derived from parsing argv.  Fields that express an override
+// (has_*_override == true) indicate that the corresponding value was
+// explicitly supplied on the command line; profile loading will only fill in
+// fields whose override flag is false.
+struct LayoutArgs {
+    bool debug = false;
     fs::path folder;
     std::string requested_profile_name;
     std::string profiles_config_path;
-    bool has_preset = false;
-    PresetDefinition preset_definition{Mode::FAST, OptimizeTarget::GPU};
+    // raw override state (preset is resolved into has_mode/optimize_override
+    // before try_parse_args returns)
     bool has_mode_override = false;
-    Mode mode_override = Mode::COMPACT;
+    Mode mode_override = k_default_mode;
     bool has_optimize_override = false;
-    OptimizeTarget optimize_override = OptimizeTarget::GPU;
-    Mode mode = Mode::COMPACT;
-    OptimizeTarget optimize_target = OptimizeTarget::GPU;
+    OptimizeTarget optimize_override = k_default_optimize_target;
     int max_width_limit = 0;
-    int max_height_limit = 0;
     bool has_max_width_limit = false;
+    int max_height_limit = 0;
     bool has_max_height_limit = false;
     int padding = 0;
     bool has_padding_override = false;
@@ -3326,13 +3342,13 @@ int run_spratlayout(int argc, char** argv) {
     bool has_extrude_override = false;
     int source_resolution_width = 0;
     int source_resolution_height = 0;
+    bool has_source_resolution = false;
     int target_resolution_width = 0;
     int target_resolution_height = 0;
-    bool has_source_resolution = false;
     bool has_target_resolution = false;
     ResolutionReference resolution_reference = ResolutionReference::Largest;
     bool has_resolution_reference_override = false;
-    double scale = 1.0;
+    double scale = 0.0;
     bool has_scale_override = false;
     bool trim_transparent = false;
     bool has_trim_override = false;
@@ -3349,10 +3365,17 @@ int run_spratlayout(int argc, char** argv) {
     bool has_threads_override = false;
     bool show_profiles_config = false;
     bool stdin_list = false;
+};
 
-    // parse args
+// Parses argv into args.  Returns -1 to signal the caller should continue, or
+// 0/1 as an exit code for --help/--version/error cases.
+int try_parse_args(int argc, char** argv, LayoutArgs& args) {
+    args.debug = env_flag_enabled("SPRAT_DEBUG");
+    bool has_preset = false;
+    PresetDefinition preset_definition{Mode::FAST, OptimizeTarget::GPU};
+
     for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+        const std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
@@ -3360,11 +3383,11 @@ int run_spratlayout(int argc, char** argv) {
             std::cout << tr("spratlayout version ") << SPRAT_VERSION << "\n";
             return 0;
         } else if (arg == "--debug") {
-            debug = true;
+            args.debug = true;
         } else if (arg == "--profile" && i + 1 < argc) {
-            requested_profile_name = argv[++i];
+            args.requested_profile_name = argv[++i];
         } else if (arg == "--preset" && i + 1 < argc) {
-            std::string value = argv[++i];
+            const std::string value = argv[++i];
             if (!parse_preset_from_string(value, preset_definition)) {
                 std::cerr << tr("Invalid preset: ") << value
                           << tr(". Valid presets: fast, quality, small, pot\n");
@@ -3372,131 +3395,132 @@ int run_spratlayout(int argc, char** argv) {
             }
             has_preset = true;
         } else if (arg == "--profiles-config" && i + 1 < argc) {
-            profiles_config_path = argv[++i];
+            args.profiles_config_path = argv[++i];
         } else if (arg == "--default-profiles-config") {
-            show_profiles_config = true;
+            args.show_profiles_config = true;
         } else if (arg == "--mode" && i + 1 < argc) {
-            std::string value = argv[++i];
+            const std::string value = argv[++i];
             std::string error;
-            if (!parse_mode_from_string(value, mode_override, error)) {
+            if (!parse_mode_from_string(value, args.mode_override, error)) {
                 std::cerr << tr("Invalid mode value: ") << value << "\n";
                 return 1;
             }
-            has_mode_override = true;
+            args.has_mode_override = true;
         } else if (arg == "--optimize" && i + 1 < argc) {
-            std::string value = argv[++i];
+            const std::string value = argv[++i];
             std::string error;
-            if (!parse_optimize_target_from_string(value, optimize_override, error)) {
+            if (!parse_optimize_target_from_string(value, args.optimize_override, error)) {
                 std::cerr << tr("Invalid optimize value: ") << value << "\n";
                 return 1;
             }
-            has_optimize_override = true;
+            args.has_optimize_override = true;
         } else if (arg == "--max-width" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_positive_int(value, max_width_limit)) {
+            const std::string value = argv[++i];
+            if (!parse_positive_int(value, args.max_width_limit)) {
                 std::cerr << tr("Invalid max width value: ") << value << "\n";
                 return 1;
             }
-            has_max_width_limit = true;
+            args.has_max_width_limit = true;
         } else if (arg == "--max-height" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_positive_int(value, max_height_limit)) {
+            const std::string value = argv[++i];
+            if (!parse_positive_int(value, args.max_height_limit)) {
                 std::cerr << tr("Invalid max height value: ") << value << "\n";
                 return 1;
             }
-            has_max_height_limit = true;
+            args.has_max_height_limit = true;
         } else if (arg == "--no-max-width") {
-            max_width_limit = 0;
-            has_max_width_limit = true;
+            args.max_width_limit = 0;
+            args.has_max_width_limit = true;
         } else if (arg == "--no-max-height") {
-            max_height_limit = 0;
-            has_max_height_limit = true;
+            args.max_height_limit = 0;
+            args.has_max_height_limit = true;
         } else if (arg == "--padding" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_non_negative_int(value, padding)) {
+            const std::string value = argv[++i];
+            if (!parse_non_negative_int(value, args.padding)) {
                 std::cerr << tr("Invalid padding value: ") << value << "\n";
                 return 1;
             }
-            has_padding_override = true;
+            args.has_padding_override = true;
         } else if (arg == "--extrude" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_non_negative_int(value, extrude)) {
+            const std::string value = argv[++i];
+            if (!parse_non_negative_int(value, args.extrude)) {
                 std::cerr << tr("Invalid extrude value: ") << value << "\n";
                 return 1;
             }
-            has_extrude_override = true;
+            args.has_extrude_override = true;
         } else if (arg == "--source-resolution" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_resolution(value, source_resolution_width, source_resolution_height)) {
+            const std::string value = argv[++i];
+            if (!parse_resolution(value, args.source_resolution_width, args.source_resolution_height)) {
                 std::cerr << tr("Invalid source resolution value: ") << value << "\n";
                 return 1;
             }
-            has_source_resolution = true;
+            args.has_source_resolution = true;
         } else if (arg == "--target-resolution" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_resolution(value, target_resolution_width, target_resolution_height)) {
+            const std::string value = argv[++i];
+            if (!parse_resolution(value, args.target_resolution_width, args.target_resolution_height)) {
                 std::cerr << tr("Invalid target resolution value: ") << value << "\n";
                 return 1;
             }
-            has_target_resolution = true;
+            args.has_target_resolution = true;
         } else if (arg == "--resolution-reference" && i + 1 < argc) {
-            if (has_resolution_reference_override) {
+            if (args.has_resolution_reference_override) {
                 std::cerr << tr("Error: --resolution-reference can only be provided once\n");
                 return 1;
             }
-            std::string value = argv[++i];
+            const std::string value = argv[++i];
             std::string error;
-            if (!parse_resolution_reference_from_string(value, resolution_reference, error)) {
+            if (!parse_resolution_reference_from_string(value, args.resolution_reference, error)) {
                 std::cerr << tr("Invalid resolution reference value: ") << value << "\n";
                 return 1;
             }
-            has_resolution_reference_override = true;
+            args.has_resolution_reference_override = true;
         } else if (arg == "--scale" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_scale_factor(value, scale)) {
+            const std::string value = argv[++i];
+            if (!parse_scale_factor(value, args.scale)) {
                 std::cerr << tr("Invalid scale value: ") << value << "\n";
                 return 1;
             }
-            has_scale_override = true;
+            args.has_scale_override = true;
         } else if (arg == "--trim-transparent") {
-            trim_transparent = true;
-            has_trim_override = true;
+            args.trim_transparent = true;
+            args.has_trim_override = true;
         } else if (arg == "--rotate") {
-            allow_rotate = true;
-            has_rotate_override = true;
+            args.allow_rotate = true;
+            args.has_rotate_override = true;
         } else if (arg == "--multipack") {
-            multipack = true;
-            has_multipack_override = true;
+            args.multipack = true;
+            args.has_multipack_override = true;
         } else if (arg == "--deduplicate" && i + 1 < argc) {
-            deduplicateMode = argv[++i];
-            if (deduplicateMode != "none" && deduplicateMode != "exact" && deduplicateMode != "perceptual") {
-                std::cerr << tr("Invalid deduplication mode: ") << deduplicateMode << "\n";
+            args.deduplicateMode = argv[++i];
+            if (args.deduplicateMode != "none" && args.deduplicateMode != "exact"
+                    && args.deduplicateMode != "perceptual") {
+                std::cerr << tr("Invalid deduplication mode: ") << args.deduplicateMode << "\n";
                 std::cerr << tr("Valid modes: none, exact, perceptual\n");
                 return 1;
             }
-            has_deduplicate_override = true;
+            args.has_deduplicate_override = true;
         } else if (arg == "--sort" && i + 1 < argc) {
-            std::string value = argv[++i];
-            if (!parse_frame_sort_from_string(value, frame_sort, stable_metric)) {
+            const std::string value = argv[++i];
+            if (!parse_frame_sort_from_string(value, args.frame_sort, args.stable_metric)) {
                 std::cerr << tr("Invalid sort value: ") << value << "\n";
                 return 1;
             }
-            has_frame_sort_override = true;
-        } else if (arg == "--threads") {
-            std::string value = argv[++i];
-            if (!parse_positive_uint(value, thread_limit)) {
+            args.has_frame_sort_override = true;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (!parse_positive_uint(value, args.thread_limit)) {
                 std::cerr << tr("Invalid thread count: ") << value << "\n";
                 return 1;
             }
-            has_threads_override = true;
+            args.has_threads_override = true;
         } else if (arg == "--stdin-list") {
-            stdin_list = true;
+            args.stdin_list = true;
         } else if (arg.starts_with("-")) {
             std::cerr << tr("Unknown argument: ") << arg << "\n";
             return 1;
         } else {
-            if (folder.empty()) {
-                folder = arg;
+            if (args.folder.empty()) {
+                args.folder = arg;
             } else {
                 std::cerr << tr("Error: Too many arguments: ") << arg << "\n";
                 return 1;
@@ -3504,7 +3528,38 @@ int run_spratlayout(int argc, char** argv) {
         }
     }
 
-    if (show_profiles_config) {
+    // Apply --preset: fold into the override flags if not already set
+    // explicitly by --mode / --optimize.
+    if (has_preset) {
+        if (!args.has_mode_override) {
+            args.mode_override = preset_definition.mode;
+            args.has_mode_override = true;
+        }
+        if (!args.has_optimize_override) {
+            args.optimize_override = preset_definition.optimize_target;
+            args.has_optimize_override = true;
+        }
+    }
+
+    return -1; // continue
+}
+
+int run_spratlayout(int argc, char** argv) {
+#ifdef _WIN32
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1) {
+        std::cerr << tr("Failed to set stdin to binary mode\n");
+    }
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        std::cerr << tr("Failed to set stdout to binary mode\n");
+    }
+#endif
+    LayoutArgs args;
+    const int early_exit = try_parse_args(argc, argv, args);
+    if (early_exit >= 0) {
+        return early_exit;
+    }
+
+    if (args.show_profiles_config) {
         const fs::path exec_dir_local = sprat::core::get_executable_dir(argv[0]);
         const auto candidates = build_default_profiles_config_candidates(exec_dir_local);
         for (const fs::path& candidate : candidates) {
@@ -3518,10 +3573,53 @@ int run_spratlayout(int argc, char** argv) {
         return 0;
     }
 
-    if (folder.empty() && !stdin_list) {
+    if (args.folder.empty() && !args.stdin_list) {
         print_usage();
         return 1;
     }
+
+    // Unpack parsed args into named locals so the rest of the function is
+    // unchanged.  Fields with has_*_override flags are resolved to their
+    // effective values here; profile loading may still override them below.
+    bool debug = args.debug;
+    fs::path folder = std::move(args.folder);
+    const std::string requested_profile_name = std::move(args.requested_profile_name);
+    const std::string profiles_config_path = std::move(args.profiles_config_path);
+    const bool has_mode_override = args.has_mode_override;
+    const bool has_optimize_override = args.has_optimize_override;
+    Mode mode = args.has_mode_override ? args.mode_override : k_default_mode;
+    OptimizeTarget optimize_target = args.has_optimize_override ? args.optimize_override : k_default_optimize_target;
+    int max_width_limit = args.max_width_limit;
+    int max_height_limit = args.max_height_limit;
+    bool has_max_width_limit = args.has_max_width_limit;
+    bool has_max_height_limit = args.has_max_height_limit;
+    int padding = args.has_padding_override ? args.padding : k_default_padding;
+    bool has_padding_override = args.has_padding_override;
+    int extrude = args.has_extrude_override ? args.extrude : k_default_extrude;
+    bool has_extrude_override = args.has_extrude_override;
+    int source_resolution_width = args.source_resolution_width;
+    int source_resolution_height = args.source_resolution_height;
+    int target_resolution_width = args.target_resolution_width;
+    int target_resolution_height = args.target_resolution_height;
+    bool has_source_resolution = args.has_source_resolution;
+    bool has_target_resolution = args.has_target_resolution;
+    ResolutionReference resolution_reference = args.resolution_reference;
+    bool has_resolution_reference_override = args.has_resolution_reference_override;
+    double scale = args.has_scale_override ? args.scale : k_default_scale;
+    bool has_scale_override = args.has_scale_override;
+    bool trim_transparent = args.has_trim_override ? args.trim_transparent : k_default_trim_transparent;
+    bool has_trim_override = args.has_trim_override;
+    bool allow_rotate = args.has_rotate_override ? args.allow_rotate : false;
+    bool has_rotate_override = args.has_rotate_override;
+    bool multipack = args.has_multipack_override ? args.multipack : false;
+    bool has_multipack_override = args.has_multipack_override;
+    const std::string deduplicateMode = std::move(args.deduplicateMode);
+    const FrameSort frame_sort = args.frame_sort;
+    const StableMetric stable_metric = args.stable_metric;
+    const bool has_frame_sort_override = args.has_frame_sort_override;
+    unsigned int thread_limit = args.has_threads_override ? args.thread_limit : k_default_threads;
+    bool has_threads_override = args.has_threads_override;
+    const bool stdin_list = args.stdin_list;
 
     std::vector<ProfileDefinition> profile_definitions;
     std::unordered_map<std::string, ProfileDefinition> profile_map;
@@ -3529,43 +3627,6 @@ int run_spratlayout(int argc, char** argv) {
     const bool has_requested_profile = !requested_profile_name.empty();
     if (has_requested_profile) {
         selected_profile_name = requested_profile_name;
-    }
-
-    if (has_preset) {
-        if (!has_mode_override) {
-            mode_override = preset_definition.mode;
-            has_mode_override = true;
-        }
-        if (!has_optimize_override) {
-            optimize_override = preset_definition.optimize_target;
-            has_optimize_override = true;
-        }
-    }
-
-    if (!has_mode_override) {
-        mode = k_default_mode;
-    } else {
-        mode = mode_override;
-    }
-    if (!has_optimize_override) {
-        optimize_target = k_default_optimize_target;
-    } else {
-        optimize_target = optimize_override;
-    }
-    if (!has_padding_override) {
-        padding = k_default_padding;
-    }
-    if (!has_extrude_override) {
-        extrude = k_default_extrude;
-    }
-    if (!has_scale_override) {
-        scale = k_default_scale;
-    }
-    if (!has_trim_override) {
-        trim_transparent = k_default_trim_transparent;
-    }
-    if (!has_threads_override) {
-        thread_limit = k_default_threads;
     }
 
     fs::path cwd = fs::current_path();
@@ -5045,9 +5106,9 @@ int run_spratlayout(int argc, char** argv) {
                     }
                     const ProfileDefinition& compact_profile = prewarm_it->second;
                     const Mode prewarm_mode =
-                        has_mode_override ? mode_override : compact_profile.mode;
+                        has_mode_override ? args.mode_override : compact_profile.mode;
                     const OptimizeTarget prewarm_optimize_target =
-                        has_optimize_override ? optimize_override : compact_profile.optimize_target;
+                        has_optimize_override ? args.optimize_override : compact_profile.optimize_target;
                     if (prewarm_mode != Mode::COMPACT) {
                         continue;
                     }

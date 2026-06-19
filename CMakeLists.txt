@@ -254,7 +254,15 @@ FetchContent_Declare(
     GIT_TAG f45e01d632b29e4c0757ec7ba188ce759298e6d3  # v0.20.0
 )
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+# Under Emscripten the SHARED→STATIC patch already makes libjsonnet[++] static,
+# so building the _static variants too would produce two targets with the same
+# OUTPUT_NAME (both → libjsonnet.a / libjsonnet++.a) and cause a parallel-link
+# race condition.  Only enable BUILD_STATIC_LIBS on non-Emscripten platforms.
+if(EMSCRIPTEN)
+    set(BUILD_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+else()
+    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+endif()
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # Jsonnet's CMakeLists.txt uses cmake_minimum_required < 3.5; suppress the error
 set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE INTERNAL "")
@@ -294,6 +302,70 @@ if(NOT jsonnet_POPULATED)
         string(REGEX REPLACE
             "\\$\\{GLOBAL_OUTPUT_PATH\\}/to_c_array"
             "$<TARGET_FILE:to_c_array>"
+            _jstdlib "${_jstdlib}")
+        file(WRITE "${jsonnet_SOURCE_DIR}/stdlib/CMakeLists.txt" "${_jstdlib}")
+    endif()
+    if(EMSCRIPTEN)
+        # c4core's cpu.hpp doesn't recognize WebAssembly; add WASM32/64 support.
+        set(_c4cpu "${jsonnet_SOURCE_DIR}/third_party/rapidyaml/rapidyaml/ext/c4core/src/c4/cpu.hpp")
+        if(EXISTS "${_c4cpu}")
+            file(READ "${_c4cpu}" _c4cpu_content)
+            string(REPLACE
+[[#elif defined(SWIG)
+#else
+#   error "unknown CPU architecture"]]
+[[#elif defined(SWIG)
+#elif defined(__wasm__)
+#   if defined(__wasm64__)
+#       define C4_CPU_WASM64
+#       define C4_WORDSIZE 8
+#   else
+#       define C4_CPU_WASM32
+#       define C4_WORDSIZE 4
+#   endif
+#   define C4_BYTE_ORDER _C4EL
+#else
+#   error "unknown CPU architecture"]]
+                _c4cpu_content "${_c4cpu_content}")
+            file(WRITE "${_c4cpu}" "${_c4cpu_content}")
+        endif()
+        # fast_float doesn't recognize WebAssembly; Clang/Emscripten supports
+        # __uint128_t so treating WASM as a 64-bit platform is correct here.
+        set(_ff "${jsonnet_SOURCE_DIR}/third_party/rapidyaml/rapidyaml/ext/c4core/src/c4/ext/fast_float/include/fast_float/float_common.h")
+        if(EXISTS "${_ff}")
+            file(READ "${_ff}" _ff_content)
+            string(REPLACE
+                "|| defined(__s390x__)"
+                "|| defined(__s390x__) || defined(__wasm__)"
+                _ff_content "${_ff_content}")
+            file(WRITE "${_ff}" "${_ff_content}")
+        endif()
+        # libjsonnet and libjsonnet++ are hardcoded as SHARED in their own
+        # CMakeLists.txt files; under Emscripten a SHARED build produces a full
+        # WASM bundle that wasm-ld cannot consume as a link input, so force STATIC.
+        foreach(_jlib
+            "${jsonnet_SOURCE_DIR}/core/CMakeLists.txt"
+            "${jsonnet_SOURCE_DIR}/cpp/CMakeLists.txt")
+            file(READ "${_jlib}" _jlib_content)
+            string(REPLACE "SHARED" "STATIC" _jlib_content "${_jlib_content}")
+            file(WRITE "${_jlib}" "${_jlib_content}")
+        endforeach()
+        # to_c_array is compiled by Emscripten to .js and cannot do real file I/O
+        # in Node (Emscripten uses a virtual filesystem). Replace the COMMAND with
+        # a Python script that has the same positional-argument interface. Python
+        # is a hard dependency of Emscripten so it is always present.
+        find_program(_PYTHON3 NAMES python3 python REQUIRED)
+        set(_gen_py "${jsonnet_BINARY_DIR}/gen_std_h.py")
+        file(WRITE "${_gen_py}" [[
+import sys
+data = open(sys.argv[1], 'rb').read()
+with open(sys.argv[2], 'w') as f:
+    f.write(','.join(str(b) for b in data) + ',0')
+]])
+        file(READ "${jsonnet_SOURCE_DIR}/stdlib/CMakeLists.txt" _jstdlib)
+        string(REPLACE
+            [[${GLOBAL_OUTPUT_PATH}/to_c_array]]
+            "\"${_PYTHON3}\" \"${_gen_py}\""
             _jstdlib "${_jstdlib}")
         file(WRITE "${jsonnet_SOURCE_DIR}/stdlib/CMakeLists.txt" "${_jstdlib}")
     endif()
@@ -346,7 +418,13 @@ target_include_directories(spratcore PUBLIC src)
 target_include_directories(spratcore SYSTEM PRIVATE ${STB_DIR})
 target_include_directories(spratcore PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_link_libraries(spratcore PRIVATE ${LIBARCHIVE_LIBRARIES})
-target_link_libraries(spratcore PRIVATE libjsonnet++_static libjsonnet_static)
+# Under Emscripten BUILD_STATIC_LIBS is OFF (see above), so the _static alias
+# targets are not defined; use the main (already-STATIC) targets instead.
+if(EMSCRIPTEN)
+    target_link_libraries(spratcore PRIVATE libjsonnet++ libjsonnet)
+else()
+    target_link_libraries(spratcore PRIVATE libjsonnet++_static libjsonnet_static)
+endif()
 if(SPRAT_GETTEXT_AVAILABLE)
     target_compile_definitions(spratcore PUBLIC SPRAT_ENABLE_GETTEXT)
     target_link_libraries(spratcore PUBLIC ${SPRAT_INTL_LIBRARIES})

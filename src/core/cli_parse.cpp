@@ -1,9 +1,9 @@
 #include "cli_parse.h"
 
+#include <cerrno>
 #include <charconv>
-#include <limits>
-#include <sstream>
 #include <cmath>
+#include <cstdlib>
 
 namespace sprat::core {
 
@@ -13,7 +13,7 @@ bool parse_positive_int(const std::string& value, int& out) {
     if (ec != std::errc() || ptr != value.data() + value.size()) {
         return false;
     }
-    if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+    if (parsed <= 0) {
         return false;
     }
     out = parsed;
@@ -34,20 +34,24 @@ bool parse_non_negative_int(const std::string& value, int& out) {
 }
 
 bool parse_non_negative_uint(const std::string& value, unsigned int& out) {
-    int parsed = 0;
-    if (!parse_non_negative_int(value, parsed)) {
+    if (value.empty() || value[0] == '-') {
         return false;
     }
-    out = static_cast<unsigned int>(parsed);
+    unsigned int parsed = 0;
+    const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (ec != std::errc() || ptr != value.data() + value.size()) {
+        return false;
+    }
+    out = parsed;
     return true;
 }
 
 bool parse_positive_uint(const std::string& value, unsigned int& out) {
-    int parsed = 0;
-    if (!parse_positive_int(value, parsed)) {
+    unsigned int parsed = 0;
+    if (!parse_non_negative_uint(value, parsed) || parsed == 0) {
         return false;
     }
-    out = static_cast<unsigned int>(parsed);
+    out = parsed;
     return true;
 }
 
@@ -55,13 +59,9 @@ bool parse_int(const std::string& token, int& out) {
     if (token.empty()) {
         return false;
     }
-    std::istringstream iss(token);
     int value = 0;
-    char extra = '\0';
-    if (!(iss >> value)) {
-        return false;
-    }
-    if (iss >> extra) {
+    const auto [ptr, ec] = std::from_chars(token.data(), token.data() + token.size(), value);
+    if (ec != std::errc() || ptr != token.data() + token.size()) {
         return false;
     }
     out = value;
@@ -72,13 +72,11 @@ bool parse_double(const std::string& token, double& out) {
     if (token.empty()) {
         return false;
     }
-    std::istringstream iss(token);
-    double value = 0.0;
-    char extra = '\0';
-    if (!(iss >> value)) {
-        return false;
-    }
-    if (iss >> extra) {
+    const char* begin = token.c_str();
+    char* end = nullptr;
+    errno = 0;
+    const double value = std::strtod(begin, &end);
+    if (end != begin + token.size() || errno == ERANGE) {
         return false;
     }
     if (!std::isfinite(value)) {
@@ -136,7 +134,7 @@ bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::st
 std::string to_quoted(const std::string& s) {
     std::string result = "\"";
     for (char c : s) {
-        if (c == '"' || c == '\\' ) {
+        if (c == '"' || c == '\\') {
             result += '\\';
         }
         result += c;
