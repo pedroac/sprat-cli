@@ -5339,9 +5339,8 @@ int run_spratlayout(int argc, char** argv) {
     );
 
 #ifdef _WIN32
-    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-        std::cerr << tr("Failed to set stdout to binary mode\n");
-    }
+    // Suppress failure: non-fatal when running embedded or as a GUI subprocess.
+    _setmode(_fileno(stdout), _O_BINARY);
 #endif
 
     std::cout << output_text;
