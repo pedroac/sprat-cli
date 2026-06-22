@@ -3546,18 +3546,23 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
 
 int run_spratlayout(int argc, char** argv) {
 #ifdef _WIN32
-    if (_setmode(_fileno(stdin), _O_BINARY) == -1) {
-        std::cerr << tr("Failed to set stdin to binary mode\n");
-    }
-    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-        std::cerr << tr("Failed to set stdout to binary mode\n");
-    }
+    // Set stdout to binary mode to avoid \r\n translation in layout output.
+    // Suppress failure: when running as a subprocess of a GUI application the
+    // pipe handle may not support _setmode; this is non-fatal.
+    _setmode(_fileno(stdout), _O_BINARY);
 #endif
     LayoutArgs args;
     const int early_exit = try_parse_args(argc, argv, args);
     if (early_exit >= 0) {
         return early_exit;
     }
+#ifdef _WIN32
+    // Set stdin to binary mode only when --stdin-list is active so path data
+    // read from stdin is not corrupted by \r\n translation.
+    if (args.stdin_list) {
+        _setmode(_fileno(stdin), _O_BINARY);
+    }
+#endif
 
     if (args.show_profiles_config) {
         const fs::path exec_dir_local = sprat::core::get_executable_dir(argv[0]);
