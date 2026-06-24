@@ -64,6 +64,7 @@ spratunpack
 spratframes
 README-assets/*
 !README-assets/*.png
+build_test/_deps/
 **/_deps
 # Exclude temporary documentation snapshots
 README-assets/snapshot_*.png
