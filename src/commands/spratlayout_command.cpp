@@ -10,9 +10,6 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <intrin.h>
-#ifndef STDIN_FILENO
-#define STDIN_FILENO 0
-#endif
 #ifndef _O_BINARY
 #define _O_BINARY 0x8000
 #endif
@@ -1085,8 +1082,18 @@ bool extract_tar_from_stdin(const fs::path& output_dir) {
     archive_read_support_format_all(a);
     archive_read_support_filter_all(a);
     
-    // Open from stdin
-    if (archive_read_open_fd(a, STDIN_FILENO, k_tar_read_buffer_size) != ARCHIVE_OK) {
+    // Use a read callback so that input flows through std::cin.  In embedded
+    // mode std::cin is redirected to a stringstream; reading from the OS-level
+    // stdin fd would bypass that redirection and receive no data.
+    auto tar_read_cb = [](struct archive* /*unused*/, void* /*client_data*/,
+                          const void** buffer) -> la_ssize_t {
+        static thread_local std::vector<char> buf(k_tar_read_buffer_size);
+        std::cin.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        auto n = std::cin.gcount();
+        *buffer = buf.data();
+        return static_cast<la_ssize_t>(n);
+    };
+    if (archive_read_open(a, nullptr, nullptr, tar_read_cb, nullptr) != ARCHIVE_OK) {
         std::cerr << tr("Error: Failed to open stdin for archive extraction: ") << archive_error_string(a) << '\n';
         archive_read_free(a);
         return false;

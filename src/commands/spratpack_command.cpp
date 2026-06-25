@@ -640,12 +640,21 @@ int run_spratpack(int argc, char** argv) {
         a.reset(archive_write_new());
         archive_write_set_format_pax_restricted(a.get());
 #ifdef _WIN32
-        if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-            std::cerr << tr("Failed to set stdout to binary mode\n");
-            return 1;
-        }
+        // Non-fatal: in embedded mode stdout may not be a real file handle.
+        _setmode(_fileno(stdout), _O_BINARY);
 #endif
-        if (archive_write_open_FILE(a.get(), stdout) != ARCHIVE_OK) {
+        // Use a write callback instead of archive_write_open_FILE so that
+        // output flows through std::cout.  In embedded mode std::cout is
+        // redirected to a stringstream; writing to the C-level stdout FILE*
+        // would bypass that redirection and lose all data.
+        auto tar_write_cb = [](struct archive* /*unused*/, void* /*client_data*/,
+                               const void* buffer, size_t length) -> la_ssize_t {
+            std::cout.write(static_cast<const char*>(buffer),
+                            static_cast<std::streamsize>(length));
+            if (std::cout.fail()) return -1;
+            return static_cast<la_ssize_t>(length);
+        };
+        if (archive_write_open(a.get(), nullptr, nullptr, tar_write_cb, nullptr) != ARCHIVE_OK) {
             std::cerr << tr("Failed to open TAR stream on stdout: ") << archive_error_string(a.get()) << "\n";
             return 1;
         }
@@ -947,10 +956,8 @@ int run_spratpack(int argc, char** argv) {
             archive_entry_free(entry);
         } else if (output_pattern.empty()) {
 #ifdef _WIN32
-            if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
-                std::cerr << tr("Failed to set stdout to binary mode\n");
-                return 1;
-            }
+            // Non-fatal: in embedded mode stdout may not be a real file handle.
+            _setmode(_fileno(stdout), _O_BINARY);
 #endif
             std::cout.write(reinterpret_cast<const char*>(output_data.data()), static_cast<std::streamsize>(output_data.size()));
         } else {
