@@ -252,6 +252,7 @@ FetchContent_Declare(
     jsonnet
     GIT_REPOSITORY https://github.com/google/jsonnet.git
     GIT_TAG f45e01d632b29e4c0757ec7ba188ce759298e6d3  # v0.20.0
+    GIT_SUBMODULES ""
 )
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 # Under Emscripten the SHARED→STATIC patch already makes libjsonnet[++] static,
