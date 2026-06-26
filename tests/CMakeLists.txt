@@ -120,6 +120,16 @@ else()
     message(WARNING "Skipping recursive_dir test: script not found")
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/incremental_test.sh")
+    add_test(
+        NAME incremental
+        COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/incremental_test.sh
+                $<TARGET_FILE:spratlayout>
+    )
+else()
+    message(WARNING "Skipping incremental test: tests/incremental_test.sh not found")
+endif()
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/spratlayout_exclude_test.sh")
     add_test(
         NAME spratlayout_exclude

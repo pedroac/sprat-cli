@@ -122,6 +122,7 @@ struct ProfileDefinition {
     std::optional<bool> rotate;
     std::optional<bool> multipack;
     std::optional<unsigned int> threads;
+    std::optional<bool> incremental;
     std::optional<std::pair<int, int>> source_resolution;
     std::optional<std::pair<int, int>> target_resolution;
     std::optional<ResolutionReference> resolution_reference;
@@ -494,6 +495,13 @@ bool apply_profile_entry(ProfileDefinition& def,
             return false;
         }
         def.multipack = parsed_multipack;
+    } else if (lower_key == "incremental") {
+        bool parsed_incremental = false;
+        if (!parse_bool_value(value, parsed_incremental)) {
+            error = "invalid incremental '" + value + "' at line " + std::to_string(line_number);
+            return false;
+        }
+        def.incremental = parsed_incremental;
     } else if (lower_key == "source_resolution") {
         int w = 0;
         int h = 0;
@@ -1485,6 +1493,11 @@ fs::path build_seed_cache_path(const fs::path& base_cache_path,
     return base_cache_path.string() + ".seed." + seed_signature;
 }
 
+fs::path build_incremental_seed_cache_path(const fs::path& base_cache_path,
+                                           const std::string& signature) {
+    return base_cache_path.string() + ".iseed." + signature;
+}
+
 std::string to_hex_size_t(size_t value) {
     std::array<char, 20> buf{};
     int n = std::snprintf(buf.data(), buf.size(), "%zx", value);
@@ -1524,6 +1537,7 @@ void print_usage() {
               << tr("  --trim-transparent         Enable transparent-border trimming\n")
               << tr("  --rotate                   Allow 90-degree sprite rotation during packing\n")
               << tr("  --multipack                Split into multiple atlases if they don't fit\n")
+              << tr("  --incremental              Reuse positions for unchanged sprites (layout stability)\n")
               << tr("  --deduplicate <mode>       Deduplication mode: none, exact, perceptual\n")
               << tr("  --sort name|none|stable[:<metric>]  Order of sprites in layout (default: none)\n")
               << tr("                             stable: deterministic sort by size then path; <metric> is\n")
@@ -1665,6 +1679,43 @@ std::string build_layout_seed_signature(const std::string& profile_name,
         sig += '\n';
         sig += part;
     }
+    return to_hex_size_t(std::hash<std::string>{}(sig));
+}
+
+std::string build_incremental_seed_signature(
+    const std::string& profile_name,
+    Mode mode, OptimizeTarget optimize_target,
+    int max_width_limit, int max_height_limit,
+    int extrude, double scale,
+    bool trim_transparent, bool allow_rotate,
+    const fs::path& working_dir) {
+
+    std::array<char, 32> scale_buf{};
+    std::snprintf(scale_buf.data(), scale_buf.size(), "%.*g", k_floating_point_precision, scale);
+
+    std::string normalized_dir = working_dir.string();
+
+    std::string sig;
+    sig += "iseed|";
+    sig += profile_name;
+    sig += '|';
+    sig += std::to_string(static_cast<int>(mode));
+    sig += '|';
+    sig += std::to_string(static_cast<int>(optimize_target));
+    sig += '|';
+    sig += std::to_string(max_width_limit);
+    sig += '|';
+    sig += std::to_string(max_height_limit);
+    sig += '|';
+    sig += std::to_string(extrude);
+    sig += '|';
+    sig += scale_buf.data();
+    sig += '|';
+    sig += (trim_transparent ? '1' : '0');
+    sig += '|';
+    sig += (allow_rotate ? '1' : '0');
+    sig += '|';
+    sig += normalized_dir;
     return to_hex_size_t(std::hash<std::string>{}(sig));
 }
 
@@ -2644,6 +2695,239 @@ bool pack_compact_maxrects(
     return out_width > 0 && out_height > 0;
 }
 
+bool pack_incremental_maxrects(
+    const LayoutSeedCache& seed,
+    int padding,
+    int width_upper_bound,
+    int height_upper_bound,
+    const std::vector<Sprite>& source_sprites,
+    bool allow_rotate,
+    std::vector<Sprite>& out_sprites,
+    int& out_atlas_width,
+    int& out_atlas_height) {
+
+    // Build lookup of seed entries by path
+    std::unordered_map<std::string, const LayoutSeedEntry*> seed_by_path;
+    seed_by_path.reserve(seed.entries.size());
+    for (const auto& entry : seed.entries) {
+        seed_by_path.emplace(entry.path, &entry);
+    }
+
+    // Classify each sprite as pinned or new
+    std::vector<Sprite> pinned_sprites;
+    std::vector<Sprite> new_sprites;
+    pinned_sprites.reserve(source_sprites.size());
+    new_sprites.reserve(source_sprites.size());
+
+    for (const auto& src : source_sprites) {
+        auto it = seed_by_path.find(src.path);
+        if (it != seed_by_path.end()) {
+            const LayoutSeedEntry& entry = *it->second;
+            const int expected_w = entry.rotated ? src.h : src.w;
+            const int expected_h = entry.rotated ? src.w : src.h;
+            if (entry.x >= 0 && entry.y >= 0 &&
+                entry.w == expected_w && entry.h == expected_h &&
+                entry.trim_left == src.trim_left && entry.trim_top == src.trim_top &&
+                entry.trim_right == src.trim_right && entry.trim_bottom == src.trim_bottom) {
+                Sprite placed = src;
+                placed.x = entry.x;
+                placed.y = entry.y;
+                placed.rotated = entry.rotated;
+                if (placed.rotated) {
+                    std::swap(placed.w, placed.h);
+                }
+                pinned_sprites.push_back(std::move(placed));
+                continue;
+            }
+        }
+        new_sprites.push_back(src);
+    }
+
+    // No benefit from incremental if nothing is pinned
+    if (pinned_sprites.empty()) {
+        return false;
+    }
+
+    // Validate pinned sprites fit within bounds and don't overlap (sweep-line check)
+    {
+        struct PinnedRect {
+            int x0 = 0;
+            int y0 = 0;
+            int x1 = 0;
+            int y1 = 0;
+        };
+        std::vector<PinnedRect> prects;
+        prects.reserve(pinned_sprites.size());
+        for (const auto& s : pinned_sprites) {
+            int padded_w = 0;
+            int padded_h = 0;
+            int x1 = 0;
+            int y1 = 0;
+            if (!checked_add_int(s.w, padding, padded_w) ||
+                !checked_add_int(s.h, padding, padded_h) ||
+                !checked_add_int(s.x, padded_w, x1) ||
+                !checked_add_int(s.y, padded_h, y1)) {
+                return false;
+            }
+            if (padded_w <= 0 || padded_h <= 0 || x1 > width_upper_bound || y1 > height_upper_bound) {
+                return false;
+            }
+            prects.push_back({.x0=s.x, .y0=s.y, .x1=x1, .y1=y1});
+        }
+
+        std::vector<size_t> order(prects.size());
+        for (size_t i = 0; i < order.size(); ++i) {
+            order[i] = i;
+        }
+        std::ranges::sort(order, [&](size_t a, size_t b) {
+            return prects[a].x0 < prects[b].x0;
+        });
+        for (size_t i = 0; i < order.size(); ++i) {
+            const PinnedRect& a = prects[order[i]];
+            for (size_t j = i + 1; j < order.size(); ++j) {
+                const PinnedRect& b = prects[order[j]];
+                if (b.x0 >= a.x1) {
+                    break;
+                }
+                if (a.y0 < b.y1 && b.y0 < a.y1) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Build MaxRects free_rects: start with full area, split around each pinned sprite
+    std::vector<Rect> free_rects;
+    free_rects.push_back({0, 0, width_upper_bound, height_upper_bound});
+
+    for (const auto& s : pinned_sprites) {
+        int padded_w = 0;
+        int padded_h = 0;
+        checked_add_int(s.w, padding, padded_w);
+        checked_add_int(s.h, padding, padded_h);
+        Rect used = {.x=s.x, .y=s.y, .w=padded_w, .h=padded_h};
+
+        std::vector<Rect> next_free;
+        for (const auto& fr : free_rects) {
+            if (!split_free_rect(fr, used, next_free)) {
+                return false;
+            }
+        }
+        std::swap(free_rects, next_free);
+    }
+
+    // Sort new sprites by area descending
+    std::ranges::sort(new_sprites, [](const Sprite& a, const Sprite& b) {
+        return (a.w * a.h) > (b.w * b.h);
+    });
+
+    // Place each new sprite using BestShortSideFit heuristic
+    for (auto& s : new_sprites) {
+        int rw = 0;
+        int rh = 0;
+        if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
+            return false;
+        }
+        int rrw = rh;
+        int rrh = rw;
+        if (rw <= 0 || rh <= 0 || rw > width_upper_bound || rh > height_upper_bound) {
+            if (!(allow_rotate && rrw > 0 && rrh > 0 && rrw <= width_upper_bound && rrh <= height_upper_bound)) {
+                return false;
+            }
+        }
+
+        int best_index = -1;
+        int best_short_fit = std::numeric_limits<int>::max();
+        int best_long_fit = std::numeric_limits<int>::max();
+        int best_top = std::numeric_limits<int>::max();
+        int best_left = std::numeric_limits<int>::max();
+        bool best_rotated = false;
+
+        for (size_t i = 0; i < free_rects.size(); ++i) {
+            const Rect& fr = free_rects[i];
+            auto consider_orientation = [&](int cand_w, int cand_h, bool rotated) {
+                if (cand_w > fr.w || cand_h > fr.h) {
+                    return;
+                }
+                int leftover_h = fr.h - cand_h;
+                int leftover_w = fr.w - cand_w;
+                int short_fit = std::min(leftover_h, leftover_w);
+                int long_fit = std::max(leftover_h, leftover_w);
+
+                bool better = short_fit < best_short_fit ||
+                              (short_fit == best_short_fit && long_fit < best_long_fit) ||
+                              (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
+                              (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
+
+                if (!better) {
+                    return;
+                }
+                best_index = static_cast<int>(i);
+                best_short_fit = short_fit;
+                best_long_fit = long_fit;
+                best_top = fr.y;
+                best_left = fr.x;
+                best_rotated = rotated;
+            };
+
+            consider_orientation(rw, rh, false);
+            if (allow_rotate && s.w != s.h) {
+                consider_orientation(rrw, rrh, true);
+            }
+        }
+
+        if (best_index < 0) {
+            return false;
+        }
+
+        int used_w_dim = rw;
+        int used_h_dim = rh;
+        if (best_rotated) {
+            std::swap(s.w, s.h);
+            std::swap(used_w_dim, used_h_dim);
+        }
+        s.rotated = best_rotated;
+
+        Rect used = {.x=free_rects[static_cast<size_t>(best_index)].x,
+                     .y=free_rects[static_cast<size_t>(best_index)].y,
+                     .w=used_w_dim, .h=used_h_dim};
+        s.x = used.x;
+        s.y = used.y;
+
+        std::vector<Rect> next_free;
+        for (const auto& fr : free_rects) {
+            if (!split_free_rect(fr, used, next_free)) {
+                return false;
+            }
+        }
+        std::swap(free_rects, next_free);
+    }
+
+    // Combine pinned + newly placed sprites
+    out_sprites.clear();
+    out_sprites.reserve(pinned_sprites.size() + new_sprites.size());
+    for (auto& s : pinned_sprites) {
+        out_sprites.push_back(std::move(s));
+    }
+    for (auto& s : new_sprites) {
+        out_sprites.push_back(std::move(s));
+    }
+
+    // Compute tight atlas bounds
+    out_atlas_width = 0;
+    out_atlas_height = 0;
+    for (const auto& s : out_sprites) {
+        int padded_w = 0;
+        int padded_h = 0;
+        checked_add_int(s.w, padding, padded_w);
+        checked_add_int(s.h, padding, padded_h);
+        out_atlas_width = std::max(out_atlas_width, s.x + padded_w);
+        out_atlas_height = std::max(out_atlas_height, s.y + padded_h);
+    }
+
+    return out_atlas_width > 0 && out_atlas_height > 0;
+}
+
 struct PartialPackResult {
     std::vector<Sprite> packed;
     std::vector<Sprite> remaining;
@@ -3376,6 +3660,8 @@ struct LayoutArgs {
     bool has_frame_sort_override = false;
     unsigned int thread_limit = 0;
     bool has_threads_override = false;
+    bool incremental = false;
+    bool has_incremental_override = false;
     bool show_profiles_config = false;
     bool stdin_list = false;
 };
@@ -3526,6 +3812,9 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
                 return 1;
             }
             args.has_threads_override = true;
+        } else if (arg == "--incremental") {
+            args.incremental = true;
+            args.has_incremental_override = true;
         } else if (arg == "--stdin-list") {
             args.stdin_list = true;
         } else if (arg.starts_with("-")) {
@@ -3637,6 +3926,8 @@ int run_spratlayout(int argc, char** argv) {
     const bool has_frame_sort_override = args.has_frame_sort_override;
     unsigned int thread_limit = args.has_threads_override ? args.thread_limit : k_default_threads;
     bool has_threads_override = args.has_threads_override;
+    bool incremental = args.has_incremental_override ? args.incremental : false;
+    bool has_incremental_override = args.has_incremental_override;
     const bool stdin_list = args.stdin_list;
 
     std::vector<ProfileDefinition> profile_definitions;
@@ -3764,6 +4055,9 @@ int run_spratlayout(int argc, char** argv) {
         }
         if (!has_threads_override && selected_profile.threads) {
             thread_limit = *selected_profile.threads;
+        }
+        if (!has_incremental_override && selected_profile.incremental) {
+            incremental = *selected_profile.incremental;
         }
         if (!has_source_resolution && selected_profile.source_resolution) {
             source_resolution_width = selected_profile.source_resolution->first;
@@ -4115,6 +4409,19 @@ int run_spratlayout(int argc, char** argv) {
         extrude, scale, trim_transparent, allow_rotate, is_file, sources);
     const fs::path output_cache_path = build_output_cache_path(cache_path, layout_signature);
     const fs::path seed_cache_path = build_seed_cache_path(cache_path, layout_seed_signature);
+
+    std::string incremental_seed_signature;
+    fs::path incremental_seed_cache_path;
+    if (incremental && !multipack) {
+        incremental_seed_signature = build_incremental_seed_signature(
+            selected_profile_name, mode, optimize_target,
+            max_width_limit, max_height_limit, extrude, scale,
+            trim_transparent, allow_rotate,
+            input_context.working_folder);
+        incremental_seed_cache_path = build_incremental_seed_cache_path(
+            cache_path, incremental_seed_signature);
+    }
+
     if (!is_file_older_than_seconds(output_cache_path, k_cache_max_age_seconds)) {
         std::string cached_output;
         if (load_output_cache(output_cache_path, layout_signature, cached_output)) {
@@ -4531,7 +4838,26 @@ int run_spratlayout(int argc, char** argv) {
     bool have_layout_seed = false;
     LayoutSeedCache seed_cache;
     std::vector<Sprite> seeded_sprites;
-    if (!is_file_older_than_seconds(seed_cache_path, k_cache_max_age_seconds) &&
+
+    // Try incremental packing first (reuses positions for unchanged sprites)
+    if (incremental && !multipack) {
+        LayoutSeedCache incremental_seed;
+        if (!is_file_older_than_seconds(incremental_seed_cache_path, k_cache_max_age_seconds) &&
+            load_layout_seed_cache(incremental_seed_cache_path, incremental_seed_signature, incremental_seed)) {
+            if (incremental_seed.padding == padding) {
+                if (pack_incremental_maxrects(incremental_seed, padding,
+                        width_upper_bound, height_upper_bound,
+                        sprites, allow_rotate,
+                        seeded_sprites, atlas_width, atlas_height)) {
+                    sprites = std::move(seeded_sprites);
+                    reused_layout_seed = true;
+                }
+            }
+        }
+    }
+
+    if (!reused_layout_seed &&
+        !is_file_older_than_seconds(seed_cache_path, k_cache_max_age_seconds) &&
         load_layout_seed_cache(seed_cache_path, layout_seed_signature, seed_cache)) {
         if (seed_cache.padding == padding) {
             have_layout_seed = true;
@@ -5333,6 +5659,30 @@ int run_spratlayout(int argc, char** argv) {
             next_seed.entries.push_back(std::move(entry));
         }
         save_layout_seed_cache(seed_cache_path, next_seed);
+
+        if (incremental) {
+            LayoutSeedCache incremental_next;
+            incremental_next.signature = incremental_seed_signature;
+            incremental_next.padding = padding;
+            incremental_next.atlas_width = atlas_width;
+            incremental_next.atlas_height = atlas_height;
+            incremental_next.entries.reserve(sprites.size());
+            for (const auto& s : sprites) {
+                LayoutSeedEntry entry;
+                entry.path = s.path;
+                entry.x = s.x;
+                entry.y = s.y;
+                entry.w = s.w;
+                entry.h = s.h;
+                entry.trim_left = s.trim_left;
+                entry.trim_top = s.trim_top;
+                entry.trim_right = s.trim_right;
+                entry.trim_bottom = s.trim_bottom;
+                entry.rotated = s.rotated;
+                incremental_next.entries.push_back(std::move(entry));
+            }
+            save_layout_seed_cache(incremental_seed_cache_path, incremental_next);
+        }
     }
 
     const fs::path output_root = (input_context.type == InputType::ListFile)
