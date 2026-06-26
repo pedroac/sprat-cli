@@ -83,11 +83,17 @@ atlas \fIwidth,height\fR
 .br
 scale \fIfactor\fR
 .br
-sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR] [rotated] [dither] [colors=N]
+sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR] [rotated] [dither] [colors=N] [slice=L,T,R,B[,H,V]]
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
 If rotation is used for a sprite, the sprite line includes the \fBrotated\fR token.
+.PP
+The optional \fBslice=\fR token defines nine-slice insets and per-axis fill modes.
+The format is \fBslice=L,T,R,B[,H_MODE,V_MODE]\fR where \fBL\fR, \fBT\fR, \fBR\fR, \fBB\fR are
+non-negative integer insets and \fBH_MODE\fR/\fBV_MODE\fR are optional fill modes for the
+horizontal and vertical stretchable regions (\fBstretch\fR, \fBrepeat\fR, or \fBmirror\fR;
+default: \fBstretch\fR).
 .PP
 Input modes:
 .IP "\(bu" 2
@@ -133,7 +139,7 @@ scale \fIfactor\fR
 .br
 sprite lines in current or legacy numeric format
 .br
-current sprite lines may include \fBrotated\fR, \fBdither\fR, and \fBcolors=N\fR tokens.
+current sprite lines may include \fBrotated\fR, \fBdither\fR, \fBcolors=N\fR, and \fBslice=L,T,R,B[,H,V]\fR tokens.
 .PP
 Output:
 .IP "\(bu" 2

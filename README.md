@@ -444,6 +444,25 @@ DXT/BC compression provides 4:1 or 6:1 compression ratios and loads directly int
 
 When libsquish is not available, `--gpu-compress` will error with a helpful message.
 
+### Nine-Slice (Slice) Metadata
+Annotate sprites with nine-slice insets and per-axis fill modes for UI scaling. Add a `slice=` token to any sprite line in the layout:
+
+```
+slice=L,T,R,B[,H_MODE,V_MODE]
+```
+
+- `L,T,R,B` — non-negative integer insets (left, top, right, bottom) defining the nine-slice grid.
+- `H_MODE,V_MODE` — optional fill modes for the horizontal and vertical stretchable regions. Valid values: `stretch` (default), `repeat`, `mirror`.
+
+Examples:
+```
+sprite "panel.png" 0,0 64,64 slice=8,8,8,8
+sprite "border.png" 0,0 64,64 slice=8,8,8,8,repeat,stretch
+sprite "frame.png" 0,0 64,64 slice=10,12,10,12,mirror,mirror
+```
+
+When `slice=` is present, `spratconvert` emits `slice_left`, `slice_top`, `slice_right`, `slice_bottom`, `slice_h`, and `slice_v` fields per sprite in the transform data.
+
 ### Per-sprite Dithering & Quantization
 Advanced users can manually edit `layout.txt` to apply per-sprite effects.
 - `dither`: Enables ordered dithering for the sprite.
@@ -577,6 +596,8 @@ local sprat = std.extVar("sprat");
 | `source_w`, `source_h` | Original size including trim margins |
 | `trim_left`, `trim_top`, `trim_right`, `trim_bottom`, `has_trim` | Trim margins |
 | `rotated` | `true` when packed rotated 90° clockwise |
+| `slice_left`, `slice_top`, `slice_right`, `slice_bottom` | Nine-slice insets (only present when `has_slice` is true) |
+| `slice_h`, `slice_v` | Per-axis fill mode: `stretch`, `repeat`, or `mirror` (only present when `has_slice` is true) |
 | `unity_y` | `atlas_height - y - h` (Y-up coordinate for Unity) |
 | `pivot_x`, `pivot_y` | Pivot in pixels from marker lookup (0 if not set) |
 | `pivot_x_norm`, `pivot_y_norm` | Normalized; `pivot_y_norm` is Y-up (Unity convention) |
