@@ -9,6 +9,51 @@
 #include <string_view>
 #include <unordered_set>
 
+static bool parse_slice(const std::string& val, int& left, int& top, int& right, int& bottom,
+                        std::string& h_mode, std::string& v_mode) {
+    // Expect "L,T,R,B" or "L,T,R,B,H_MODE,V_MODE"
+    size_t p1 = val.find(',');
+    if (p1 == std::string::npos) return false;
+    size_t p2 = val.find(',', p1 + 1);
+    if (p2 == std::string::npos) return false;
+    size_t p3 = val.find(',', p2 + 1);
+    if (p3 == std::string::npos) return false;
+
+    size_t p4 = val.find(',', p3 + 1);
+    if (p4 == std::string::npos) {
+        // 4 values only
+        if (!sprat::core::parse_non_negative_int(val.substr(0, p1), left)
+            || !sprat::core::parse_non_negative_int(val.substr(p1 + 1, p2 - p1 - 1), top)
+            || !sprat::core::parse_non_negative_int(val.substr(p2 + 1, p3 - p2 - 1), right)
+            || !sprat::core::parse_non_negative_int(val.substr(p3 + 1), bottom)) {
+            return false;
+        }
+        h_mode = "stretch";
+        v_mode = "stretch";
+        return true;
+    }
+
+    size_t p5 = val.find(',', p4 + 1);
+    if (p5 == std::string::npos) return false;
+    // No more commas after p5
+    if (val.find(',', p5 + 1) != std::string::npos) return false;
+
+    if (!sprat::core::parse_non_negative_int(val.substr(0, p1), left)
+        || !sprat::core::parse_non_negative_int(val.substr(p1 + 1, p2 - p1 - 1), top)
+        || !sprat::core::parse_non_negative_int(val.substr(p2 + 1, p3 - p2 - 1), right)
+        || !sprat::core::parse_non_negative_int(val.substr(p3 + 1, p4 - p3 - 1), bottom)) {
+        return false;
+    }
+
+    h_mode = val.substr(p4 + 1, p5 - p4 - 1);
+    v_mode = val.substr(p5 + 1);
+
+    if (h_mode != "stretch" && h_mode != "repeat" && h_mode != "mirror") return false;
+    if (v_mode != "stretch" && v_mode != "repeat" && v_mode != "mirror") return false;
+
+    return true;
+}
+
 // Returns true for line prefixes that appear in the combined raw-layout format
 // produced by spratconvert but carry no meaning for the basic layout parser.
 // Adding a new prefix here is the only change needed if the format gains a
@@ -69,6 +114,15 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
                 error = "invalid colors value (must be 0 or 2-256): " + val;
                 return false;
             }
+        } else if (token.starts_with("slice=")) {
+            std::string val = token.substr(6);
+            if (!parse_slice(val, parsed.slice_left, parsed.slice_top,
+                             parsed.slice_right, parsed.slice_bottom,
+                             parsed.slice_h, parsed.slice_v)) {
+                error = "invalid slice value (expected L,T,R,B[,H_MODE,V_MODE] with non-negative integers and optional stretch/repeat/mirror modes): " + val;
+                return false;
+            }
+            parsed.has_slice = true;
         } else {
             tokens.push_back(token);
         }

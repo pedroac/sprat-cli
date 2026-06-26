@@ -743,6 +743,14 @@ std::string build_sprat_json(
         o += ",\"trim_bottom\":" + std::to_string(s.trim_bottom);
         o += ",\"has_trim\":" + std::string(has_trim ? "true" : "false");
         o += ",\"rotated\":" + std::string(s.rotated ? "true" : "false");
+        if (s.has_slice) {
+            o += ",\"slice_left\":" + std::to_string(s.slice_left);
+            o += ",\"slice_top\":" + std::to_string(s.slice_top);
+            o += ",\"slice_right\":" + std::to_string(s.slice_right);
+            o += ",\"slice_bottom\":" + std::to_string(s.slice_bottom);
+            o += ",\"slice_h\":\"" + s.slice_h + "\"";
+            o += ",\"slice_v\":\"" + s.slice_v + "\"";
+        }
         o += ",\"content_w\":" + std::to_string(content_w);
         o += ",\"content_h\":" + std::to_string(content_h);
         o += ",\"source_w\":" + std::to_string(source_w);

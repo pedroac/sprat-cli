@@ -171,6 +171,84 @@ void test_parse_sprite_line_rejects_negative_position() {
     std::cout << "test_parse_sprite_line_rejects_negative_position passed" << std::endl;
 }
 
+void test_parse_sprite_line_slice() {
+    sprat::core::Sprite s;
+    std::string error;
+
+    // Basic slice
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,10,10,10", s, error));
+    assert(s.has_slice);
+    assert(s.slice_left == 10 && s.slice_top == 10 && s.slice_right == 10 && s.slice_bottom == 10);
+
+    // Zero insets
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=0,0,0,0", s, error));
+    assert(s.has_slice);
+    assert(s.slice_left == 0 && s.slice_top == 0 && s.slice_right == 0 && s.slice_bottom == 0);
+
+    // Asymmetric insets
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,20,30,40", s, error));
+    assert(s.has_slice);
+    assert(s.slice_left == 10 && s.slice_top == 20 && s.slice_right == 30 && s.slice_bottom == 40);
+
+    // Combined with rotated
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,10,10,10 rotated", s, error));
+    assert(s.has_slice);
+    assert(s.rotated);
+    assert(s.slice_left == 10 && s.slice_top == 10);
+
+    // Invalid: non-numeric
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=abc", s, error));
+    assert(error.find("invalid slice value") != std::string::npos);
+
+    // Invalid: negative value
+    error.clear();
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=-1,0,0,0", s, error));
+    assert(error.find("invalid slice value") != std::string::npos);
+
+    // Invalid: too few values
+    error.clear();
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,10,10", s, error));
+    assert(error.find("invalid slice value") != std::string::npos);
+
+    std::cout << "test_parse_sprite_line_slice passed" << std::endl;
+}
+
+void test_parse_sprite_line_slice_fill_modes() {
+    sprat::core::Sprite s;
+    std::string error;
+
+    // Explicit per-axis modes: repeat,stretch
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,repeat,stretch", s, error));
+    assert(s.has_slice);
+    assert(s.slice_left == 8 && s.slice_top == 8 && s.slice_right == 8 && s.slice_bottom == 8);
+    assert(s.slice_h == "repeat");
+    assert(s.slice_v == "stretch");
+
+    // Both mirror
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,mirror,mirror", s, error));
+    assert(s.has_slice);
+    assert(s.slice_h == "mirror");
+    assert(s.slice_v == "mirror");
+
+    // 4 values only — modes default to stretch
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8", s, error));
+    assert(s.has_slice);
+    assert(s.slice_h == "stretch");
+    assert(s.slice_v == "stretch");
+
+    // Invalid mode name
+    error.clear();
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,invalid,stretch", s, error));
+    assert(error.find("invalid slice value") != std::string::npos);
+
+    // Only one mode provided (5 values) — should fail
+    error.clear();
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,repeat", s, error));
+    assert(error.find("invalid slice value") != std::string::npos);
+
+    std::cout << "test_parse_sprite_line_slice_fill_modes passed" << std::endl;
+}
+
 int main() {
     test_parse_atlas_line();
     test_parse_sprite_line();
@@ -180,6 +258,8 @@ int main() {
     test_parse_layout_rejects_negative_sprite_dimensions();
     test_parse_layout_rejects_sprite_out_of_bounds();
     test_parse_sprite_line_rejects_negative_position();
+    test_parse_sprite_line_slice();
+    test_parse_sprite_line_slice_fill_modes();
     std::cout << "All layout tests passed!" << std::endl;
     return 0;
 }

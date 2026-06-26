@@ -34,6 +34,13 @@ struct Sprite {
     int atlas_index = 0;
     bool dither = false;
     int colors = 0;
+    int slice_left = 0;
+    int slice_top = 0;
+    int slice_right = 0;
+    int slice_bottom = 0;
+    bool has_slice = false;
+    std::string slice_h = "stretch";
+    std::string slice_v = "stretch";
     std::vector<Marker> markers;
     std::string alias_of;  // Non-empty if this is an alias of another sprite
 };
