@@ -105,8 +105,8 @@ jobs:
           brew list gettext > /dev/null 2>&1 || brew install gettext
           brew list imagemagick > /dev/null 2>&1 || brew install imagemagick
           pip3 install Pillow --break-system-packages
-          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$(brew --prefix gettext)/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix libarchive):$(brew --prefix gettext)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$(brew --prefix gettext)/lib/pkgconfig:$(brew --prefix webp)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix libarchive):$(brew --prefix gettext):$(brew --prefix webp)" >> "$GITHUB_ENV"
 
       - name: Configure
         shell: bash
