@@ -18,16 +18,24 @@ local frames_obj = std.foldl(
   {}
 );
 
-local result = {
-  frames: frames_obj,
-  meta: {
+local meta =
+  {
     app: "https://github.com/pedroac/sprat-cli",
     version: "1.0",
     image: sprat.atlas_path,
     format: "RGBA8888",
     size: { w: sprat.atlas_width, h: sprat.atlas_height },
     scale: "" + sprat.scale,
-  },
+  } +
+  (if sprat.has_normal_atlas || sprat.has_collision_atlas then {
+    secondary_textures:
+      (if sprat.has_normal_atlas then [{ name: "_NormalMap", path: sprat.normal_atlas_path }] else []) +
+      (if sprat.has_collision_atlas then [{ name: "_CollisionMap", path: sprat.collision_atlas_path }] else []),
+  } else {});
+
+local result = {
+  frames: frames_obj,
+  meta: meta,
 };
 
 {

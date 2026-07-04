@@ -30,17 +30,29 @@ local anim_obj(a) =
     { name: a.name, fps: a.fps, sprite_indexes: a.frame_indices, sprite_names: [f.name for f in a.frames] }
     + (if a.flip != "" then { flip: a.flip } else {});
 
-local atlas_obj(at) = { width: at.width, height: at.height, path: at.path };
+local atlas_obj(at) = {
+  width: at.width,
+  height: at.height,
+  path: at.path,
+  normal_path: at.normal_path,
+  collision_path: at.collision_path,
+};
 
 local result = {
   multipack: sprat.multipack,
   scale: sprat.scale,
   extrude: sprat.extrude,
+  has_normal_atlas: sprat.has_normal_atlas,
+  has_collision_atlas: sprat.has_collision_atlas,
   atlases: [atlas_obj(at) for at in sprat.atlases],
   sprites: [sprite_obj(s) for s in sprat.sprites],
-} + (if sprat.has_animations then {
-  animations: [anim_obj(a) for a in sprat.animations],
-} else {});
+} +
+(if sprat.has_normal_atlas then { normal_atlas_path: sprat.normal_atlas_path } else {}) +
+(if sprat.has_collision_atlas then {
+  collision_atlas_path: sprat.collision_atlas_path,
+  collision_atlas_scale: sprat.collision_atlas_scale,
+} else {}) +
+(if sprat.has_animations then { animations: [anim_obj(a) for a in sprat.animations] } else {});
 
 {
   name: "JSON",
