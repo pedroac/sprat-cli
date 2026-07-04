@@ -36,6 +36,11 @@ local result =
     scale: sprat.scale,
     frames: [frame_obj(s) for s in sprat.sprites],
   } +
+  (if sprat.has_normal_atlas then { normal_image: sprat.normal_atlas_path } else {}) +
+  (if sprat.has_collision_atlas then {
+    collision_image: sprat.collision_atlas_path,
+    collision_scale: sprat.collision_atlas_scale,
+  } else {}) +
   (if sprat.has_animations then {
     animations: [anim_obj(a) for a in sprat.animations],
   } else {});
