@@ -416,6 +416,51 @@ assert p1['atlas_index'] == 1, 'p1 should be atlas_index 1, got ' + str(p1['atla
 " "$(fix_path "$tmp_dir/out.multipack.json")"
 fi
 
+# ── Animation/marker files with root + relative paths ─────────────────────────
+# Regression: on Windows the root was joined with '\', so suffix lookup failed and
+# frames were silently dropped. The backslash variant exercises that on all OSes.
+rootrel_layout="$tmp_dir/rootrel_layout.txt"
+cat > "$rootrel_layout" <<'RRLAYOUT'
+root "./frames"
+atlas 8,4
+sprite "a.png" 0,0 4,4
+sprite "b.png" 4,0 4,4
+RRLAYOUT
+rootrel_anims="$tmp_dir/rootrel_anims.txt"
+cat > "$rootrel_anims" <<'RRANIMS'
+root "./frames"
+animation "run" 12
+- frame "a.png"
+- frame b.png
+animation "back" 6
+- frame "frames\b.png"
+- frame ".\frames\a.png"
+RRANIMS
+rootrel_markers="$tmp_dir/rootrel_markers.txt"
+cat > "$rootrel_markers" <<'RRMARKERS'
+root "./frames"
+path "b.png"
+- marker "hit" point 1,2
+RRMARKERS
+"$convert_bin" --transform phaser-anims --atlas atlas.png --animations "$(fix_path "$rootrel_anims")" < "$rootrel_layout" > "$tmp_dir/out.rootrel.phaser.json"
+"$convert_bin" --transform json --animations "$(fix_path "$rootrel_anims")" --markers "$(fix_path "$rootrel_markers")" < "$rootrel_layout" > "$tmp_dir/out.rootrel.json"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "
+import json, sys
+p = json.load(open(sys.argv[1]))
+run = next(a for a in p['anims'] if a['key'] == 'run')
+assert run['frameRate'] == 12, run
+assert len(run['frames']) == 2, 'root-relative frames dropped: %r' % run
+d = json.load(open(sys.argv[2]))
+run = next(a for a in d['animations'] if a['name'] == 'run')
+assert run['sprite_indexes'] == [0, 1], run
+back = next(a for a in d['animations'] if a['name'] == 'back')
+assert back['sprite_indexes'] == [1, 0], 'backslash frame paths not resolved: %r' % back
+b_sp = next(s for s in d['sprites'] if s['name'] == 'b')
+assert any(m['name'] == 'hit' for m in b_sp['markers']), 'root-relative marker path not resolved'
+" "$(fix_path "$tmp_dir/out.rootrel.phaser.json")" "$(fix_path "$tmp_dir/out.rootrel.json")"
+fi
+
 # ── Empty animations file ─────────────────────────────────────────────────────
 empty_anims_file="$tmp_dir/empty_anims.txt"
 cat > "$empty_anims_file" <<'EMPTYANIMS'
