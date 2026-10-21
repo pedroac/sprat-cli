@@ -314,6 +314,18 @@ Enable 90-degree sprite rotation during packing (overrides profile value).
 \fB\-\-multipack\fR
 Split into multiple atlases if they don't fit in the specified max dimensions.
 .TP
+\fB\-\-incremental\fR
+Reuse positions of unchanged sprites from the previous run and pack only new or changed sprites into the remaining space, keeping coordinates stable across iterations. Single atlas only; falls back to a full repack if the incremental fit fails. Also available as profile key \fBincremental=true\fR.
+.TP
+\fB\-\-deduplicate\fR none|exact|perceptual
+Pack one copy of duplicate sprites and emit \fBalias\fR lines for the rest. \fBexact\fR merges pixel-identical sprites (content hash). \fBperceptual\fR merges near-identical sprites: a dHash selects candidate pairs, which are merged only if every RGBA channel of every pixel is within \fB\-\-dedup\-tolerance\fR (pixels fully transparent in both are ignored). Each duplicate is compared against its group's canonical sprite, so differences do not accumulate across chains. Default: \fBnone\fR.
+.TP
+\fB\-\-dedup\-threshold\fR \fIN\fR
+Maximum Hamming distance (0-64) between perceptual hashes for a pair to be compared by \fB\-\-deduplicate perceptual\fR. Higher values consider more pairs (slower) but never merge sprites that fail the pixel check. Default: \fB5\fR.
+.TP
+\fB\-\-dedup\-tolerance\fR \fIN\fR
+Maximum per-channel difference (0-255) between corresponding pixels for \fB\-\-deduplicate perceptual\fR to merge two sprites. \fB0\fR requires identical visible pixels. Default: \fB8\fR.
+.TP
 \fB\-\-sort\fR name|none
 Order of sprites in layout. \fBname\fR sorts by filename using natural ordering and enforces that order in the output regardless of packing optimizations. \fBnone\fR allows the packer to reorder sprites for better packing efficiency. Default: \fBnone\fR.
 .TP
@@ -353,6 +365,12 @@ Protect output PNG with basic XOR-based obfuscation.
 .TP
 \fB\-\-zopfli\fR
 Optimize output PNG using Zopfli (very slow, requires build-time support).
+.TP
+\fB\-\-output\-scale\fR \fIFACTOR\fR
+Scale the output atlas dimensions and sprite positions by \fIFACTOR\fR (for example \fB0.5\fR for half size). Uses the filter selected by \fB\-\-scale\-filter\fR.
+.TP
+\fB\-\-path\-suffix\fR \fISUFFIX\fR
+Insert \fISUFFIX\fR before the extension when loading sprite images (for example \fB_n\fR loads \fBhero_n.png\fR instead of \fBhero.png\fR). Used to pack normal or collision maps with the same layout.
 .TP
 \fB\-\-frame\-lines\fR
 Draw rectangle outlines for each sprite.
@@ -405,6 +423,15 @@ In the output, alias entries carry an \fBalias\fR field in place of \fBfps\fR an
 .TP
 \fB\-\-auto\-animations\fR
 Automatically group frames into animations by name pattern.
+.TP
+\fB\-\-normal\-atlas\fR \fIPATTERN\fR
+Normal map atlas path pattern (same format as \fB\-\-atlas\fR). Exposed to transforms as \fBhas_normal_atlas\fR and \fBnormal_atlas_path\fR.
+.TP
+\fB\-\-collision\-atlas\fR \fIPATTERN\fR
+Collision map atlas path pattern (same format as \fB\-\-atlas\fR). Exposed to transforms as \fBhas_collision_atlas\fR and \fBcollision_atlas_path\fR.
+.TP
+\fB\-\-collision\-scale\fR \fIFACTOR\fR
+Scale used when packing the collision atlas (the \fBspratpack \-\-output\-scale\fR value). Exposed as \fBcollision_atlas_scale\fR. Default: \fB1\fR.
 .SS spratframes
 .TP
 \fB\-\-has\-rectangles\fR

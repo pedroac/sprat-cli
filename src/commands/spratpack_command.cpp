@@ -38,6 +38,7 @@
 #include <archive.h>
 #include <archive_entry.h>
 #include "core/layout_parser.h"
+#include "core/checked_math.h"
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
@@ -85,16 +86,9 @@ using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::to_quoted;
 using sprat::core::tr;
+using sprat::core::checked_mul_size_t;
 using sprat::core::validate_output_pattern;
 namespace fs = std::filesystem;
-
-bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
-    if (a == 0 || b <= std::numeric_limits<size_t>::max() / a) {
-        out = a * b;
-        return true;
-    }
-    return false;
-}
 
 bool checked_add_size_t(size_t a, size_t b, size_t& out) {
     if (b <= std::numeric_limits<size_t>::max() - a) {
