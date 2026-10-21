@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -80,21 +81,8 @@ using sprat::core::parse_layout;
 using sprat::core::parse_pair;
 using sprat::core::parse_quoted;
 using sprat::core::tr;
+using sprat::core::trim_copy;
 using sprat::core::validate_output_pattern;
-
-std::string trim_copy(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])) != 0) {
-        ++start;
-    }
-
-    size_t end = s.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])) != 0) {
-        --end;
-    }
-
-    return s.substr(start, end - start);
-}
 
 bool read_text_file(const fs::path& path, std::string& out, std::string& error) {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
@@ -649,7 +637,10 @@ std::string build_sprat_json(
     const std::string& output_stem,
     const std::string& markers_path_arg,
     const std::string& animations_path_arg,
-    int animation_fps)
+    int animation_fps,
+    const std::string& normal_atlas_pattern_arg,
+    const std::string& collision_atlas_pattern_arg,
+    double collision_atlas_scale)
 {
     // Helper: format uint64 as 16-char hex string
     auto to_hex16 = [](uint64_t v) -> std::string {
@@ -838,6 +829,19 @@ std::string build_sprat_json(
     j += ",\"markers_path\":\"" + escape_json(markers_path_arg) + "\"";
     j += ",\"fps\":" + std::to_string(eff_fps);
 
+    const bool has_normal_atlas = !normal_atlas_pattern_arg.empty();
+    j += ",\"has_normal_atlas\":" + std::string(has_normal_atlas ? "true" : "false");
+    j += ",\"normal_atlas_pattern\":\"" + escape_json(normal_atlas_pattern_arg) + "\"";
+    const std::string normal_atlas_path_0 = format_atlas_path(normal_atlas_pattern_arg, 0);
+    j += ",\"normal_atlas_path\":\"" + escape_json(normal_atlas_path_0) + "\"";
+
+    const bool has_collision_atlas = !collision_atlas_pattern_arg.empty();
+    j += ",\"has_collision_atlas\":" + std::string(has_collision_atlas ? "true" : "false");
+    j += ",\"collision_atlas_pattern\":\"" + escape_json(collision_atlas_pattern_arg) + "\"";
+    const std::string collision_atlas_path_0 = format_atlas_path(collision_atlas_pattern_arg, 0);
+    j += ",\"collision_atlas_path\":\"" + escape_json(collision_atlas_path_0) + "\"";
+    j += ",\"collision_atlas_scale\":" + format_double(collision_atlas_scale);
+
     // sprites array (all sprites flat)
     j += ",\"sprites\":[";
     for (size_t i = 0; i < layout.sprites.size(); ++i) {
@@ -856,6 +860,10 @@ std::string build_sprat_json(
         j += ",\"width\":" + std::to_string(atlas.width);
         j += ",\"height\":" + std::to_string(atlas.height);
         j += ",\"path\":\"" + escape_json(a_path) + "\"";
+        const std::string n_path = format_atlas_path(normal_atlas_pattern_arg, static_cast<int>(ai));
+        j += ",\"normal_path\":\"" + escape_json(n_path) + "\"";
+        const std::string c_path = format_atlas_path(collision_atlas_pattern_arg, static_cast<int>(ai));
+        j += ",\"collision_path\":\"" + escape_json(c_path) + "\"";
         // sprites in this atlas
         j += ",\"sprites\":[";
         bool first_as = true;
@@ -1212,7 +1220,9 @@ void list_transforms() {
         R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
         R"("multipack":false,"scale":1,"extrude":0,"sprite_count":0,"animation_count":0,)"
         R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
-        R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8})";
+        R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
+        R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
+        R"("has_collision_atlas":false,"collision_atlas_pattern":"","collision_atlas_path":"","collision_atlas_scale":1})";
 
     for (const auto& path : paths) {
         std::string eval_error;
@@ -1279,7 +1289,9 @@ void list_transforms_json() {
         R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
         R"("multipack":false,"scale":1,"extrude":0,"sprite_count":0,"animation_count":0,)"
         R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
-        R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8})";
+        R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
+        R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
+        R"("has_collision_atlas":false,"collision_atlas_pattern":"","collision_atlas_path":"","collision_atlas_scale":1})";
 
     std::cout << "[\n";
     bool first = true;
@@ -1341,6 +1353,9 @@ void print_usage() {
               << tr("  --markers PATH             Load external markers file\n")
               << tr("  --animations PATH          Load external animations file\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
+              << tr("  --normal-atlas PATTERN     Normal map atlas path pattern (same format as --atlas)\n")
+              << tr("  --collision-atlas PATTERN  Collision map atlas path pattern (same format as --atlas)\n")
+              << tr("  --collision-scale FACTOR   Scale factor used when packing the collision atlas (default: 1)\n")
               << tr("  --help, -h                 Show this help message\n")
               << tr("  --version, -v              Show version\n");
 }
@@ -1358,6 +1373,9 @@ int run_spratconvert(int argc, char** argv) {
     std::string markers_path_arg;
     std::string animations_path_arg;
     std::string output_pattern_arg;
+    std::string normal_atlas_pattern_arg;
+    std::string collision_atlas_pattern_arg;
+    double collision_atlas_scale = 1.0;
     std::string output_dir_arg;
     bool list_only = false;
     bool list_json_only = false;
@@ -1370,6 +1388,24 @@ int run_spratconvert(int argc, char** argv) {
             transform_arg = argv[++i];
         } else if ((arg == "--atlas" || arg == "-a" || arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern_arg = argv[++i];
+        } else if (arg == "--normal-atlas" && i + 1 < argc) {
+            normal_atlas_pattern_arg = argv[++i];
+        } else if (arg == "--collision-atlas" && i + 1 < argc) {
+            collision_atlas_pattern_arg = argv[++i];
+        } else if (arg == "--collision-scale" && i + 1 < argc) {
+            std::string value = argv[++i];
+            try {
+                size_t pos = 0;
+                double parsed = std::stod(value, &pos);
+                if (pos != value.size() || !std::isfinite(parsed) || parsed <= 0.0) {
+                    std::cerr << tr("Invalid collision scale: ") << value << tr(" (must be a positive number)\n");
+                    return 1;
+                }
+                collision_atlas_scale = parsed;
+            } catch (...) {
+                std::cerr << tr("Invalid collision scale: ") << value << tr(" (must be a positive number)\n");
+                return 1;
+            }
         } else if (arg == "--output-dir" && i + 1 < argc) {
             output_dir_arg = argv[++i];
         } else if (arg == "--markers" && i + 1 < argc) {
@@ -1434,6 +1470,20 @@ int run_spratconvert(int argc, char** argv) {
         std::string pattern_error;
         if (!validate_output_pattern(output_pattern_arg, layout.atlases.size(), true, pattern_error)) {
             std::cerr << tr("Invalid output pattern: ") << pattern_error << "\n";
+            return 1;
+        }
+    }
+    if (!normal_atlas_pattern_arg.empty()) {
+        std::string normal_pattern_error;
+        if (!validate_output_pattern(normal_atlas_pattern_arg, layout.atlases.size(), true, normal_pattern_error)) {
+            std::cerr << tr("Invalid normal atlas pattern: ") << normal_pattern_error << "\n";
+            return 1;
+        }
+    }
+    if (!collision_atlas_pattern_arg.empty()) {
+        std::string coll_pattern_error;
+        if (!validate_output_pattern(collision_atlas_pattern_arg, layout.atlases.size(), true, coll_pattern_error)) {
+            std::cerr << tr("Invalid collision atlas pattern: ") << coll_pattern_error << "\n";
             return 1;
         }
     }
@@ -1603,7 +1653,9 @@ int run_spratconvert(int argc, char** argv) {
                 layout, sprite_names, marker_items, normalized_animations, sprite_markers,
                 global_pivot_x, global_pivot_y, has_global_pivot,
                 output_pattern_arg, member.variant,
-                markers_path_arg, animations_path_arg, animation_fps);
+                markers_path_arg, animations_path_arg, animation_fps,
+                normal_atlas_pattern_arg,
+                collision_atlas_pattern_arg, collision_atlas_scale);
 
             std::string eval_error;
             std::string output = evaluate_transform(member.path, sprat_json, eval_error);
@@ -1637,7 +1689,9 @@ int run_spratconvert(int argc, char** argv) {
         layout, sprite_names, marker_items, normalized_animations, sprite_markers,
         global_pivot_x, global_pivot_y, has_global_pivot,
         output_pattern_arg, output_stem,
-        markers_path_arg, animations_path_arg, animation_fps);
+        markers_path_arg, animations_path_arg, animation_fps,
+        normal_atlas_pattern_arg,
+        collision_atlas_pattern_arg, collision_atlas_scale);
 
     std::string eval_error;
     std::string output = evaluate_transform(transform_path, sprat_json, eval_error);

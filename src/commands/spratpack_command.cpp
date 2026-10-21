@@ -34,9 +34,11 @@
 #include <utility>
 #include <fstream>
 #include <filesystem>
+#include <cmath>
 #include <archive.h>
 #include <archive_entry.h>
 #include "core/layout_parser.h"
+#include "core/checked_math.h"
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
@@ -84,15 +86,9 @@ using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::to_quoted;
 using sprat::core::tr;
+using sprat::core::checked_mul_size_t;
 using sprat::core::validate_output_pattern;
-
-bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
-    if (a == 0 || b <= std::numeric_limits<size_t>::max() / a) {
-        out = a * b;
-        return true;
-    }
-    return false;
-}
+namespace fs = std::filesystem;
 
 bool checked_add_size_t(size_t a, size_t b, size_t& out) {
     if (b <= std::numeric_limits<size_t>::max() - a) {
@@ -187,6 +183,17 @@ bool rectangles_overlap(const Sprite& a, const Sprite& b) {
     const int b_right = b.x + b.w;
     const int b_bottom = b.y + b.h;
     return a_right > b.x && b_right > a.x && a_bottom > b.y && b_bottom > a.y;
+}
+
+// Insert suffix before the last file extension.
+// Example: apply_path_suffix("sprites/hero.png", "_n") -> "sprites/hero_n.png"
+std::string apply_path_suffix(const std::string& path, const std::string& suffix) {
+    if (suffix.empty()) return path;
+    const fs::path p(path);
+    const std::string ext = p.extension().string();
+    const std::string stem = p.stem().string();
+    const fs::path parent = p.parent_path();
+    return (parent / (stem + suffix + ext)).string();
 }
 
 bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
@@ -557,6 +564,8 @@ void print_usage() {
               << tr("  --protect              Protect output with basic obfuscation\n")
               << tr("  --format FORMAT        Output format: png (default), webp, or avif\n")
               << tr("  --quality N            Encoding quality 0-100 (100 = lossless, default: lossless)\n")
+              << tr("  --path-suffix SUFFIX   Insert suffix before extension when loading images (e.g. _n loads hero_n.png)\n")
+              << tr("  --output-scale FACTOR  Scale output atlas dimensions by FACTOR (e.g. 0.5 for half size)\n")
               << tr("  --zopfli               Optimize output PNG using Zopfli (very slow)\n")
               << tr("  --help, -h             Show this help message\n")
               << tr("  --version, -v          Show version\n");
@@ -583,6 +592,8 @@ int run_spratpack(int argc, char** argv) {
     bool has_gpu_compress = false;
     std::string output_format = "png";
     int quality = -1;  // -1 = default (lossless for webp/avif)
+    std::string path_suffix;
+    double output_scale = 1.0;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -681,6 +692,22 @@ int run_spratpack(int argc, char** argv) {
             std::string value = argv[++i];
             if (!parse_int(value, quality) || quality < 0 || quality > 100) {
                 std::cerr << tr("Invalid quality value: ") << value << tr(" (must be 0-100)\n");
+                return 1;
+            }
+        } else if (arg == "--path-suffix" && i + 1 < argc) {
+            path_suffix = argv[++i];
+        } else if (arg == "--output-scale" && i + 1 < argc) {
+            std::string value = argv[++i];
+            try {
+                size_t pos = 0;
+                double parsed = std::stod(value, &pos);
+                if (pos != value.size() || !std::isfinite(parsed) || parsed <= 0.0) {
+                    std::cerr << tr("Invalid output scale: ") << value << tr(" (must be a positive number)\n");
+                    return 1;
+                }
+                output_scale = parsed;
+            } catch (...) {
+                std::cerr << tr("Invalid output scale: ") << value << tr(" (must be a positive number)\n");
                 return 1;
             }
         }
@@ -816,14 +843,54 @@ int run_spratpack(int argc, char** argv) {
             return 1;
         }
 
-        std::vector<unsigned char> atlas_data(byte_count, 0);
+        // Range-check in double before converting: a large atlas times the scale can
+        // exceed INT_MAX, and an out-of-range cast would yield a bogus (tiny) atlas.
+        const double scaled_width  = std::round(atlas_width  * output_scale);
+        const double scaled_height = std::round(atlas_height * output_scale);
+        constexpr double max_output_dim = static_cast<double>(std::numeric_limits<int>::max());
+        if (!(scaled_width <= max_output_dim) || !(scaled_height <= max_output_dim)) {
+            std::cerr << tr("Error: Scaled output atlas ") << atlas_idx << tr(" dimensions are too large\n");
+            return 1;
+        }
+        const int output_width  = std::max(1, static_cast<int>(scaled_width));
+        const int output_height = std::max(1, static_cast<int>(scaled_height));
+        size_t output_pixel_count = 0;
+        size_t output_byte_count  = 0;
+        if (!checked_mul_size_t(static_cast<size_t>(output_width), static_cast<size_t>(output_height), output_pixel_count)
+            || !checked_mul_size_t(output_pixel_count, NUM_CHANNELS, output_byte_count)) {
+            std::cerr << tr("Error: Scaled output atlas ") << atlas_idx << tr(" dimensions are too large for memory allocation\n");
+            return 1;
+        }
+        std::vector<unsigned char> atlas_data(output_byte_count, 0);
+
+        // Map a layout-space span [start, start+len) to output space. Both edges are
+        // rounded (rather than start and length separately) so adjacent and edge-flush
+        // slots stay disjoint and inside the scaled atlas.
+        // Edges are clamped to [0, limit] in double before converting, so the int
+        // results can't overflow.
+        auto scale_span = [&](int start, int len, int limit, int& out_start, int& out_len) {
+            const double max_edge = static_cast<double>(limit);
+            double lo = std::clamp(std::round(start * output_scale), 0.0, max_edge);
+            double hi = std::clamp(std::round((static_cast<double>(start) + len) * output_scale), 0.0, max_edge);
+            if (hi <= lo) {
+                if (lo < max_edge) {
+                    hi = lo + 1.0;
+                } else {
+                    lo = max_edge - 1.0;
+                    hi = max_edge;
+                }
+            }
+            out_start = static_cast<int>(lo);
+            out_len = static_cast<int>(hi - lo);
+        };
 
         auto blit_sprite = [&](const Sprite& s, std::string& error_out) -> bool {
+            const std::string load_path = path_suffix.empty() ? s.path : apply_path_suffix(s.path, path_suffix);
             int w = 0, h = 0, channels = 0;
-            unsigned char* data = stbi_load(s.path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
+            unsigned char* data = stbi_load(load_path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
             if (!data) {
                 // stbi_failure_reason() is global, but since we are stopping on first error, it's acceptable here.
-                error_out = "Failed to load image: " + to_quoted(s.path) + " (Reason: " + stbi_failure_reason() + ")";
+                error_out = "Failed to load image: " + to_quoted(load_path) + " (Reason: " + stbi_failure_reason() + ")";
                 return false;
             }
             // Use RAII for image data
@@ -870,26 +937,32 @@ int run_spratpack(int argc, char** argv) {
 
             if (source_x < 0 || source_y < 0 || source_w <= 0 || source_h <= 0 ||
                 source_x > w - source_w || source_y > h - source_h) {
-                error_out = "Error: Crop/Trim out of bounds for " + to_quoted(s.path);
+                error_out = "Error: Crop/Trim out of bounds for " + to_quoted(load_path);
                 return false;
             }
 
-            if (s.x < 0 || s.y < 0 || s.x + s.w > atlas_width || s.y + s.h > atlas_height) {
-                error_out = "Error: Sprite " + to_quoted(s.path)
-                    + " placement out of atlas bounds";
+            // Scaled destination position and slot in the output atlas
+            int sdest_x = 0, sdest_y = 0, sdest_slot_w = 0, sdest_slot_h = 0;
+            scale_span(s.x, s.w, output_width,  sdest_x, sdest_slot_w);
+            scale_span(s.y, s.h, output_height, sdest_y, sdest_slot_h);
+
+            if (sdest_x < 0 || sdest_y < 0 || sdest_slot_w <= 0 || sdest_slot_h <= 0 ||
+                sdest_x > output_width || sdest_y > output_height ||
+                sdest_slot_w > output_width - sdest_x || sdest_slot_h > output_height - sdest_y) {
+                error_out = "Error: Sprite " + to_quoted(load_path) + " placement out of atlas bounds";
                 return false;
             }
 
-            // Unrotated destination dimensions (rotation swaps w/h in the atlas slot)
-            const int dest_w = s.rotated ? s.h : s.w;
-            const int dest_h = s.rotated ? s.w : s.h;
+            // Unrotated destination dimensions (rotation swaps w/h in atlas slot)
+            const int dest_w = s.rotated ? sdest_slot_h : sdest_slot_w;
+            const int dest_h = s.rotated ? sdest_slot_w : sdest_slot_h;
             const bool needs_scale = (source_w != dest_w || source_h != dest_h);
 
             // Fast path: no rotation, no scaling
             if (!s.rotated && !needs_scale) {
-                const size_t row_bytes = static_cast<size_t>(s.w) * NUM_CHANNELS;
-                for (int row = 0; row < s.h; ++row) {
-                    const size_t dest_pixels = static_cast<size_t>(s.y + row) * atlas_width + s.x;
+                const size_t row_bytes = static_cast<size_t>(sdest_slot_w) * NUM_CHANNELS;
+                for (int row = 0; row < sdest_slot_h; ++row) {
+                    const size_t dest_pixels = static_cast<size_t>(sdest_y + row) * output_width + sdest_x;
                     const size_t dest_offset = dest_pixels * NUM_CHANNELS;
                     const size_t src_pixels = static_cast<size_t>(source_y + row) * w + source_x;
                     const size_t src_offset = src_pixels * NUM_CHANNELS;
@@ -918,7 +991,7 @@ int run_spratpack(int argc, char** argv) {
                 stbir_set_filters(&resize,
                     to_stbir_filter(scale_filter), to_stbir_filter(scale_filter));
                 if (!stbir_resize_extended(&resize)) {
-                    error_out = "Error: Failed to resize image " + to_quoted(s.path);
+                    error_out = "Error: Failed to resize image " + to_quoted(load_path);
                     return false;
                 }
                 blit_ptr = scaled_buf.data();
@@ -930,19 +1003,19 @@ int run_spratpack(int argc, char** argv) {
                 const size_t row_bytes = static_cast<size_t>(dest_w) * NUM_CHANNELS;
                 for (int row = 0; row < dest_h; ++row) {
                     const size_t dest_off =
-                        (static_cast<size_t>(s.y + row) * atlas_width + s.x) * NUM_CHANNELS;
+                        (static_cast<size_t>(sdest_y + row) * output_width + sdest_x) * NUM_CHANNELS;
                     const size_t src_off =
                         static_cast<size_t>(row) * static_cast<size_t>(blit_stride_bytes);
                     std::memcpy(atlas_data.data() + dest_off, blit_ptr + src_off, row_bytes);
                 }
             } else {
-                // atlas(s.x+col, s.y+row) <- source(px=row, py=dest_h-1-col)
-                for (int row = 0; row < s.h; ++row) {
-                    for (int col = 0; col < s.w; ++col) {
+                // atlas(sdest_x+col, sdest_y+row) <- source(px=row, py=dest_h-1-col)
+                for (int row = 0; row < sdest_slot_h; ++row) {
+                    for (int col = 0; col < sdest_slot_w; ++col) {
                         const int px = row;
                         const int py = dest_h - 1 - col;
                         const size_t dest_off =
-                            (static_cast<size_t>(s.y + row) * atlas_width + (s.x + col)) * NUM_CHANNELS;
+                            (static_cast<size_t>(sdest_y + row) * output_width + (sdest_x + col)) * NUM_CHANNELS;
                         const size_t src_off =
                             static_cast<size_t>(py) * static_cast<size_t>(blit_stride_bytes) +
                             static_cast<size_t>(px) * NUM_CHANNELS;
@@ -991,26 +1064,45 @@ int run_spratpack(int argc, char** argv) {
             if (failed.load(std::memory_order_relaxed)) { std::cerr << first_err << "\n"; return 1; }
         }
 
-        const int active_extrude = has_extrude_override ? extrude : layout.extrude;
+        // Scaled sprite list for post-processing (extrude, dilate, frame_lines)
+        std::vector<Sprite> scaled_atlas_sprites;
+        const std::vector<Sprite>* post_sprites = &atlas_sprites;
+        if (output_scale != 1.0) {
+            scaled_atlas_sprites.reserve(atlas_sprites.size());
+            for (const auto& sp : atlas_sprites) {
+                Sprite sc = sp;
+                scale_span(sp.x, sp.w, output_width,  sc.x, sc.w);
+                scale_span(sp.y, sp.h, output_height, sc.y, sc.h);
+                scaled_atlas_sprites.push_back(sc);
+            }
+            post_sprites = &scaled_atlas_sprites;
+        }
+
+        // The layout's extrude reserves gaps in layout space; scale it with the atlas so it
+        // doesn't overrun neighbouring sprites. An explicit --extrude is taken as output pixels.
+        const int active_extrude = has_extrude_override
+            ? extrude
+            : static_cast<int>(std::min(std::round(layout.extrude * output_scale),
+                                        static_cast<double>(std::numeric_limits<int>::max())));
         if (active_extrude > 0) {
-            extrude_atlas(atlas_data, atlas_width, atlas_height, atlas_sprites, active_extrude);
+            extrude_atlas(atlas_data, output_width, output_height, *post_sprites, active_extrude);
         }
 
         const int active_dilate = has_dilate_override ? dilate : 0;
         if (active_dilate > 0) {
-            dilate_sprite_colors(atlas_data, atlas_width, atlas_height, atlas_sprites, active_dilate);
+            dilate_sprite_colors(atlas_data, output_width, output_height, *post_sprites, active_dilate);
         }
 
         if (draw_frame_lines) {
-            for (const auto& s : atlas_sprites) {
-                draw_sprite_outline(atlas_data, atlas_width, atlas_height, s, line_width, line_color);
+            for (const auto& s : *post_sprites) {
+                draw_sprite_outline(atlas_data, output_width, output_height, s, line_width, line_color);
             }
         }
 
-        if (std::getenv("SPRAT_PACK_DEBUG") && atlas_width <= 16) {
-            for (int y = 0; y < atlas_height; ++y) {
-                for (int x = 0; x < atlas_width; ++x) {
-                    size_t off = (static_cast<size_t>(y) * atlas_width + x) * NUM_CHANNELS;
+        if (std::getenv("SPRAT_PACK_DEBUG") && output_width <= 16) {
+            for (int y = 0; y < output_height; ++y) {
+                for (int x = 0; x < output_width; ++x) {
+                    size_t off = (static_cast<size_t>(y) * output_width + x) * NUM_CHANNELS;
                     if (atlas_data[off+3] != 0) {
                         std::cerr << "[pixel-debug] x=" << x << " y=" << y << " RGBA=" 
                                   << (int)atlas_data[off] << "," << (int)atlas_data[off+1] << "," 
@@ -1025,7 +1117,7 @@ int run_spratpack(int argc, char** argv) {
 
 #ifdef SPRAT_HAS_SQUISH
         if (has_gpu_compress) {
-            output_data = compress_to_dds(atlas_data, atlas_width, atlas_height, gpu_compress_format);
+            output_data = compress_to_dds(atlas_data, output_width, output_height, gpu_compress_format);
             if (output_data.empty()) {
                 std::cerr << tr("Error: Failed to compress to DDS for atlas ") << atlas_idx << tr(" (atlas dimensions must be multiple of 4)\n");
                 return 1;
@@ -1035,7 +1127,7 @@ int run_spratpack(int argc, char** argv) {
 #endif
 #ifdef SPRAT_HAS_WEBP
         if (output_format == "webp") {
-            output_data = encode_webp(atlas_data.data(), atlas_width, atlas_height, quality);
+            output_data = encode_webp(atlas_data.data(), output_width, output_height, quality);
             if (output_data.empty()) {
                 std::cerr << tr("Error: Failed to encode WEBP for atlas ") << atlas_idx << "\n";
                 return 1;
@@ -1044,7 +1136,7 @@ int run_spratpack(int argc, char** argv) {
 #endif
 #ifdef SPRAT_HAS_AVIF
         if (output_format == "avif") {
-            output_data = encode_avif(atlas_data.data(), atlas_width, atlas_height, quality);
+            output_data = encode_avif(atlas_data.data(), output_width, output_height, quality);
             if (output_data.empty()) {
                 std::cerr << tr("Error: Failed to encode AVIF for atlas ") << atlas_idx << "\n";
                 return 1;
@@ -1058,7 +1150,7 @@ int run_spratpack(int argc, char** argv) {
                 vec->insert(vec->end(), bytes, bytes + size);
             };
 
-            if (stbi_write_png_to_func(write_to_vec, &output_data, atlas_width, atlas_height, 4, atlas_data.data(), atlas_width * 4) == 0) {
+            if (stbi_write_png_to_func(write_to_vec, &output_data, output_width, output_height, 4, atlas_data.data(), output_width * 4) == 0) {
                 std::cerr << tr("Error: Failed to encode PNG for atlas ") << atlas_idx << "\n";
                 return 1;
             }

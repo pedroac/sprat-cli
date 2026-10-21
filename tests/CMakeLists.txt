@@ -28,10 +28,36 @@ add_test(
 )
 
 add_test(
+    NAME collision_atlas
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/collision_atlas_test.sh
+            $<TARGET_FILE:spratconvert>
+)
+
+add_test(
+    NAME perceptual_dedup
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/perceptual_dedup_test.sh
+            $<TARGET_FILE:spratlayout>
+)
+
+add_test(
     NAME extrude
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/extrude_test.sh
             $<TARGET_FILE:spratlayout>
             $<TARGET_FILE:spratpack>
+)
+
+add_test(
+    NAME output_scale
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/output_scale_test.sh
+            $<TARGET_FILE:spratpack>
+)
+
+add_test(
+    NAME assets_regression
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/assets_regression_test.sh
+            $<TARGET_FILE:spratlayout>
+            $<TARGET_FILE:spratpack>
+            $<TARGET_FILE:spratframes>
 )
 
 add_test(

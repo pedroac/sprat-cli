@@ -1,0 +1,25 @@
+# case: croc-compact
+# sorted PNGs under 'Crocodile Mascot Running Game/transparent PNG' | spratlayout --stdin-list --mode compact --trim-transparent
+# spratpack
+[layout]
+root "<assets>"
+scale 1
+atlas 1520,1261
+sprite "Crocodile Mascot Running Game/transparent PNG/dizzy/frame-1.png" 0,0 321,456 4,5 2,0
+sprite "Crocodile Mascot Running Game/transparent PNG/dizzy/frame-2.png" 321,0 321,450 4,11 2,0
+sprite "Crocodile Mascot Running Game/transparent PNG/jump up/frame.png" 642,0 294,442 7,5 3,0
+sprite "Crocodile Mascot Running Game/transparent PNG/jump fall/frame.png" 936,0 300,410 4,21 0,16
+sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-1.png" 1236,0 284,407 173,5 20,0
+sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-2.png" 0,456 294,405 104,7 79,0
+sprite "Crocodile Mascot Running Game/transparent PNG/idle/frame-1.png" 294,456 283,405 13,5 8,0
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-2.png" 577,456 296,404 7,5 4,0
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-4.png" 873,456 296,403 7,6 4,0
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-1.png" 1169,456 294,401 9,0 4,8
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-3.png" 0,861 293,400 10,0 4,9
+sprite "Crocodile Mascot Running Game/transparent PNG/idle/frame-2.png" 293,861 287,400 9,10 8,0
+sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-3.png" 580,861 374,387 5,25 98,0
+sprite "Crocodile Mascot Running Game/transparent PNG/sliding/frame.png" 954,861 420,256 4,3 5,0
+[pack]
+atlas 0 1520x1261 rgba-sha256 2234786a8024889e03f6959d9a80a703766b9318c3849faee77ce14d558c1057
+[metrics]
+atlas 0 1520x1261 efficiency 0.9047

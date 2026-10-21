@@ -459,6 +459,7 @@ add_library(spratcore STATIC
     src/core/cli_parse.cpp
     src/core/layout_parser.cpp
     src/core/output_pattern.cpp
+    src/core/perceptual_dedup.cpp
     src/core/i18n.cpp
     src/core/stb_impl.cpp
     src/commands/spratlayout_command.cpp

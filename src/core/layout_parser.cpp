@@ -416,12 +416,14 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             }
             s.atlas_index = static_cast<int>(parsed.atlases.size()) - 1;
             const auto& atlas = parsed.atlases[static_cast<size_t>(s.atlas_index)];
-            if (s.x + s.w > atlas.width || s.y + s.h > atlas.height) {
+            // Compare without adding so huge coordinates can't overflow past the check.
+            if (s.x > atlas.width || s.w > atlas.width - s.x
+                || s.y > atlas.height || s.h > atlas.height - s.y) {
                 error = "Sprite " + s.path + " extends beyond atlas bounds ("
                     + std::to_string(s.x) + "+" + std::to_string(s.w) + "="
-                    + std::to_string(s.x + s.w) + " > " + std::to_string(atlas.width)
+                    + std::to_string(static_cast<long long>(s.x) + s.w) + " > " + std::to_string(atlas.width)
                     + " or " + std::to_string(s.y) + "+" + std::to_string(s.h) + "="
-                    + std::to_string(s.y + s.h) + " > " + std::to_string(atlas.height) + ")";
+                    + std::to_string(static_cast<long long>(s.y) + s.h) + " > " + std::to_string(atlas.height) + ")";
                 return false;
             }
             if (!parsed.multipack && !seen_sprite_paths.insert(s.path).second) {
