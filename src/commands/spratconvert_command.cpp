@@ -170,6 +170,20 @@ std::string sprite_name_from_path(const std::string& path) {
     return path;
 }
 
+// Sprite lookups match path suffixes split on either separator, so metadata
+// files written on one platform (or joined with a root on Windows, where
+// fs::path uses '\\') still resolve against layout paths that use '/'.
+constexpr const char* kPathSeparators = "/\\";
+
+// Joins a metadata-file `root` with a relative path using '/' on every
+// platform, matching how layout sprite paths are written.
+std::string join_metadata_root(const std::string& root, const std::string& path) {
+    if (root.empty() || !fs::path(path).is_relative()) {
+        return path;
+    }
+    return (fs::path(root) / path).generic_string();
+}
+
 void collect_sprite_name_indexes(const Layout& layout,
                                  std::unordered_map<std::string, int>& by_path,
                                  std::unordered_map<std::string, int>& by_name,
@@ -183,14 +197,14 @@ void collect_sprite_name_indexes(const Layout& layout,
         by_path[s.path] = idx;
         fs::path p(s.path);
         by_path[p.filename().string()] = idx;
-        size_t sep = s.path.find('/');
+        size_t sep = s.path.find_first_of(kPathSeparators);
         while (sep != std::string::npos) {
             ++sep;
             std::string suffix = s.path.substr(sep);
             if (!suffix.empty()) {
                 by_path.emplace(suffix, idx);
             }
-            sep = s.path.find('/', sep);
+            sep = s.path.find_first_of(kPathSeparators, sep);
         }
         std::string name = sprite_name_from_path(s.path);
         sprite_names.push_back(name);
@@ -206,7 +220,7 @@ int resolve_sprite_index(const std::string& key,
     if (by_path_it != by_path.end()) {
         return by_path_it->second;
     }
-    size_t sep = key.find('/');
+    size_t sep = key.find_first_of(kPathSeparators);
     while (sep != std::string::npos) {
         ++sep;
         if (sep < key.size()) {
@@ -215,7 +229,7 @@ int resolve_sprite_index(const std::string& key,
                 return it->second;
             }
         }
-        sep = key.find('/', sep);
+        sep = key.find_first_of(kPathSeparators, sep);
     }
     auto by_name_it = by_name.find(key);
     if (by_name_it != by_name.end()) {
@@ -267,16 +281,12 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
             if (pos < trimmed.size() && trimmed[pos] == '"') {
                 std::string error;
                 if (parse_quoted(trimmed, pos, path, error)) {
-                    if (!raw_root.empty() && fs::path(path).is_relative()) {
-                        path = (fs::path(raw_root) / path).string();
-                    }
+                    path = join_metadata_root(raw_root, path);
                     current_sprite_index = resolve_sprite_index(path, by_path, by_name);
                 }
             } else {
                 if (liss >> path) {
-                    if (!raw_root.empty() && fs::path(path).is_relative()) {
-                        path = (fs::path(raw_root) / path).string();
-                    }
+                    path = join_metadata_root(raw_root, path);
                     current_sprite_index = resolve_sprite_index(path, by_path, by_name);
                 }
             }
@@ -486,9 +496,7 @@ std::vector<AnimationItem> parse_animations_data(
                 std::string path;
                 std::string error;
                 if (parse_quoted(trimmed, pos, path, error)) {
-                    if (!raw_root.empty() && fs::path(path).is_relative()) {
-                        path = (fs::path(raw_root) / path).string();
-                    }
+                    path = join_metadata_root(raw_root, path);
                     int idx = resolve_sprite_index(path, by_path, by_name);
                     if (idx >= 0) {
                         current_anim->sprite_indexes.push_back(idx);
@@ -501,9 +509,7 @@ std::vector<AnimationItem> parse_animations_data(
                     if (parse_int(frame_token, idx)) {
                         current_anim->sprite_indexes.push_back(idx);
                     } else {
-                        if (!raw_root.empty() && fs::path(frame_token).is_relative()) {
-                            frame_token = (fs::path(raw_root) / frame_token).string();
-                        }
+                        frame_token = join_metadata_root(raw_root, frame_token);
                         idx = resolve_sprite_index(frame_token, by_path, by_name);
                         if (idx >= 0) {
                             current_anim->sprite_indexes.push_back(idx);
