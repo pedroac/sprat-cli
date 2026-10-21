@@ -41,6 +41,8 @@ between commands.
 
 - `src/<tool>.cpp` — thin executable entry points.
 - `src/commands/<tool>_command.cpp` — command implementations.
+- `src/commands/spratlayout/` — spratlayout's modules: input, sprites (measuring,
+  deduplication), packing and search (placing sprites), cache, output, profiles.
 - `src/core/` — shared code (CLI parsing, i18n, layout parsing, output patterns, stb).
 - `transforms/*.jsonnet` — output format templates; shared helpers in
   `transforms/sprat.libsonnet`.

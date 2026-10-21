@@ -236,7 +236,7 @@ Profile definitions are searched in:
 - Directory inputs honor `.spratlayoutignore`; list files may include `exclude "path"` entries.
 
 ### Layout Caching
-`spratlayout` automatically caches image metadata and layouts in a private per-user directory inside the system temp directory (`$TMPDIR/sprat-<uid>` on Linux/macOS, `%TEMP%\sprat` on Windows). If your source images and options haven't changed, subsequent runs will be nearly instantaneous. Every option that affects the result is part of the cache key, so changing one always recomputes the layout. Entries older than one hour are pruned automatically. On Linux/macOS the cache is skipped if that directory is not owned by you or is writable by others.
+`spratlayout` automatically caches image metadata and layouts in a private per-user directory inside the system temp directory (`$TMPDIR/sprat-<uid>` on Linux/macOS, `%TEMP%\sprat` on Windows). If your source images and options haven't changed, subsequent runs will be nearly instantaneous. Every option that affects the result is part of the cache key, so changing one always recomputes the layout. Entries older than one hour are pruned automatically. On Linux/macOS the cache is skipped if that directory is not owned by you or is writable by others. Archive inputs (tar, zip, 7z, rar, or a tar on stdin) are extracted to a new temporary folder on every run, removed afterwards, and are not cached; `--debug` output is not cached either.
 
 ### Duplicate Detection
 Detect and alias duplicate sprites to save atlas space. `spratlayout` packs only one canonical copy per unique content and emits aliases for the rest:

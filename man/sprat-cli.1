@@ -131,7 +131,7 @@ Performance cache:
 .IP "\(bu" 2
 Metadata and output caches are stored in a private per-user directory in the system temp directory (\fB$TMPDIR/sprat-\fR\fIuid\fR on Linux/macOS, \fB%TEMP%\\sprat\fR on Windows). On Linux/macOS the cache is skipped if that directory is not owned by the user or is writable by others.
 .IP "\(bu" 2
-Unchanged inputs/options reuse cached results; every option that affects the layout is part of the cache key.
+Unchanged inputs/options reuse cached results; every option that affects the layout is part of the cache key. Archive inputs are extracted to a new temporary folder on every run, removed afterwards, and are not cached; \fB--debug\fR output is not cached either.
 .IP "\(bu" 2
 Entries older than one hour are pruned automatically.
 .SS spratpack

@@ -126,6 +126,12 @@ add_test(
 )
 
 add_test(
+    NAME spratlayout_archive
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/spratlayout_archive_test.sh
+            $<TARGET_FILE:spratlayout>
+)
+
+add_test(
     NAME unity
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/unity_test.sh
             $<TARGET_FILE:spratconvert>

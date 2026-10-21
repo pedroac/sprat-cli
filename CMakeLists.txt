@@ -461,6 +461,13 @@ add_library(spratcore STATIC
     src/core/i18n.cpp
     src/core/stb_impl.cpp
     src/commands/spratlayout_command.cpp
+    src/commands/spratlayout/cache.cpp
+    src/commands/spratlayout/input.cpp
+    src/commands/spratlayout/output.cpp
+    src/commands/spratlayout/packing.cpp
+    src/commands/spratlayout/profiles.cpp
+    src/commands/spratlayout/search.cpp
+    src/commands/spratlayout/sprites.cpp
     src/commands/spratpack_command.cpp
     src/commands/spratconvert_command.cpp
     src/commands/spratframes_command.cpp
@@ -539,7 +546,8 @@ target_include_directories(spratunpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratunpack SYSTEM PRIVATE ${STB_DIR})
 
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_definitions(spratlayout PRIVATE
+# The profile lookup is compiled into spratcore, so the define must be set there.
+target_compile_definitions(spratcore PRIVATE
     SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")
 
 # Keep a default profile config beside built binaries (e.g. build-win/) so

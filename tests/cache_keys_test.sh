@@ -81,4 +81,36 @@ if ! layout_body "$dir" --rotate --rotate-direction ccw | grep -q '^rotation ccw
     exit 1
 fi
 
+echo "Test 5: --debug output is never returned for a plain run (or vice versa)"
+dir="$(fresh_copy debug)"
+"$spratlayout_bin" "$dir" --debug > /dev/null
+if "$spratlayout_bin" "$dir" | grep -q '^#'; then
+    echo "FAILED: a plain run returned the cached --debug output" >&2
+    exit 1
+fi
+if ! "$spratlayout_bin" "$dir" --debug | grep -q '^# Sprat Layout Debug Info'; then
+    echo "FAILED: --debug returned a cached layout without the debug header" >&2
+    exit 1
+fi
+
+echo "Test 6: layouts prewarmed for another profile keep their aliases"
+warm_dir="$(fresh_copy alias_warm)"
+cold_dir="$(fresh_copy alias_cold)"
+for d in "$tmp_dir/alias_warm" "$tmp_dir/alias_cold"; do
+    first="$(find "$d" -name '*.png' | sort | head -n 1)"
+    cp -p "$first" "$d/zz_duplicate.png"
+done
+same_limits=(--profiles-config "$profiles_cfg" --max-width 2048 --max-height 2048 --deduplicate exact)
+layout_body "$warm_dir" --profile desktop "${same_limits[@]}" > /dev/null
+layout_body "$warm_dir" --profile mobile "${same_limits[@]}" > "$tmp_dir/alias_warm.txt"
+layout_body "$cold_dir" --profile mobile "${same_limits[@]}" > "$tmp_dir/alias_cold.txt"
+if ! grep -q '^alias ' "$tmp_dir/alias_cold.txt"; then
+    echo "FAILED: test setup has no duplicate sprite" >&2
+    exit 1
+fi
+if ! diff -u "$tmp_dir/alias_cold.txt" "$tmp_dir/alias_warm.txt"; then
+    echo "FAILED: --profile mobile returned a prewarmed layout without its aliases" >&2
+    exit 1
+fi
+
 echo "cache_keys_test.sh: ok"

@@ -66,6 +66,8 @@ spratpack
 spratconvert
 spratunpack
 spratframes
+# ...but not the source folder that shares the binary name
+!src/commands/spratlayout/
 README-assets/*
 !README-assets/*.png
 **/build_test
