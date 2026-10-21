@@ -426,12 +426,16 @@ private:
         while (!fill_stack_.empty()) {
             auto [x, y] = fill_stack_.back();
             fill_stack_.pop_back();
-            size++;
 
-            min_x = std::min(min_x, x);
-            max_x = std::max(max_x, x);
-            min_y = std::min(min_y, y);
-            max_y = std::max(max_y, y);
+            // Transparent pixels near the sprite (--tolerance) only bridge gaps between its
+            // pieces; they are not part of the frame's bounds or its size.
+            if (is_sprite_pixel(x, y)) {
+                size++;
+                min_x = std::min(min_x, x);
+                max_x = std::max(max_x, x);
+                min_y = std::min(min_y, y);
+                max_y = std::max(max_y, y);
+            }
 
             for (size_t i = 0; i < dx.size(); ++i) {
                 int nx = x + dx[i];
@@ -507,8 +511,10 @@ private:
 
     // Frames are numbered like text is read, so animation strips and grids keep their frame
     // order: rows top to bottom, left to right within a row. A row is started by its
-    // topmost frame and holds every frame whose vertical center falls inside that frame's
-    // height, which tolerates frames of different sizes or baselines in one row.
+    // topmost frame and holds every frame whose top edge lies above the row's shortest
+    // bottom edge (it overlaps the band all frames of the row share). That tolerates frames
+    // of different sizes or baselines in one row, and keeps one tall frame from swallowing
+    // the rows below it.
     static void sort_reading_order(std::vector<Rectangle>& rects) {
         std::ranges::stable_sort(rects, [](const Rectangle& a, const Rectangle& b) {
             return a.y != b.y ? a.y < b.y : a.x < b.x;
@@ -520,14 +526,15 @@ private:
             if (placed[i]) {
                 continue;
             }
-            const long long row_top = rects[i].y;
-            const long long row_bottom = static_cast<long long>(rects[i].y) + rects[i].h;
+            long long row_bottom = static_cast<long long>(rects[i].y) + rects[i].h;
             std::vector<Rectangle> row;
+            // Frames are sorted by top edge, so every frame seen here starts below the row's top.
             for (size_t j = i; j < rects.size(); ++j) {
-                const long long center_twice = (2LL * rects[j].y) + rects[j].h;
-                if (!placed[j] && center_twice >= 2 * row_top && center_twice < 2 * row_bottom) {
+                const long long bottom = static_cast<long long>(rects[j].y) + rects[j].h;
+                if (!placed[j] && rects[j].y < row_bottom) {
                     placed[j] = true;
                     row.push_back(rects[j]);
+                    row_bottom = std::min(row_bottom, bottom);
                 }
             }
             std::ranges::stable_sort(row, {}, &Rectangle::x);

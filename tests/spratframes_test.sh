@@ -71,6 +71,23 @@ for i, (c, r) in enumerate([(0, 0), (1, 0), (2, 0), (0, 1), (1, 1)]):
     d.rectangle([c * 14 + 4, r * 14 + 4, c * 14 + 9, r * 14 + 9], fill=(0, 40 * i + 40, 200, 255))
 d.rectangle([14 + 5, 14 + 5, 14 + 8, 14 + 8], outline=(255, 0, 255, 255))
 im.save(root + "/grid.png")
+
+# A 6x4 sprite and a single stray pixel, for --tolerance.
+im = Image.new("RGBA", (30, 12), (0, 0, 0, 0))
+for y in range(3, 7):
+    for x in range(3, 9):
+        im.putpixel((x, y), (255, 0, 0, 255))
+im.putpixel((20, 5), (255, 0, 0, 255))
+im.save(root + "/tolerance.png")
+
+# A tall frame at the top-left spanning two rows of small frames.
+im = Image.new("RGBA", (80, 60), (0, 0, 0, 0))
+d = ImageDraw.Draw(im)
+d.rectangle([2, 1, 9, 55], fill=(0, 0, 255, 255))
+for y in (3, 33):
+    for c in range(3):
+        d.rectangle([20 + c * 20, y, 29 + c * 20, y + 19], fill=(255, 0, 0, 255))
+im.save(root + "/tall.png")
 EOF
 
 echo "Test 1: frames are numbered in reading order"
@@ -110,5 +127,28 @@ sprite 2,16 12,12
 sprite 16,16 12,12
 EOF
 diff "$tmp_dir/grid.expected" "$tmp_dir/grid.txt"
+
+echo "Test 5: --tolerance bridges gaps without growing frames or passing --min-size"
+for t in 1 2 3; do
+    "$frames_bin" --tolerance "$t" "$(fix_path "$tmp_dir/tolerance.png")" | grep '^sprite' > "$tmp_dir/tolerance_$t.txt"
+    if [ "$(cat "$tmp_dir/tolerance_$t.txt")" != "sprite 3,3 6,4" ]; then
+        echo "FAILED: --tolerance $t gave:" >&2
+        cat "$tmp_dir/tolerance_$t.txt" >&2
+        exit 1
+    fi
+done
+
+echo "Test 6: a tall frame does not swallow the rows below it"
+"$frames_bin" "$(fix_path "$tmp_dir/tall.png")" | grep '^sprite' > "$tmp_dir/tall.txt"
+cat > "$tmp_dir/tall.expected" <<'EOF'
+sprite 2,1 8,55
+sprite 20,3 10,20
+sprite 40,3 10,20
+sprite 60,3 10,20
+sprite 20,33 10,20
+sprite 40,33 10,20
+sprite 60,33 10,20
+EOF
+diff "$tmp_dir/tall.expected" "$tmp_dir/tall.txt"
 
 echo "spratframes_test.sh: ok"

@@ -837,7 +837,7 @@ Frames are listed in reading order (rows top to bottom, left to right within a r
 Options:
 - `--has-rectangles`: Use the areas enclosed by lines of the rectangle color as frames instead of using transparency. Works for separate boxes and for grids whose cells share lines, with any line width; each whole cell is a frame, cells must be fully enclosed, and empty cells are skipped.
 - `--rectangle-color COLOR`: Border color to detect (e.g., `#FF00FF`, `255,0,255`).
-- `--tolerance N`: Manhattan distance for grouping pixels (default: 1).
+- `--tolerance N`: Manhattan distance for grouping pixels (default: 1). Raise it to 3–5 for effect sheets whose sprites are clouds of separate particles (blood, sparks, smoke), so each effect frame stays whole; keep it at 1 for tightly packed characters, which a higher tolerance can join together. Frames always fit the sprite pixels exactly; the gaps that tolerance bridges are not added to them.
 - `--min-size N`: Filter out sprites smaller than NxN pixels.
 - `--threads N`: Parallel processing.
 
