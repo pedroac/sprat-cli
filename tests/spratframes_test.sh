@@ -58,6 +58,19 @@ d = ImageDraw.Draw(im)
 d.rectangle([4, 4, 19, 19], fill=(255, 255, 0, 255), outline=(0, 0, 255, 255))
 d.line([5, 11, 18, 11], fill=(255, 0, 255, 255), width=2)
 im.save(root + "/magenta.png")
+
+# 3x2 grid with 2px magenta lines shared between cells (12x12 interiors): one cell is empty,
+# and one sprite contains a closed magenta loop of its own.
+im = Image.new("RGBA", (3 * 14 + 2, 2 * 14 + 2), (0, 0, 0, 0))
+d = ImageDraw.Draw(im)
+for c in range(4):
+    d.rectangle([c * 14, 0, c * 14 + 1, 2 * 14 + 1], fill=(255, 0, 255, 255))
+for r in range(3):
+    d.rectangle([0, r * 14, 3 * 14 + 1, r * 14 + 1], fill=(255, 0, 255, 255))
+for i, (c, r) in enumerate([(0, 0), (1, 0), (2, 0), (0, 1), (1, 1)]):
+    d.rectangle([c * 14 + 4, r * 14 + 4, c * 14 + 9, r * 14 + 9], fill=(0, 40 * i + 40, 200, 255))
+d.rectangle([14 + 5, 14 + 5, 14 + 8, 14 + 8], outline=(255, 0, 255, 255))
+im.save(root + "/grid.png")
 EOF
 
 echo "Test 1: frames are numbered in reading order"
@@ -86,5 +99,16 @@ echo "Test 3: background-colored pixels inside a sprite are kept"
 grep -qx 'background ff00ff' "$tmp_dir/magenta.txt"
 [ "$(grep -c '^sprite' "$tmp_dir/magenta.txt")" -eq 1 ]
 grep -qx 'sprite 4,4 16,16' "$tmp_dir/magenta.txt"
+
+echo "Test 4: --has-rectangles finds grid cells that share border lines"
+"$frames_bin" --has-rectangles "$(fix_path "$tmp_dir/grid.png")" | grep '^sprite' > "$tmp_dir/grid.txt"
+cat > "$tmp_dir/grid.expected" <<'EOF'
+sprite 2,2 12,12
+sprite 16,2 12,12
+sprite 30,2 12,12
+sprite 2,16 12,12
+sprite 16,16 12,12
+EOF
+diff "$tmp_dir/grid.expected" "$tmp_dir/grid.txt"
 
 echo "spratframes_test.sh: ok"

@@ -449,7 +449,7 @@ Scale used when packing the collision atlas (the \fBspratpack \-\-output\-scale\
 .SS spratframes
 .TP
 \fB\-\-has\-rectangles\fR
-Instead of transparency-based detection, look for closed rectangles of a specific color.
+Instead of transparency-based detection, use the areas enclosed by lines of the rectangle color as frames: separate boxes or grids whose cells share lines, with any line width. Each whole cell is a frame; cells must be fully enclosed, and empty cells are skipped.
 .TP
 \fB\-\-rectangle\-color\fR \fICOLOR\fR
 Color of rectangle borders to detect. Formats: #RRGGBB, #RGB, RGB(r,g,b), r,g,b. Default: \fB255,0,255\fR (magenta).

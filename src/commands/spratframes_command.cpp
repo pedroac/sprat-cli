@@ -219,89 +219,82 @@ public:
     }
     
 private:
+    // Frames are the regions enclosed by rectangle-colored lines: 4-connected areas of other
+    // pixels that do not reach the image edge (the outside of the boxes does). Taking the
+    // enclosed area instead of the outline's bounding box handles separate boxes, grids
+    // whose cells share border lines, and borders thicker than one pixel alike. The whole
+    // cell is the frame, keeping the sheet's alignment; cells with nothing visible in them
+    // (empty grid slots) are skipped.
     bool detect_rectangles() {
         detected_rectangles_.clear();
-        
-        std::vector<std::uint8_t> visited(static_cast<size_t>(width_) * height_, 0);
-        
-        for (int y = 0; y < height_; ++y) {
-            for (int x = 0; x < width_; ++x) {
-                if ((visited.at((static_cast<size_t>(y) * width_) + x) == 0U) && is_rectangle_pixel(x, y)) {
-                    Rectangle rect = flood_fill_rectangle(x, y, visited);
-                    if (rect.w > 0 && rect.h > 0 && rect.area() >= config_.min_sprite_size) {
-                        detected_rectangles_.push_back(rect);
+
+        const size_t w = static_cast<size_t>(width_);
+        const size_t h = static_cast<size_t>(height_);
+        std::vector<std::uint8_t> visited(w * h, 0);
+        std::vector<size_t> stack;
+
+        for (size_t start = 0; start < w * h; ++start) {
+            if (visited[start] != 0U || is_rectangle_pixel(start)) {
+                continue;
+            }
+            visited[start] = 1;
+            stack.assign(1, start);
+            size_t min_x = start % w;
+            size_t max_x = min_x;
+            size_t min_y = start / w;
+            size_t max_y = min_y;
+            bool touches_edge = false;
+            bool has_content = false;
+            while (!stack.empty()) {
+                const size_t i = stack.back();
+                stack.pop_back();
+                has_content = has_content || !pixel_at(i).is_transparent();
+                const size_t x = i % w;
+                const size_t y = i / w;
+                min_x = std::min(min_x, x);
+                max_x = std::max(max_x, x);
+                min_y = std::min(min_y, y);
+                max_y = std::max(max_y, y);
+                touches_edge = touches_edge || x == 0 || y == 0 || x + 1 == w || y + 1 == h;
+                const auto visit = [&](size_t n) {
+                    if (visited[n] == 0U && !is_rectangle_pixel(n)) {
+                        visited[n] = 1;
+                        stack.push_back(n);
                     }
-                }
+                };
+                if (x > 0) visit(i - 1);
+                if (x + 1 < w) visit(i + 1);
+                if (y > 0) visit(i - w);
+                if (y + 1 < h) visit(i + w);
+            }
+            if (touches_edge || !has_content) {
+                continue;
+            }
+            const Rectangle cell{.x = static_cast<int>(min_x), .y = static_cast<int>(min_y),
+                                 .w = static_cast<int>(max_x - min_x + 1), .h = static_cast<int>(max_y - min_y + 1)};
+            if (cell.area() >= config_.min_sprite_size) {
+                detected_rectangles_.push_back(cell);
             }
         }
-        
-        // Merge overlapping rectangles
+
+        // A closed shape of the rectangle color inside a sprite encloses a region of its own;
+        // merging folds it back into the cell around it.
         merge_rectangles(detected_rectangles_);
-        
+
         return !detected_rectangles_.empty();
     }
-    
-    [[nodiscard]] bool is_rectangle_pixel(int x, int y) const {
-        if (x < 0 || x >= width_ || y < 0 || y >= height_) {
-            return false;
-        }
-        
-        size_t idx = (static_cast<size_t>(y) * width_ + x) * 4;
-        Color pixel{.r=image_data_.at(idx), .g=image_data_.at(idx+1), .b=image_data_.at(idx+2), .a=image_data_.at(idx+3)};
-        
-        // Check if pixel matches rectangle color (with some tolerance for anti-aliasing)
-        return color_distance(pixel, config_.rectangle_color) < k_default_color_distance_threshold;
+
+    [[nodiscard]] bool is_rectangle_pixel(size_t pixel_index) const {
+        // Matches the rectangle color with some tolerance for anti-aliasing.
+        return color_distance(pixel_at(pixel_index), config_.rectangle_color) < k_default_color_distance_threshold;
     }
-    
+
     [[nodiscard]] static int color_distance(const Color& a, const Color& b) {
         return std::abs(static_cast<int>(a.r) - static_cast<int>(b.r))
                + std::abs(static_cast<int>(a.g) - static_cast<int>(b.g))
                + std::abs(static_cast<int>(a.b) - static_cast<int>(b.b));
     }
-    
-    Rectangle flood_fill_rectangle(int start_x, int start_y, std::vector<std::uint8_t>& visited) {
-        fill_stack_.clear();
-        fill_stack_.emplace_back(start_x, start_y);
-        visited.at((static_cast<size_t>(start_y) * width_) + start_x) = 1;
 
-        int min_x = start_x;
-        int max_x = start_x;
-        int min_y = start_y;
-        int max_y = start_y;
-
-        constexpr std::array<int, 4> dx = {-1, 1, 0, 0};
-        constexpr std::array<int, 4> dy = {0, 0, -1, 1};
-
-        while (!fill_stack_.empty()) {
-            auto [x, y] = fill_stack_.back();
-            fill_stack_.pop_back();
-
-            min_x = std::min(min_x, x);
-            max_x = std::max(max_x, x);
-            min_y = std::min(min_y, y);
-            max_y = std::max(max_y, y);
-
-            for (size_t i = 0; i < 4; ++i) {
-                int nx = x + dx[i];
-                int ny = y + dy[i];
-
-                if (nx >= 0 && nx < width_ && ny >= 0 && ny < height_
-                    && (visited.at((static_cast<size_t>(ny) * width_) + nx) == 0U) && is_rectangle_pixel(nx, ny)) {
-                    visited.at((static_cast<size_t>(ny) * width_) + nx) = 1;
-                    fill_stack_.emplace_back(nx, ny);
-                }
-            }
-        }
-
-        Rectangle bounds{};
-        bounds.x = min_x;
-        bounds.y = min_y;
-        bounds.w = max_x - min_x + 1;
-        bounds.h = max_y - min_y + 1;
-
-        return bounds;
-    }
-    
     static void merge_rectangles(std::vector<Rectangle>& rects) {
         if (rects.size() <= 1) {
             return;
@@ -350,50 +343,21 @@ private:
     }
     
     std::vector<SpriteFrame> extract_from_rectangles() {
+        sort_reading_order(detected_rectangles_);
+        if (std::cmp_greater(detected_rectangles_.size(), config_.max_sprites)) {
+            std::cerr << tr("Warning: Found ") << detected_rectangles_.size() << tr(" frames; keeping the first ")
+                      << config_.max_sprites << tr(" (see --max-sprites)") << '\n';
+            detected_rectangles_.resize(static_cast<size_t>(config_.max_sprites));
+        }
+
         std::vector<SpriteFrame> frames;
         frames.reserve(detected_rectangles_.size());
-        sort_reading_order(detected_rectangles_);
-        
-        for (size_t i = 0; i < detected_rectangles_.size() && std::cmp_less(i ,config_.max_sprites); ++i) {
-            const Rectangle& rect = detected_rectangles_[i];
-            
-            // Extract sprite inside rectangle, removing the rectangle border
-            Rectangle sprite_bounds = rect;
-            sprite_bounds.x += 1;
-            sprite_bounds.y += 1;
-            sprite_bounds.w -= 2;
-            sprite_bounds.h -= 2;
-            
-            // Ensure bounds are valid
-            if (sprite_bounds.w <= 0 || sprite_bounds.h <= 0) {
-                continue;
-            }
-            if (sprite_bounds.x < 0) {
-                sprite_bounds.w += sprite_bounds.x;
-                sprite_bounds.x = 0;
-            }
-            if (sprite_bounds.y < 0) {
-                sprite_bounds.h += sprite_bounds.y;
-                sprite_bounds.y = 0;
-            }
-            if (sprite_bounds.right() > width_) {
-                sprite_bounds.w = width_ - sprite_bounds.x;
-            }
-            if (sprite_bounds.bottom() > height_) {
-                sprite_bounds.h = height_ - sprite_bounds.y;
-            }
-            
-            if (sprite_bounds.w > 0 && sprite_bounds.h > 0) {
-                SpriteFrame frame{};
-                frame.bounds = sprite_bounds;
-                frame.index = static_cast<int>(i);
-                frames.push_back(frame);
-            }
+        for (size_t i = 0; i < detected_rectangles_.size(); ++i) {
+            frames.push_back({.bounds = detected_rectangles_[i], .index = static_cast<int>(i)});
         }
-        
         return frames;
     }
-    
+
     bool find_connected_components() {
         component_labels_.assign(static_cast<size_t>(width_) * height_, -1);
         component_bounds_.clear();

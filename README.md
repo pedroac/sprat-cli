@@ -835,7 +835,7 @@ Frames are listed in reading order (rows top to bottom, left to right within a r
 ```
 
 Options:
-- `--has-rectangles`: Look for closed rectangles instead of using transparency.
+- `--has-rectangles`: Use the areas enclosed by lines of the rectangle color as frames instead of using transparency. Works for separate boxes and for grids whose cells share lines, with any line width; each whole cell is a frame, cells must be fully enclosed, and empty cells are skipped.
 - `--rectangle-color COLOR`: Border color to detect (e.g., `#FF00FF`, `255,0,255`).
 - `--tolerance N`: Manhattan distance for grouping pixels (default: 1).
 - `--min-size N`: Filter out sprites smaller than NxN pixels.
