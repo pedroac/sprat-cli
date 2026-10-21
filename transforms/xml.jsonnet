@@ -52,7 +52,8 @@ local anim_xml(a) =
   else
     '    <animation index="' + a.index + '" name="' + lib.xml_escape(a.name) +
     '" fps="' + a.fps + '" sprite_indexes="' +
-    std.join(",", ["" + idx for idx in a.frame_indices]) + '" />';
+    std.join(",", ["" + idx for idx in a.frame_indices]) + '"' +
+    (if a.flip != "" then ' flip="' + a.flip + '"' else "") + " />";
 
 local atlases_section =
   '  <atlases>\n' +

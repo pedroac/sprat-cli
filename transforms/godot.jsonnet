@@ -20,14 +20,16 @@ local frame_obj(s) = {
   },
 } else {});
 
-// Godot animations use from/to indices (first and last frame index).
-local anim_obj(a) = {
-  name: a.name,
-  from: if std.length(a.frame_indices) > 0 then a.frame_indices[0] else 0,
-  to: if std.length(a.frame_indices) > 0 then a.frame_indices[std.length(a.frame_indices) - 1] else 0,
-  speed: a.fps,
-  loop: true,
-};
+// frames lists every frame in play order (indices into frames[]); from/to are only
+// emitted when the frames form one ascending run, so they never misdescribe the animation.
+local anim_obj(a) =
+  local runs = lib.consecutive_runs(a.frame_indices);
+  {
+    name: a.name,
+    frames: a.frame_indices,
+    speed: a.fps,
+    loop: true,
+  } + (if std.length(runs) == 1 then { from: runs[0].from, to: runs[0].to } else {});
 
 local result =
   {

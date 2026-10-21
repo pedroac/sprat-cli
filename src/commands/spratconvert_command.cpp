@@ -728,6 +728,8 @@ std::string build_sprat_json(
             reinterpret_cast<const unsigned char*>(sname.c_str()), sname.size());
         const std::string nh_hex = to_hex16(nh);
         const std::string nh_dec = std::to_string(nh);
+        // Unity stores internalID/fileID as signed 64-bit; reinterpret the hash bits.
+        const std::string nh_signed = std::to_string(static_cast<int64_t>(nh));
 
         std::string a_path = format_atlas_path(output_pattern_arg, s.atlas_index);
 
@@ -769,6 +771,7 @@ std::string build_sprat_json(
         o += ",\"pivot_y_norm_raw\":" + format_double(pivot_y_norm_raw);
         o += ",\"name_hash_hex\":\"" + nh_hex + "\"";
         o += ",\"name_hash_decimal\":\"" + nh_dec + "\"";
+        o += ",\"name_hash_signed\":\"" + nh_signed + "\"";
         o += ",\"name_css\":\"" + escape_json(to_css_name(sname)) + "\"";
 
         // sprite_markers array
@@ -922,6 +925,7 @@ std::string build_sprat_json(
             j += ",\"name\":\"" + escape_json(fname) + "\"";
             j += ",\"name_hash_hex\":\"" + to_hex16(fnh) + "\"";
             j += ",\"name_hash_decimal\":\"" + std::to_string(fnh) + "\"";
+            j += ",\"name_hash_signed\":\"" + std::to_string(static_cast<int64_t>(fnh)) + "\"";
             j += "}";
         }
         j += "]";

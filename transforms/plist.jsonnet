@@ -7,11 +7,13 @@ local sprite_entry(s) =
   local content_h = s.content_h;
   local source_w  = s.source_w;
   local source_h  = s.source_h;
-  local cx = std.floor((s.trim_left - s.trim_right) / 2);
-  local cy = std.floor((s.trim_bottom - s.trim_top) / 2);
-  local plist_frame = "{" + s.x + "," + s.y + "},{" + s.w + "," + s.h + "}";
+  // Offset of the trimmed rect's center from the source center, Y-up; may be a half pixel.
+  local cx = (s.trim_left - s.trim_right) / 2;
+  local cy = (s.trim_bottom - s.trim_top) / 2;
+  // Cocos2d-x rects are "{{x,y},{w,h}}" with the unrotated size, even for rotated frames.
+  local plist_frame = "{{" + s.x + "," + s.y + "},{" + content_w + "," + content_h + "}}";
   local plist_offset = "{" + cx + "," + cy + "}";
-  local plist_source_color_rect = "{" + s.trim_left + "," + s.trim_top + "},{" + content_w + "," + content_h + "}";
+  local plist_source_color_rect = "{{" + s.trim_left + "," + s.trim_top + "},{" + content_w + "," + content_h + "}}";
   local plist_source_size = "{" + source_w + "," + source_h + "}";
   '\t\t<key>' + lib.xml_escape(s.name) + '</key>\n' +
   '\t\t<dict>\n' +

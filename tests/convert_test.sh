@@ -742,4 +742,39 @@ if grep -qF 'a*/b.png' "$tmp_dir/out.escape.css"; then
   exit 1
 fi
 
+# csv: markers of every type export, and the markers_json column stays one quoted field
+printf 'atlas 16,16\nsprite "a.png" 0,0 16,16\n' > "$tmp_dir/csv_markers.txt"
+cat > "$tmp_dir/csv_markers.markers" <<'MARKERS'
+path "a.png"
+- marker "hurt" circle 6,7 4
+- marker "hit" point 1,1
+- marker "poly" polygon 0,0 4,0 4,4
+MARKERS
+"$convert_bin" --transform csv --markers "$(fix_path "$tmp_dir/csv_markers.markers")" < "$tmp_dir/csv_markers.txt" > "$tmp_dir/out.markers.csv"
+grep -qF ',3,"[{""name"":""hurt""' "$tmp_dir/out.markers.csv"
+grep -q '^marker,0,hurt,circle,6,7,4,,,,0,a,a.png' "$tmp_dir/out.markers.csv"
+grep -q '^marker,1,hit,point,1,1,,,,,0,a,a.png' "$tmp_dir/out.markers.csv"
+grep -q '^marker,2,poly,polygon,0,0,,,,"0,0|4,0|4,4",0,a,a.png' "$tmp_dir/out.markers.csv"
+
+# TexturePacker-style formats: rotated frames carry the unrotated size (readers swap it),
+# and plist rects use Cocos2d-x's "{{x,y},{w,h}}" syntax.
+printf 'atlas 64,32\nsprite "b.png" 16,0 10,6 1,2 3,4 rotated\n' > "$tmp_dir/tp_rotated.txt"
+for t in phaser-hash phaser-array unity.json aseprite; do
+  "$convert_bin" --transform "$t" < "$tmp_dir/tp_rotated.txt" | tr -d ' \n' > "$tmp_dir/out.tp.$t"
+  grep -qF '"frame":{"h":10,"w":6,"x":16,"y":0}' "$tmp_dir/out.tp.$t"
+done
+"$convert_bin" --transform plist < "$tmp_dir/tp_rotated.txt" > "$tmp_dir/out.tp.plist"
+grep -qF '<string>{{16,0},{6,10}}</string>' "$tmp_dir/out.tp.plist"
+grep -qF '<string>{{1,2},{6,10}}</string>' "$tmp_dir/out.tp.plist"
+grep -qF '<string>{-1,1}</string>' "$tmp_dir/out.tp.plist"
+# odd trim differences give a half-pixel offset instead of rounding it away
+printf 'atlas 8,8\nsprite "c.png" 0,0 4,4 1,0 0,0\n' | "$convert_bin" --transform plist | grep -qF '<string>{0.5,0}</string>'
+
+# godot: animations list their frames in play order; from/to only for one ascending run
+printf 'atlas 24,8\nsprite "0.png" 0,0 8,8\nsprite "1.png" 8,0 8,8\nsprite "2.png" 16,0 8,8\n' > "$tmp_dir/godot_anim.txt"
+printf 'animation "back"\n- frame 2\n- frame 0\nanimation "run"\n- frame 0\n- frame 1\n' > "$tmp_dir/godot_anim.anims"
+"$convert_bin" --transform godot --animations "$(fix_path "$tmp_dir/godot_anim.anims")" < "$tmp_dir/godot_anim.txt" | tr -d ' \n' > "$tmp_dir/out.godot_anim"
+grep -qF '{"frames":[2,0],"loop":true,"name":"back","speed":8}' "$tmp_dir/out.godot_anim"
+grep -qF '{"frames":[0,1],"from":0,"loop":true,"name":"run","speed":8,"to":1}' "$tmp_dir/out.godot_anim"
+
 echo "convert_test.sh: ok"

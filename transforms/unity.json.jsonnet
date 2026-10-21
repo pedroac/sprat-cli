@@ -3,7 +3,8 @@ local sprat = std.extVar("sprat");
 local lib = import "sprat.libsonnet";
 
 local frame_obj(s) = {
-  frame: { x: s.x, y: s.y, w: s.w, h: s.h },
+  // Unrotated size; readers swap it themselves when rotated is true.
+  frame: { x: s.x, y: s.y, w: s.content_w, h: s.content_h },
   rotated: s.rotated,
   trimmed: s.has_trim,
   spriteSourceSize: { x: s.trim_left, y: s.trim_top, w: s.content_w, h: s.content_h },

@@ -598,12 +598,12 @@ Transform files are searched in:
 | `css` | CSS | CSS sprite sheet |
 | `aseprite` | JSON | Aseprite JSON Array format; frameTags built from animations (non-contiguous animations become multiple tags) |
 | `libgdx` | Text | LibGDX Atlas format; handles multipack; rotated sprites require `--rotate-direction ccw` |
-| `godot` | JSON | Godot SpriteFrames resource |
+| `godot` | JSON | Godot SpriteFrames resource; each animation lists its `frames` in play order (`from`/`to` only when they form one ascending run) |
 | `phaser-hash` | JSON | Phaser 3 hash-keyed sprite sheet |
 | `phaser-array` | JSON | Phaser 3 array-keyed sprite sheet |
 | `phaser-anims` | JSON | Phaser 3 animation config |
 | `plist` | plist | Apple / TexturePacker plist |
-| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation; requires `--output-dir`; rotated sprites are not supported (Unity sprite rects have no rotation) |
+| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation; requires `--output-dir`; rotated sprites are not supported (Unity sprite rects have no rotation); in `unity.meta` the pivot and nine-slice border are relative to the trimmed sprite rect |
 
 ### Transform format
 
@@ -660,6 +660,7 @@ local sprat = std.extVar("sprat");
 | `pivot_y_norm_raw` | Normalized Y-down |
 | `name_hash_hex` | 16-char FNV-1a hex string |
 | `name_hash_decimal` | FNV-1a as a decimal string (serialized as JSON string to avoid float precision loss) |
+| `name_hash_signed` | Same hash as a signed 64-bit decimal string, for IDs stored as `int64` (Unity `internalID`/`fileID`) |
 | `name_css` | CSS-safe identifier |
 | `alias_of` | Canonical sprite path for a deduplicated alias; empty for regular sprites |
 | `markers` | Array of marker objects attached to this sprite |
@@ -670,7 +671,7 @@ local sprat = std.extVar("sprat");
 |---|---|
 | `index`, `name`, `fps`, `duration` | Identity and timing |
 | `frame_indices` | Global sprite index sequence (may be non-contiguous) |
-| `frames` | `[{index, name, name_hash_decimal, name_hash_hex}]` resolved per frame |
+| `frames` | `[{index, name, name_hash_decimal, name_hash_signed, name_hash_hex}]` resolved per frame |
 | `is_alias`, `alias_source`, `flip` | Alias support |
 
 **Per marker (`markers[]` and `sprite.markers[]`):**

@@ -68,3 +68,30 @@ if [ -e "$tmp_dir/unity_rotated" ]; then
 fi
 printf 'atlas 100,50\nsprite "a.png" 0,0 30,50\n' | "$convert_bin" --transform unity --output-dir "$tmp_dir/unity_ok" > /dev/null
 [ -f "$tmp_dir/unity_ok/meta.meta" ] && [ -f "$tmp_dir/unity_ok/json.json" ]
+
+# unity.meta: the sprite rect is the trimmed content, so pivot and border are relative to it;
+# IDs are signed 64-bit and spriteID a 32-hex GUID; names that YAML would misread are quoted.
+printf 'atlas 64,64\nsprite "c.png" 0,0 10,10 10,10 10,10\n' > "$tmp_dir/trimmed.txt"
+printf 'path "c.png"\n- marker "pivot" point 10,10\n' > "$tmp_dir/trimmed.markers"
+"$convert_bin" --transform unity.meta --markers "$tmp_dir/trimmed.markers" < "$tmp_dir/trimmed.txt" > "$tmp_dir/trimmed.meta"
+grep -qF 'pivot: {x: 0, y: 1}' "$tmp_dir/trimmed.meta"
+grep -qE '^      spriteID: [0-9a-f]{32}$' "$tmp_dir/trimmed.meta"
+internal_id="$(sed -n 's/^      internalID: //p' "$tmp_dir/trimmed.meta")"
+grep -qF "213: $internal_id" "$tmp_dir/trimmed.meta"
+# "c" hashes above INT64_MAX, so its signed ID must be negative
+case "$internal_id" in
+  -[1-9]*) ;;
+  *) echo "internalID must be the signed 64-bit hash, got: $internal_id" >&2; exit 1 ;;
+esac
+dupes="$("$convert_bin" --transform unity.meta < "$tmp_dir/trimmed.txt" | grep -E '^  [A-Za-z]' | sort | uniq -d)"
+if [ -n "$dupes" ]; then
+  echo "unity.meta has duplicate TextureImporter keys: $dupes" >&2
+  exit 1
+fi
+printf 'atlas 8,8\nsprite "a: b.png" 0,0 8,8\n' | "$convert_bin" --transform unity.meta | grep -qF 'name: "a: b"'
+printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/anim.txt"
+printf 'animation "#idle"\n- frame 0\n' > "$tmp_dir/anim.anims"
+"$convert_bin" --transform unity.anim --animations "$tmp_dir/anim.anims" --output-dir "$tmp_dir/anim_out" < "$tmp_dir/anim.txt" > /dev/null
+anim_meta="$(printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' | "$convert_bin" --transform unity.meta | sed -n 's/^      internalID: //p')"
+grep -qF 'm_Name: "#idle"' "$tmp_dir/anim_out/"*.anim
+grep -qF "value: {fileID: $anim_meta," "$tmp_dir/anim_out/"*.anim

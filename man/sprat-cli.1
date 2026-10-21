@@ -201,7 +201,7 @@ Placeholders:
 .IP "\(bu" 2
 \fBPivot points\fR: \fB{{pivot_x}}\fR, \fB{{pivot_y}}\fR. These are resolved from markers named \fBpivot\fR of type \fBpoint\fR (either per-sprite or global). \fB{{pivot_x_norm}}\fR, \fB{{pivot_y_norm}}\fR provide normalized coordinates (0.0 to 1.0). \fB{{pivot_y_norm}}\fR is flipped for Unity's coordinate system (1.0 - py/source_h). \fB{{pivot_y_norm_raw}}\fR provides normalized Y without flipping.
 .IP "\(bu" 2
-\fBStable IDs\fR: \fB{{name_hash}}\fR, \fB{{name_hash_hex}}\fR \(em FNV-1a hash of the sprite name, useful for engine-specific internal IDs (such as Unity's spriteID).
+\fBStable IDs\fR: \fB{{name_hash}}\fR, \fB{{name_hash_hex}}\fR \(em FNV-1a hash of the sprite name, useful for engine-specific internal IDs (such as Unity's spriteID). Jsonnet transforms also receive \fBname_hash_signed\fR, the same hash as a signed 64-bit integer, for IDs stored as int64 (such as Unity's internalID).
 .IP "\(bu" 2
 \fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR). Jsonnet transforms also receive \fBrotation_direction\fR (\fBcw\fR or \fBccw\fR) and \fBhas_rotated\fR.
 .IP "\(bu" 2

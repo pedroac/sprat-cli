@@ -4,7 +4,7 @@ local lib = import "sprat.libsonnet";
 
 local frame_entry(frame, i, fps) =
   "    - time: " + lib.format_double(i / fps) + "\n" +
-  "      value: {fileID: " + frame.name_hash_decimal +
+  "      value: {fileID: " + frame.name_hash_signed +
   ", guid: " + sprat.output_stem_hash_hex + "0000000000000000, type: 3}\n";
 
 local render_clip(anim) =
@@ -16,7 +16,7 @@ local render_clip(anim) =
   "  m_CorrespondingSourceObject: {fileID: 0}\n" +
   "  m_PrefabInstance: {fileID: 0}\n" +
   "  m_PrefabAsset: {fileID: 0}\n" +
-  "  m_Name: " + anim.name + "\n" +
+  "  m_Name: " + lib.yaml_string(anim.name) + "\n" +
   "  serializedVersion: 6\n" +
   "  m_Legacy: 0\n" +
   "  m_Compressed: 0\n" +

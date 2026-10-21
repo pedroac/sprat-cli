@@ -40,7 +40,7 @@ local sprite_row(s) =
   s.pivot_x + "," + s.pivot_y + "," +
   s.trim_left + "," + s.trim_top + "," + s.trim_right + "," + s.trim_bottom + "," +
   std.length(s.markers) + "," +
-  markers_json_array(s.markers) + "," +
+  csv_escape(markers_json_array(s.markers)) + "," +
   lib.rotation_degrees(sprat, s) + "," +
   (if has_slice then "true" else "false") + "," +
   (if has_slice then "" + s.slice_left else "") + "," +
@@ -50,12 +50,16 @@ local sprite_row(s) =
   (if has_slice then s.slice_h else "") + "," +
   (if has_slice then s.slice_v else "") + "\n";
 
+// Markers only carry the fields of their type; the other columns stay empty.
+local field_or_empty(m, k) = if std.objectHas(m, k) then "" + m[k] else "";
+
 local marker_row(m) =
   "marker," + m.index + "," +
   csv_escape(m.name) + "," +
   m.type + "," +
-  m.x + "," + m.y + "," + m.radius + "," + m.w + "," + m.h + "," +
-  marker_vertices_csv(m.vertices) + "," +
+  m.x + "," + m.y + "," +
+  field_or_empty(m, "radius") + "," + field_or_empty(m, "w") + "," + field_or_empty(m, "h") + "," +
+  csv_escape(if std.objectHas(m, "vertices") then marker_vertices_csv(m.vertices) else "") + "," +
   m.sprite_index + "," +
   csv_escape(m.sprite_name) + "," +
   csv_escape(m.sprite_path) + "\n";

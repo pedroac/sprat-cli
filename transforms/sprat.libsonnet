@@ -48,6 +48,20 @@
         "\n", "\\a "),
       "\r", ""),
 
+  // Emit text as a YAML scalar: plain when that is unambiguous, otherwise double-quoted.
+  // A JSON string literal is a valid YAML double-quoted scalar.
+  yaml_string(s)::
+    local chars = std.stringChars(s);
+    local needs_quotes =
+      s == ""
+      || std.member("-?:,[]{}#&*!|>'\"%@`", chars[0])
+      || chars[0] == " " || chars[std.length(chars) - 1] == " "
+      || chars[std.length(chars) - 1] == ":"
+      || std.length(std.findSubstr(": ", s)) > 0
+      || std.length(std.findSubstr(" #", s)) > 0
+      || std.length([c for c in chars if std.codepoint(c) < 32 || c == "\\"]) > 0;
+    if needs_quotes then std.escapeStringJson(s) else s,
+
   // Make text safe inside a CSS /* ... */ comment.
   css_comment_escape(s)::
     std.strReplace(s, "*/", "* /"),
