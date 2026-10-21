@@ -67,6 +67,7 @@ using sprat::core::parse_positive_int;
 using sprat::core::parse_non_negative_int;
 using sprat::core::tr;
 using sprat::core::to_quoted;
+using sprat::core::trim_copy;
 
 struct Color {
     unsigned char r, g, b, a;
@@ -612,18 +613,6 @@ private:
 };
 
 // Utility functions
-std::string trim_copy(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && (std::isspace(static_cast<unsigned char>(s[start])) != 0)) {
-        ++start;
-    }
-    size_t end = s.size();
-    while (end > start && (std::isspace(static_cast<unsigned char>(s[end - 1])) != 0)) {
-        --end;
-    }
-    return s.substr(start, end - start);
-}
-
 bool parse_color(const std::string& value, Color& out) {
     if (value.empty()) { return false;
 }

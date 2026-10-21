@@ -17,6 +17,8 @@ bool parse_pair(const std::string& token, int& a, int& b);
 
 bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::string& error);
 
+std::string trim_copy(const std::string& s);
+
 std::string to_quoted(const std::string& s);
 std::string to_quoted(const char* s);
 std::string to_quoted(const std::filesystem::path& p);

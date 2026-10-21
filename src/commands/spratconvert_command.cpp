@@ -81,21 +81,8 @@ using sprat::core::parse_layout;
 using sprat::core::parse_pair;
 using sprat::core::parse_quoted;
 using sprat::core::tr;
+using sprat::core::trim_copy;
 using sprat::core::validate_output_pattern;
-
-std::string trim_copy(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])) != 0) {
-        ++start;
-    }
-
-    size_t end = s.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])) != 0) {
-        --end;
-    }
-
-    return s.substr(start, end - start);
-}
 
 bool read_text_file(const fs::path& path, std::string& out, std::string& error) {
     std::ifstream in(path, std::ios::binary | std::ios::ate);

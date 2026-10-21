@@ -21,12 +21,6 @@
 #endif
 #endif
 
-#ifdef _MSC_VER
-static inline int popcount64(unsigned long long x) { return (int)__popcnt64(x); }
-#else
-static inline int popcount64(unsigned long long x) { return __builtin_popcountll(x); }
-#endif
-
 #include <algorithm>
 #include <iostream>
 #include <utility>
@@ -59,9 +53,11 @@ namespace fs = std::filesystem;
 #include <system_error>
 #include <archive.h>
 #include <archive_entry.h>
+#include "core/checked_math.h"
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 #include "core/fnv1a.h"
+#include "core/perceptual_dedup.h"
 
 #include <stb_image.h>
 
@@ -77,18 +73,9 @@ using sprat::core::parse_positive_int;
 using sprat::core::parse_positive_uint;
 using sprat::core::tr;
 using sprat::core::to_quoted;
-
-std::string trim_copy(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && (std::isspace(static_cast<unsigned char>(s[start])) != 0)) {
-        ++start;
-    }
-    size_t end = s.size();
-    while (end > start && (std::isspace(static_cast<unsigned char>(s[end - 1])) != 0)) {
-        --end;
-    }
-    return s.substr(start, end - start);
-}
+using sprat::core::trim_copy;
+using sprat::core::checked_mul_size_t;
+using sprat::core::compute_dhash;
 
 std::string normalize_path_key(const fs::path& path) {
     std::error_code ec;
@@ -718,7 +705,8 @@ struct ImageCacheEntry {
     int trim_bottom = 0;
     long long cached_at_unix = 0;
     uint64_t content_hash = 0;     // FNV-1a hash of visible pixel region (0 = not computed)
-    uint64_t perceptual_hash = 0;  // dHash of visible pixel region   (0 = not computed)
+    uint64_t perceptual_hash = 0;  // dHash of visible pixel region
+    bool has_perceptual_hash = false;  // a dHash of 0 is valid (flat or ramp sprites)
     bool has_slice = false;
     int slice_left = 0, slice_top = 0, slice_right = 0, slice_bottom = 0;
 };
@@ -770,14 +758,6 @@ bool checked_add_int(int a, int b, int& out) {
     }
     out = a + b;
     return true;
-}
-
-bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
-    if (a == 0 || b <= std::numeric_limits<size_t>::max() / a) {
-        out = a * b;
-        return true;
-    }
-    return false;
 }
 
 bool compute_trim_bounds(const unsigned char* rgba,
@@ -1323,7 +1303,7 @@ bool load_image_cache(const fs::path& cache_path,
     if (!(in >> header_tag >> version)) {
         return false;
     }
-    if (header_tag != "spratlayout_cache" || (version != 1 && version != 2 && version != 3 && version != 4)) {
+    if (header_tag != "spratlayout_cache" || (version < 1 || version > 5)) {
         return false;
     }
 
@@ -1360,6 +1340,16 @@ bool load_image_cache(const fs::path& cache_path,
                 break;
             }
             entry.has_slice = slice_flag != 0;
+        }
+        if (version >= 5) {
+            int phash_flag = 0;
+            if (!(in >> phash_flag)) {
+                break;
+            }
+            entry.has_perceptual_hash = phash_flag != 0;
+        } else {
+            // Older caches used 0 as "not computed"; recompute those.
+            entry.has_perceptual_hash = entry.perceptual_hash != 0;
         }
         if (entry.w <= 0 || entry.h <= 0 || entry.w > k_max_image_dimension || entry.h > k_max_image_dimension) {
             continue;
@@ -1402,7 +1392,7 @@ bool save_image_cache(const fs::path& cache_path,
         valid.resize(k_max_cache_entries);
     }
 
-    out << "spratlayout_cache 4\n";
+    out << "spratlayout_cache 5\n";
     for (const auto& [key_ptr, e_ptr] : valid) {
         std::string path = *key_ptr;
         if (path.size() > 2 &&
@@ -1428,7 +1418,8 @@ bool save_image_cache(const fs::path& cache_path,
             << e.slice_left << " "
             << e.slice_top << " "
             << e.slice_right << " "
-            << e.slice_bottom << "\n";
+            << e.slice_bottom << " "
+            << (e.has_perceptual_hash ? 1 : 0) << "\n";
     }
     out.close();
     if (!out) {
@@ -1556,6 +1547,7 @@ void print_usage() {
               << tr("  --incremental              Reuse positions for unchanged sprites (layout stability)\n")
               << tr("  --deduplicate <mode>       Deduplication mode: none, exact, perceptual\n")
               << tr("  --dedup-threshold N        Max Hamming distance for perceptual dedup (0-64, default: 5)\n")
+              << tr("  --dedup-tolerance N        Max per-channel pixel difference for perceptual dedup (0-255, default: 8)\n")
               << tr("  --sort name|none|stable[:<metric>]  Order of sprites in layout (default: none)\n")
               << tr("                             stable: deterministic sort by size then path; <metric> is\n")
               << tr("                             area (default), maxside, height, width, or perimeter\n")
@@ -1620,6 +1612,7 @@ std::string build_layout_signature(const std::string& profile_name,
                                    bool preserve_source_order,
                                    const std::string& deduplicateMode,
                                    int dedup_threshold,
+                                   int dedup_tolerance,
                                    const std::vector<ImageSource>& sources) {
     const std::vector<std::string> parts = build_source_sig_parts(preserve_source_order, sources);
 
@@ -1652,6 +1645,8 @@ std::string build_layout_signature(const std::string& profile_name,
     sig += deduplicateMode;
     sig += '|';
     sig += std::to_string(dedup_threshold);
+    sig += '|';
+    sig += std::to_string(dedup_tolerance);
     for (const std::string& part : parts) {
         sig += '\n';
         sig += part;
@@ -3599,45 +3594,6 @@ bool pack_atlases(
     return true;
 }
 
-// Default maximum Hamming distance between two dHashes to consider sprites perceptually equal.
-static constexpr int k_default_dhash_threshold = 5;
-
-// Compute a 64-bit dHash for an RGBA pixel buffer.
-// Algorithm: sample a 9x8 greyscale grid (nearest-neighbor), then for each of the 8 rows
-// compare 8 adjacent column pairs; bit=1 if left < right. Returns 64-bit hash.
-// Alpha-premultiplied luma: grey = (0.299*R + 0.587*G + 0.114*B) * (A/255.0)
-static uint64_t compute_dhash(const unsigned char* rgba, int w, int h) {
-    if (rgba == nullptr || w <= 0 || h <= 0) {
-        return 0;
-    }
-    // Sample a 9x8 grid (9 cols, 8 rows)
-    double grid[8][9];
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 9; ++col) {
-            int px = (col * (w - 1)) / 8;
-            int py = (row * (h - 1)) / 7;
-            if (px < 0) px = 0;
-            if (px >= w) px = w - 1;
-            if (py < 0) py = 0;
-            if (py >= h) py = h - 1;
-            const unsigned char* p = rgba + (static_cast<size_t>(py) * static_cast<size_t>(w) + static_cast<size_t>(px)) * 4;
-            double a = p[3] / 255.0;
-            grid[row][col] = (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * a;
-        }
-    }
-    uint64_t hash = 0;
-    int bit = 0;
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 8; ++col) {
-            if (grid[row][col] < grid[row][col + 1]) {
-                hash |= (uint64_t(1) << bit);
-            }
-            ++bit;
-        }
-    }
-    return hash;
-}
-
 // All settings derived from parsing argv.  Fields that express an override
 // (has_*_override == true) indicate that the corresponding value was
 // explicitly supplied on the command line; profile loading will only fill in
@@ -3679,8 +3635,9 @@ struct LayoutArgs {
     bool has_multipack_override = false;
     std::string deduplicateMode = "none";
     bool has_deduplicate_override = false;
-    int dedup_threshold = k_default_dhash_threshold;
+    int dedup_threshold = sprat::core::k_default_dedup_hash_threshold;
     bool has_dedup_threshold_override = false;
+    int dedup_tolerance = sprat::core::k_default_dedup_pixel_tolerance;
     FrameSort frame_sort = FrameSort::Name;
     StableMetric stable_metric = StableMetric::Area;
     bool has_frame_sort_override = false;
@@ -3831,6 +3788,12 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
                 return 1;
             }
             args.has_dedup_threshold_override = true;
+        } else if (arg == "--dedup-tolerance" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (!parse_non_negative_int(value, args.dedup_tolerance) || args.dedup_tolerance > 255) {
+                std::cerr << tr("Invalid dedup tolerance: ") << value << tr(" (must be 0-255)\n");
+                return 1;
+            }
         } else if (arg == "--sort" && i + 1 < argc) {
             const std::string value = argv[++i];
             if (!parse_frame_sort_from_string(value, args.frame_sort, args.stable_metric)) {
@@ -3877,6 +3840,33 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
     }
 
     return -1; // continue
+}
+
+// Loads the RGBA pixels that would be packed for `s`: the (trim_left, trim_top, w, h)
+// region of its source file. Returns nullopt if the file can't be read or the region
+// doesn't fit (e.g. the file changed since it was scanned).
+std::optional<std::vector<unsigned char>> load_sprite_region(const Sprite& s) {
+    int file_w = 0;
+    int file_h = 0;
+    int channels = 0;
+    unsigned char* px = stbi_load(s.path.c_str(), &file_w, &file_h, &channels, 4);
+    if (px == nullptr) {
+        return std::nullopt;
+    }
+    std::optional<std::vector<unsigned char>> region;
+    if (s.w > 0 && s.h > 0 && s.trim_left >= 0 && s.trim_top >= 0 &&
+        s.trim_left <= file_w - s.w && s.trim_top <= file_h - s.h) {
+        const size_t row_bytes = static_cast<size_t>(s.w) * 4;
+        region.emplace(row_bytes * static_cast<size_t>(s.h));
+        for (int y = 0; y < s.h; ++y) {
+            const unsigned char* src = px +
+                (static_cast<size_t>(s.trim_top + y) * static_cast<size_t>(file_w) +
+                 static_cast<size_t>(s.trim_left)) * 4;
+            std::memcpy(region->data() + static_cast<size_t>(y) * row_bytes, src, row_bytes);
+        }
+    }
+    stbi_image_free(px);
+    return region;
 }
 
 int run_spratlayout(int argc, char** argv) {
@@ -3955,6 +3945,7 @@ int run_spratlayout(int argc, char** argv) {
     bool has_multipack_override = args.has_multipack_override;
     const std::string deduplicateMode = std::move(args.deduplicateMode);
     const int dedup_threshold = args.dedup_threshold;
+    const int dedup_tolerance = args.dedup_tolerance;
     const FrameSort frame_sort = args.frame_sort;
     const StableMetric stable_metric = args.stable_metric;
     const bool has_frame_sort_override = args.has_frame_sort_override;
@@ -4437,7 +4428,7 @@ int run_spratlayout(int argc, char** argv) {
     const bool is_file = !do_sort && !enforce_stable_order;
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        padding, extrude, scale, trim_transparent, allow_rotate, is_file, deduplicateMode, dedup_threshold, sources);
+        padding, extrude, scale, trim_transparent, allow_rotate, is_file, deduplicateMode, dedup_threshold, dedup_tolerance, sources);
     const std::string layout_seed_signature = build_layout_seed_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
         extrude, scale, trim_transparent, allow_rotate, is_file, sources);
@@ -4542,7 +4533,7 @@ int run_spratlayout(int argc, char** argv) {
                 bool need_hash = false;
                 if (deduplicateMode == "exact" && cached.content_hash == 0) {
                     need_hash = true;
-                } else if (deduplicateMode == "perceptual" && cached.perceptual_hash == 0) {
+                } else if (deduplicateMode == "perceptual" && !cached.has_perceptual_hash) {
                     need_hash = true;
                 }
                 if (!need_hash) {
@@ -4667,6 +4658,7 @@ int run_spratlayout(int argc, char** argv) {
                 .cached_at_unix=now_unix,
                 .content_hash=entry_content_hash,
                 .perceptual_hash=entry_perceptual_hash,
+            .has_perceptual_hash=deduplicateMode != "none",
                 .has_slice=loaded_sprite.has_slice,
                 .slice_left=loaded_sprite.slice_left,
                 .slice_top=loaded_sprite.slice_top,
@@ -4796,6 +4788,7 @@ int run_spratlayout(int argc, char** argv) {
             .cached_at_unix=now_unix,
             .content_hash=entry_content_hash,
             .perceptual_hash=entry_perceptual_hash,
+            .has_perceptual_hash=deduplicateMode != "none",
             .has_slice=loaded_sprite.has_slice,
             .slice_left=loaded_sprite.slice_left,
             .slice_top=loaded_sprite.slice_top,
@@ -4893,47 +4886,44 @@ int run_spratlayout(int argc, char** argv) {
         }
         sprites = std::move(deduped);
     } else if (deduplicateMode == "perceptual") {
-        // O(N²) pairwise + union-find dedup
-        const size_t N = sprites.size();
-        // Gather hashes
-        std::vector<uint64_t> phash(N, 0);
-        for (size_t i = 0; i < N; ++i) {
-            const std::string ck = sprites[i].path + (trim_transparent ? "|1" : "|0");
-            const auto it = cache_entries.find(ck);
-            if (it != cache_entries.end()) {
-                phash[i] = it->second.perceptual_hash;
+        // The dHash only nominates candidates; pixels decide. Each sprite's packed region
+        // is (trim_left, trim_top, w, h) in its source file, for trimmed and nine-patch
+        // sprites alike, so we compare exactly what would end up in the atlas.
+        std::vector<sprat::core::DedupCandidate> candidates(sprites.size());
+        for (size_t i = 0; i < sprites.size(); ++i) {
+            const Sprite& s = sprites[i];
+            candidates[i].w = s.w;
+            candidates[i].h = s.h;
+            const auto it = cache_entries.find(s.path + (trim_transparent ? "|1" : "|0"));
+            if (it != cache_entries.end() && it->second.has_perceptual_hash) {
+                candidates[i].hash = it->second.perceptual_hash;
+                candidates[i].has_hash = true;
             }
         }
-        // Union-find
-        std::vector<size_t> parent(N);
-        std::iota(parent.begin(), parent.end(), 0);
-        std::function<size_t(size_t)> find = [&](size_t x) -> size_t {
-            while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
-            return x;
-        };
-        for (size_t i = 0; i < N; ++i) {
-            if (phash[i] == 0) continue;
-            for (size_t j = i + 1; j < N; ++j) {
-                if (phash[j] == 0) continue;
-                if (sprites[i].w != sprites[j].w || sprites[i].h != sprites[j].h) continue;
-                if (popcount64(phash[i] ^ phash[j]) <= dedup_threshold) {
-                    size_t ri = find(i), rj = find(j);
-                    if (ri != rj) parent[rj] = ri;
-                }
-            }
-        }
-        // Build deduped list
-        std::unordered_map<size_t, size_t> canonical_map; // root -> first sprite index
-        canonical_map.reserve(N);
-        std::vector<Sprite> deduped;
-        deduped.reserve(N);
-        for (size_t i = 0; i < N; ++i) {
-            size_t root = find(i);
-            auto [ins_it, inserted] = canonical_map.emplace(root, i);
+        std::unordered_map<size_t, std::optional<std::vector<unsigned char>>> region_cache;
+        const auto region_of = [&](size_t i) -> const std::optional<std::vector<unsigned char>>& {
+            auto [it, inserted] = region_cache.try_emplace(i);
             if (inserted) {
+                it->second = load_sprite_region(sprites[i]);
+            }
+            return it->second;
+        };
+        const std::vector<size_t> canonical_of = sprat::core::group_near_duplicates(
+            candidates, dedup_threshold, [&](size_t canonical, size_t candidate) {
+                const auto& a = region_of(canonical);
+                const auto& b = region_of(candidate);
+                return a && b && sprat::core::rgba_within_tolerance(
+                    a->data(), b->data(),
+                    static_cast<size_t>(sprites[candidate].w) * static_cast<size_t>(sprites[candidate].h),
+                    dedup_tolerance);
+            });
+        std::vector<Sprite> deduped;
+        deduped.reserve(sprites.size());
+        for (size_t i = 0; i < sprites.size(); ++i) {
+            if (canonical_of[i] == i) {
                 deduped.push_back(sprites[i]);
             } else {
-                layout_aliases.push_back({sprites[i].path, sprites[ins_it->second].path});
+                layout_aliases.push_back({sprites[i].path, sprites[canonical_of[i]].path});
             }
         }
         sprites = std::move(deduped);
@@ -5665,6 +5655,7 @@ int run_spratlayout(int argc, char** argv) {
                         is_file,
                         deduplicateMode,
                         dedup_threshold,
+                        dedup_tolerance,
                         sources
                     );
                     if (prewarm_signature == layout_signature) {

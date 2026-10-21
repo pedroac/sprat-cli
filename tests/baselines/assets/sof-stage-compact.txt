@@ -1,0 +1,23 @@
+# case: sof-stage-compact
+# sorted PNGs under 'Streets of Fight files/Stage Layers' | spratlayout --stdin-list --mode compact --trim-transparent
+# spratpack
+[layout]
+root "<assets>"
+scale 1
+atlas 528,507
+sprite "Streets of Fight files/Stage Layers/tileset.png" 0,0 528,368 0,0 16,16
+sprite "Streets of Fight files/Stage Layers/fore.png" 0,368 139,139 16,5 37,0
+sprite "Streets of Fight files/Stage Layers/back.png" 139,368 96,80
+sprite "Streets of Fight files/Stage Layers/props/car.png" 235,368 133,38 5,10 6,0
+sprite "Streets of Fight files/Stage Layers/props/barrel.png" 368,368 60,38 2,9 2,1
+sprite "Streets of Fight files/Stage Layers/props/banner-hor/banner-hor1.png" 428,368 73,21
+sprite "Streets of Fight files/Stage Layers/props/banner-hor/banner-hor2.png" 428,389 73,21
+sprite "Streets of Fight files/Stage Layers/props/Ethereum/ethereum-1.png" 235,406 73,18 1,2 2,1
+sprite "Streets of Fight files/Stage Layers/props/Ethereum/ethereum-2.png" 428,410 73,18 1,2 2,1
+sprite "Streets of Fight files/Stage Layers/props/Sushi/sushi-1.png" 501,368 16,45 1,2 1,1
+sprite "Streets of Fight files/Stage Layers/props/Sushi/sushi-2.png" 308,406 16,45 1,2 1,1
+sprite "Streets of Fight files/Stage Layers/props/hydrant.png" 324,406 16,32 2,2 1,2
+[pack]
+atlas 0 528x507 rgba-sha256 3cd5281ec3bbbffa348e76a9dba17a7ee6c4d748af9903701bee5e1915fb7b19
+[metrics]
+atlas 0 528x507 efficiency 0.8827

@@ -224,8 +224,11 @@ Profile definitions are searched in:
 - `--trim-transparent`: Remove empty borders to save space.
 - `--rotate`: Allow 90-degree rotation during packing for tighter layouts.
 - `--multipack`: Enable multi-atlas candidate search and splitting.
-- `--deduplicate`: Hash-detect identical sprites and create aliases (saves atlas space).
-- `--sort name|none`: Order of sprites in layout (default: `name` for folders, `none` for stdin).
+- `--deduplicate none|exact|perceptual`: Detect duplicate sprites and create aliases (saves atlas space).
+- `--dedup-threshold N`: Max perceptual-hash distance (0-64, default `5`) for a pair to be compared in `perceptual` mode.
+- `--dedup-tolerance N`: Max per-channel pixel difference (0-255, default `8`) for `perceptual` mode to merge two sprites.
+- `--incremental`: Reuse positions of unchanged sprites from the previous run, packing only new/changed ones (single atlas only; falls back to a full repack if they don't fit). Also available as profile key `incremental=true`.
+- `--sort name|none|stable[:metric]`: Order of sprites in layout (default: `none`).
 - `--scale F`: Pre-scale images (0.0 to 1.0).
 - `--threads N`: Parallelize the packing search.
 - `--debug`: Enable detailed error reporting and debug visualization.
@@ -235,11 +238,14 @@ Profile definitions are searched in:
 `spratlayout` automatically caches image metadata in the system temp directory. If your source images haven't changed, subsequent runs will be nearly instantaneous. Entries older than one hour are pruned automatically.
 
 ### Duplicate Detection
-Detect and alias identical sprites to save atlas space. When `--deduplicate` is used, `spratlayout` computes a content hash of each image and creates aliases for duplicates, packing only one canonical copy per unique content.
+Detect and alias duplicate sprites to save atlas space. `spratlayout` packs only one canonical copy per unique content and emits aliases for the rest:
+
+- `--deduplicate exact`: content hash; only pixel-identical sprites are merged.
+- `--deduplicate perceptual`: near-identical sprites are merged, such as re-exports with slight compression noise or dithering. A perceptual hash (dHash) picks candidate pairs (`--dedup-threshold N`, default `5`). The candidates are then compared pixel by pixel and merged only if every RGBA channel is within `--dedup-tolerance N` (default `8`). Pixels that are fully transparent in both sprites are ignored. Each duplicate is compared against its group's canonical sprite, so differences can't add up along a chain of similar sprites. Palette swaps and animation frames with small changes (such as a blink) stay separate.
 
 ```sh
 # Generate layout with duplicate detection
-./build/spratlayout ./frames --deduplicate > layout.txt
+./build/spratlayout ./frames --deduplicate exact > layout.txt
 ```
 
 The layout file will contain `alias` lines for duplicates:
@@ -250,7 +256,7 @@ alias "duplicate.png" "original.png"
 
 When converting to JSON/metadata, aliases are expanded:
 ```sh
-./build/spratlayout ./frames --deduplicate | ./build/spratconvert --transform json > layout.json
+./build/spratlayout ./frames --deduplicate exact | ./build/spratconvert --transform json > layout.json
 ```
 
 The output JSON will reference the canonical sprite path in the `alias_of` field for duplicate entries. This feature is especially useful for large asset collections with repeated sprites, reducing both atlas size and build time.
@@ -284,7 +290,7 @@ You can also extract a specific atlas index:
 
 ### Compact Mode (GPU Optimized)
 
-Default behavior. Tries to keep the atlas square-ish but prioritizes width/height that fits well in GPU memory.
+Tries to keep the atlas square-ish but prioritizes width/height that fits well in GPU memory.
 
 !Compact GPU
 
@@ -305,6 +311,8 @@ Tries to minimize total area, regardless of aspect ratio.
 ![compact space](README-assets/compact_space_pad2.png)
 
 ### Fast Mode
+
+Default behavior (used by the default `fast` profile).
 
 Uses a shelf packing algorithm. Much faster for huge datasets, but less efficient packing.
 
@@ -365,7 +373,7 @@ Here's an example combining multiple features for maximum optimization:
 ```sh
 # 1. Generate layout with deduplication and trimming
 ./build/spratlayout ./frames \
-  --deduplicate \
+  --deduplicate exact \
   --trim-transparent \
   --padding 2 \
   --extrude 1 \
@@ -396,7 +404,7 @@ This pipeline:
 
 For GPU-native compression (when libsquish is available):
 ```sh
-./build/spratlayout ./frames --deduplicate --trim-transparent --padding 2 | \
+./build/spratlayout ./frames --deduplicate exact --trim-transparent --padding 2 | \
 ./build/spratpack --dilate 1 --gpu-compress dxt5 > atlas.dds
 ```
 
@@ -443,6 +451,28 @@ DXT/BC compression provides 4:1 or 6:1 compression ratios and loads directly int
 - **Windows** (vcpkg): `squish` package in `vcpkg.json`
 
 When libsquish is not available, `--gpu-compress` will error with a helpful message.
+
+### Output Scale
+Scale the whole output atlas (dimensions and sprite positions) by a factor. `--scale-filter` selects the resampling filter.
+```sh
+./build/spratpack --output-scale 0.5 < layout.txt > atlas_half.png
+```
+
+### Secondary Atlases (Normal & Collision Maps)
+Pack companion maps with the same layout so every sprite lines up with the color atlas. `--path-suffix` loads `hero_n.png` instead of `hero.png`, and so on.
+```sh
+./build/spratlayout ./frames > layout.txt
+./build/spratpack -a atlas_%d.png < layout.txt
+./build/spratpack --path-suffix _n -a normal_%d.png < layout.txt
+# Collision maps can be packed at a lower resolution
+./build/spratpack --path-suffix _col --output-scale 0.25 -a collision_%d.png < layout.txt
+
+./build/spratconvert --transform godot -a atlas_%d.png \
+  --normal-atlas normal_%d.png \
+  --collision-atlas collision_%d.png --collision-scale 0.25 \
+  < layout.txt > atlas.tres
+```
+`--collision-scale` must match the `--output-scale` used to pack the collision atlas, so engines can map sprite coordinates onto it. Transforms receive `has_normal_atlas`, `has_collision_atlas`, `collision_atlas_path` and `collision_atlas_scale`. `godot` emits `normal_image`, `collision_image` and `collision_scale`, `unity.json` adds `_NormalMap`/`_CollisionMap` secondary textures, and `json` includes the paths per atlas.
 
 ### Nine-Slice (Slice) Metadata
 Annotate sprites with nine-slice insets and per-axis fill modes for UI scaling. Add a `slice=` token to any sprite line in the layout:
