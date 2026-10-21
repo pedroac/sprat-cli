@@ -874,12 +874,13 @@ Options:
 - `-f, --frames PATH`: Path to frames definition (auto-detects `.json` or `.spratframes` only when atlas path is a file).
 - `-o, --output DIR`: Destination directory.
 - `--keep-trim`: Write only the packed pixels instead of restoring each sprite's original size.
+- `--atlas-index N`: For a multipack layout, the atlas the given image is. By default it is the layout's only atlas, or the only one with the image's size; same-size atlases need this option.
 - `-j, --threads N`: Parallel extraction.
 
 Supported formats:
 - TexturePacker/sprat JSON (Hash or Array), including `spratconvert` exports such as `phaser-hash`, `phaser-array`, `unity.json` and `aseprite`
 - Phaser multi-atlas JSON (`textures: [...]`): the texture whose `image` matches the atlas file name is unpacked
-- `spratlayout` layouts, and the minimalist `.spratframes` format
+- `spratlayout` layouts (including multipack layouts, one atlas at a time, and the `alias` lines of deduplicated sprites), and the minimalist `.spratframes` format
 
 Rotated sprites are turned back, and trimmed sprites are placed in a transparent canvas of their original size (`sourceSize`/`spriteSourceSize` in JSON, trim offsets in layouts, at the layout's `scale`), so unpacked animation frames stay aligned. Output files are named after the frames, with `.png` added unless the name already ends with it. Every frame is checked before anything is written: frames outside the atlas, frames that don't fit their original size, unsafe names or two frames writing the same file make `spratunpack` fail without writing output.
 

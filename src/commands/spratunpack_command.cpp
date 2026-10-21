@@ -76,6 +76,7 @@ struct SpriteFrame {
     bool rotated_ccw{};  // direction of the rotation in the atlas (layouts with "rotation ccw")
     int canvas_w{}, canvas_h{};   // original sprite size; 0 means the unrotated content size
     int offset_x{}, offset_y{};   // content position inside the canvas
+    int atlas_index{};            // atlas of a layout sprite (multipack layouts)
 
     [[nodiscard]] int content_w() const { return rotated ? frame.h : frame.w; }
     [[nodiscard]] int content_h() const { return rotated ? frame.w : frame.h; }
@@ -90,6 +91,7 @@ struct Config {
     bool frames_from_stdin = false;
     bool stdout_mode = false;
     bool keep_trim = false;
+    int atlas_index = -1;  // atlas of a multipack layout to unpack; -1 picks it automatically
     bool debug = false;
     unsigned int threads = 0;
 };
@@ -103,6 +105,9 @@ public:
             return false;
         }
         if (!load_image()) {
+            return false;
+        }
+        if (!select_layout_atlas()) {
             return false;
         }
         // Check every frame before writing anything, so a bad frames file leaves no partial output.
@@ -120,6 +125,7 @@ private:
     int width_{}, height_{}, channels_{};
     std::vector<unsigned char> image_data_;
     std::vector<SpriteFrame> frames_;
+    std::vector<sprat::core::Atlas> layout_atlases_;  // atlases of a layout frames file
 
     bool load_image() {
         std::vector<unsigned char> buffer;
@@ -287,6 +293,9 @@ private:
     }
 
     bool parse_spratframes(const std::string& content) {
+        if (is_layout(content)) {
+            return parse_layout_frames(content);
+        }
         std::istringstream iss(content);
         std::string line;
         int index = 0;
@@ -380,29 +389,106 @@ private:
         for (auto& frame : frames_) {
             frame.rotated_ccw = rotate_ccw;
         }
-        // Layout trims are in original-image pixels (see metadata_trim); the canvas is the
-        // original image at the layout's scale.
         for (const auto& sprite : layout_sprites) {
-            SpriteFrame frame;
-            frame.name = sprite.path;
-            frame.frame = {.x = sprite.x, .y = sprite.y, .w = sprite.w, .h = sprite.h};
-            frame.rotated = sprite.rotated;
-            frame.rotated_ccw = rotate_ccw;
-            const sprat::core::MetadataTrim trim = sprat::core::metadata_trim(sprite, scale);
-            const long long canvas_w = static_cast<long long>(frame.content_w()) + trim.left + trim.right;
-            const long long canvas_h = static_cast<long long>(frame.content_h()) + trim.top + trim.bottom;
-            if (trim.left < 0 || trim.top < 0 || trim.right < 0 || trim.bottom < 0 ||
-                canvas_w > std::numeric_limits<int>::max() || canvas_h > std::numeric_limits<int>::max()) {
-                std::cerr << tr("Error: Invalid trim for sprite ") << to_quoted(sprite.path) << "\n";
+            if (!add_layout_frame(sprite, scale, rotate_ccw)) {
                 return false;
             }
-            frame.canvas_w = static_cast<int>(canvas_w);
-            frame.canvas_h = static_cast<int>(canvas_h);
-            frame.offset_x = trim.left;
-            frame.offset_y = trim.top;
-            frames_.push_back(std::move(frame));
         }
         return !frames_.empty();
+    }
+
+    // A frame from a layout sprite. Layout trims are in original-image pixels (see
+    // metadata_trim); the canvas is the original image at the layout's scale.
+    bool add_layout_frame(const sprat::core::Sprite& sprite, double scale, bool rotate_ccw) {
+        SpriteFrame frame;
+        frame.name = sprite.path;
+        frame.frame = {.x = sprite.x, .y = sprite.y, .w = sprite.w, .h = sprite.h};
+        frame.rotated = sprite.rotated;
+        frame.rotated_ccw = rotate_ccw;
+        frame.atlas_index = sprite.atlas_index;
+        const sprat::core::MetadataTrim trim = sprat::core::metadata_trim(sprite, scale);
+        const long long canvas_w = static_cast<long long>(frame.content_w()) + trim.left + trim.right;
+        const long long canvas_h = static_cast<long long>(frame.content_h()) + trim.top + trim.bottom;
+        if (trim.left < 0 || trim.top < 0 || trim.right < 0 || trim.bottom < 0 ||
+            canvas_w > std::numeric_limits<int>::max() || canvas_h > std::numeric_limits<int>::max()) {
+            std::cerr << tr("Error: Invalid trim for sprite ") << to_quoted(sprite.path) << "\n";
+            return false;
+        }
+        frame.canvas_w = static_cast<int>(canvas_w);
+        frame.canvas_h = static_cast<int>(canvas_h);
+        frame.offset_x = trim.left;
+        frame.offset_y = trim.top;
+        frames_.push_back(std::move(frame));
+        return true;
+    }
+
+    // A spratlayout layout (it has "atlas" lines): parsed by the shared layout parser, so
+    // aliases of deduplicated sprites are unpacked too and every sprite knows its atlas.
+    bool parse_layout_frames(const std::string& content) {
+        std::istringstream in(content);
+        sprat::core::Layout layout;
+        std::string error;
+        if (!sprat::core::parse_layout(in, layout, error) ||
+            !sprat::core::expand_layout_aliases(layout, error)) {
+            std::cerr << tr("Error: Invalid layout: ") << error << "\n";
+            return false;
+        }
+        layout_atlases_ = layout.atlases;
+        for (const auto& sprite : layout.sprites) {
+            if (!add_layout_frame(sprite, layout.scale, layout.rotate_ccw)) {
+                return false;
+            }
+        }
+        return !frames_.empty();
+    }
+
+    static bool is_layout(const std::string& content) {
+        std::istringstream in(content);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (trim_copy(line).starts_with("atlas ")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A layout may describe several atlases (multipack) while one image is unpacked: keep the
+    // sprites of that image's atlas. It is given by --atlas-index, or it is the only atlas
+    // of the layout, or the only one with the image's size.
+    bool select_layout_atlas() {
+        if (layout_atlases_.empty()) {
+            return true;
+        }
+        int index = config_.atlas_index;
+        if (index >= 0) {
+            if (std::cmp_greater_equal(index, layout_atlases_.size())) {
+                std::cerr << tr("Error: --atlas-index ") << index << tr(" is out of range; the layout has ")
+                          << layout_atlases_.size() << tr(" atlases\n");
+                return false;
+            }
+        } else if (layout_atlases_.size() == 1) {
+            index = 0;
+        } else {
+            std::vector<int> matches;
+            for (size_t i = 0; i < layout_atlases_.size(); ++i) {
+                if (layout_atlases_[i].width == width_ && layout_atlases_[i].height == height_) {
+                    matches.push_back(static_cast<int>(i));
+                }
+            }
+            if (matches.size() != 1) {
+                std::cerr << tr("Error: The layout has ") << layout_atlases_.size()
+                          << tr(" atlases; use --atlas-index to choose the one this image is\n");
+                return false;
+            }
+            index = matches.front();
+        }
+        std::erase_if(frames_, [index](const SpriteFrame& frame) { return frame.atlas_index != index; });
+        if (frames_.empty()) {
+            std::cerr << tr("Error: No sprites in atlas ") << index << "\n";
+            return false;
+        }
+        return true;
     }
 
     static std::string trim_copy(const std::string& s) {
@@ -856,6 +942,7 @@ void print_usage() {
               << tr("  -f, --frames PATH          Frames definition file (or '-' for stdin)\n")
               << tr("  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n")
               << tr("  --keep-trim                Write only the packed pixels instead of restoring the original size\n")
+              << tr("  --atlas-index N            Atlas of a multipack layout that the image is (default: detected)\n")
               << tr("  -j, --threads N            Number of threads to use (default: auto)\n")
               << tr("  --debug                    Enable detailed error reporting\n")
               << tr("  -h, --help                 Show this help message\n")
@@ -881,6 +968,14 @@ int run_spratunpack(int argc, char** argv) {
             config.debug = true;
         } else if (arg == "--keep-trim") {
             config.keep_trim = true;
+        } else if (arg == "--atlas-index") {
+            unsigned int index = 0;
+            if (i + 1 >= argc || !parse_non_negative_uint(argv[++i], index) ||
+                index > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
+                std::cerr << tr("Error: Invalid atlas index\n");
+                return 1;
+            }
+            config.atlas_index = static_cast<int>(index);
         } else if (arg == "-") {
             if (config.input_path.empty() && !config.input_from_stdin) {
                 config.input_from_stdin = true;

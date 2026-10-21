@@ -99,6 +99,15 @@ d.rectangle([8, 10, 18, 12], fill=(0, 0, 255, 255))
 d.rectangle([30, 2, 49, 21], outline=(0, 160, 0, 255))
 d.rectangle([38, 10, 41, 13], fill=(0, 160, 0, 255))
 im.save(root + "/merge.png")
+
+# White sheet with magenta boxes away from the edges; the middle box is empty.
+im = Image.new("RGBA", (70, 30), (255, 255, 255, 255))
+d = ImageDraw.Draw(im)
+for i in range(3):
+    d.rectangle([4 + i * 22, 4, 4 + i * 22 + 17, 21], outline=(255, 0, 255, 255))
+for i in (0, 2):
+    d.rectangle([9 + i * 22, 9, 14 + i * 22, 16], fill=(0, 0, 200, 255))
+im.save(root + "/whiteboxes.png")
 EOF
 
 echo "Test 1: frames are numbered in reading order"
@@ -170,5 +179,13 @@ sprite 8,10 11,19
 sprite 30,2 20,20
 EOF
 diff "$tmp_dir/merge.expected" "$tmp_dir/merge.txt"
+
+echo "Test 8: --has-rectangles skips empty boxes on a solid background"
+"$frames_bin" --has-rectangles "$(fix_path "$tmp_dir/whiteboxes.png")" | grep '^sprite' > "$tmp_dir/whiteboxes.txt"
+cat > "$tmp_dir/whiteboxes.expected" <<'EOF'
+sprite 5,5 16,16
+sprite 49,5 16,16
+EOF
+diff "$tmp_dir/whiteboxes.expected" "$tmp_dir/whiteboxes.txt"
 
 echo "spratframes_test.sh: ok"

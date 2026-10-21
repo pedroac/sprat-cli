@@ -248,7 +248,7 @@ private:
             while (!stack.empty()) {
                 const size_t i = stack.back();
                 stack.pop_back();
-                has_content = has_content || !pixel_at(i).is_transparent();
+                has_content = has_content || is_content_pixel(i);
                 const size_t x = i % w;
                 const size_t y = i / w;
                 min_x = std::min(min_x, x);
@@ -282,6 +282,15 @@ private:
         merge_rectangles(detected_rectangles_);
 
         return !detected_rectangles_.empty();
+    }
+
+    // Visible and not the sheet's background. Background enclosed by rectangle lines is not
+    // connected to the image edge, so preprocessing leaves it opaque; it is checked by color.
+    [[nodiscard]] bool is_content_pixel(size_t pixel_index) const {
+        const Color c = pixel_at(pixel_index);
+        return !c.is_transparent() &&
+               !(has_detected_background_ &&
+                 color_distance(c, detected_background_color_) <= k_strict_color_distance_threshold);
     }
 
     [[nodiscard]] bool is_rectangle_pixel(size_t pixel_index) const {

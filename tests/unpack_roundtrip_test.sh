@@ -148,4 +148,35 @@ if "$unpack_bin" "$(fix_path "$tmp_dir/atlas.png")" -f "$(fix_path "$tmp_dir/dup
     exit 1
 fi
 
+echo "Test 9: multipack layouts unpack the sprites of the given atlas, aliases included"
+cp "$tmp_dir/a.png" "$tmp_dir/a_copy.png"
+mp_layout="$tmp_dir/multipack.txt"
+{
+    echo "root \"$(fix_path "$tmp_dir")\""
+    echo "multipack true"
+    echo "atlas 16,8"
+    echo "sprite \"a.png\" 0,0 3,6 rotated"
+    echo "atlas 8,8"
+    echo "sprite \"b.png\" 0,0 3,4 1,2 4,2"
+    echo "alias \"a_copy.png\" \"a.png\""
+} > "$mp_layout"
+"$pack_bin" -a "$(fix_path "$tmp_dir/mp_%d.png")" < "$mp_layout"
+# atlases have different sizes: the image size picks the atlas
+"$unpack_bin" "$(fix_path "$tmp_dir/mp_0.png")" -f "$(fix_path "$mp_layout")" -o "$(fix_path "$tmp_dir/out_mp0")" > /dev/null
+"$unpack_bin" "$(fix_path "$tmp_dir/mp_1.png")" -f "$(fix_path "$mp_layout")" -o "$(fix_path "$tmp_dir/out_mp1")" > /dev/null
+same_images "$tmp_dir/out_mp0/a.png" "$tmp_dir/a.png"
+same_images "$tmp_dir/out_mp0/a_copy.png" "$tmp_dir/a.png"
+same_images "$tmp_dir/out_mp1/b.png" "$tmp_dir/b.png"
+[ ! -e "$tmp_dir/out_mp0/b.png" ] && [ ! -e "$tmp_dir/out_mp1/a.png" ]
+# same-size atlases are ambiguous without --atlas-index
+sed 's/^atlas 16,8$/atlas 8,8/; s/^sprite "a.png" 0,0 3,6 rotated$/sprite "a.png" 0,0 3,6 rotated/' "$mp_layout" > "$tmp_dir/same_size.txt"
+"$pack_bin" -a "$(fix_path "$tmp_dir/same_%d.png")" < "$tmp_dir/same_size.txt"
+if "$unpack_bin" "$(fix_path "$tmp_dir/same_1.png")" -f "$(fix_path "$tmp_dir/same_size.txt")" -o "$(fix_path "$tmp_dir/out_ambiguous")" > /dev/null 2>&1; then
+    echo "FAILED: same-size atlases must require --atlas-index" >&2
+    exit 1
+fi
+"$unpack_bin" "$(fix_path "$tmp_dir/same_1.png")" -f "$(fix_path "$tmp_dir/same_size.txt")" --atlas-index 1 -o "$(fix_path "$tmp_dir/out_same1")" > /dev/null
+same_images "$tmp_dir/out_same1/b.png" "$tmp_dir/b.png"
+[ ! -e "$tmp_dir/out_same1/a.png" ]
+
 echo "unpack_roundtrip_test.sh: ok"

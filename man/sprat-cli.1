@@ -476,6 +476,9 @@ Directory where extracted sprites will be saved. If omitted, sprites are written
 \fB\-\-keep\-trim\fR
 Write only the packed pixels instead of restoring each sprite's original size.
 .TP
+\fB\-\-atlas\-index\fR \fIN\fR
+For a multipack layout, the atlas the given image is. Default: the layout's only atlas, or the only one with the image's size. Deduplicated sprites (\fBalias\fR lines) are unpacked too.
+.TP
 \fB\-j\fR, \fB\-\-threads\fR \fIN\fR
 Number of worker threads for sprite extraction. Default: auto.
 .TP
