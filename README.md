@@ -828,7 +828,7 @@ Example:
 
 `spratframes` scans an image and detects individual sprite boundaries. It can use transparency-based detection (finding connected components of non-transparent pixels) or look for specific rectangle borders.
 
-Frames are listed in reading order (rows top to bottom, left to right within a row), so animation strips and grids keep their frame order when unpacked as `sprite_0`, `sprite_1`, ... A sheet has a solid background when all four corners share one opaque color; only background pixels connected to the image edge are removed, so sprite pixels of the same color are kept unless they touch the background (for example, an outline drawn in the background color).
+Pieces of one sprite are folded into a single frame when one piece's box mostly lies inside the other's (at least half of the smaller box); sprites whose boxes merely clip each other, as in tightly packed sheets, stay separate frames, so frames may overlap slightly. Frames are listed in reading order (rows top to bottom, left to right within a row), so animation strips and grids keep their frame order when unpacked as `sprite_0`, `sprite_1`, ... A sheet has a solid background when all four corners share one opaque color; only background pixels connected to the image edge are removed, so sprite pixels of the same color are kept unless they touch the background (for example, an outline drawn in the background color).
 
 ```sh
 ./build/spratframes sheet.png > frames.spratframes

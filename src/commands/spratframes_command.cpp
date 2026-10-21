@@ -295,53 +295,46 @@ private:
                + std::abs(static_cast<int>(a.b) - static_cast<int>(b.b));
     }
 
-    static void merge_rectangles(std::vector<Rectangle>& rects) {
-        if (rects.size() <= 1) {
-            return;
+    // Pieces of one sprite (a detached weapon, a closed loop of the rectangle color inside a
+    // grid cell) sit mostly inside its box, while neighbouring sprites in a packed sheet only
+    // clip each other's corners. So two boxes are one sprite when their overlap covers at
+    // least half of the smaller box; boxes that merely clip stay separate frames. Scattered
+    // particles that never overlap their effect's box are joined with --tolerance instead.
+    [[nodiscard]] static bool same_sprite(const Rectangle& a, const Rectangle& b) {
+        if (!a.intersects(b)) {
+            return false;
         }
-        
-        std::vector<bool> merged(rects.size(), false);
-        std::vector<Rectangle> result;
-        
-        for (size_t i = 0; i < rects.size(); ++i) {
-            if (merged[i]) {
-                continue;
-            }
-            Rectangle merged_rect = rects[i];
-            merged[i] = true;
-            
-            bool changed = true;
-            while (changed) {
-                changed = false;
-                for (size_t j = i + 1; j < rects.size(); ++j) {
-                    if (merged[j]) {
+        const long long overlap_w = std::min(a.right(), b.right()) - std::max(a.x, b.x);
+        const long long overlap_h = std::min(a.bottom(), b.bottom()) - std::max(a.y, b.y);
+        const long long smaller = std::min(static_cast<long long>(a.w) * a.h, static_cast<long long>(b.w) * b.h);
+        return 2 * overlap_w * overlap_h >= smaller;
+    }
+
+    // Merges boxes of the same sprite. A merged box can cover more pieces than either part
+    // did, so passes repeat until nothing changes.
+    static void merge_rectangles(std::vector<Rectangle>& rects) {
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (size_t i = 0; i < rects.size(); ++i) {
+                for (size_t j = i + 1; j < rects.size();) {
+                    if (!same_sprite(rects[i], rects[j])) {
+                        ++j;
                         continue;
                     }
-                    
-                    if (merged_rect.intersects(rects[j])) {
-                        // Merge rectangles
-                        int new_x = std::min(merged_rect.x, rects[j].x);
-                        int new_y = std::min(merged_rect.y, rects[j].y);
-                        int new_right = std::max(merged_rect.right(), rects[j].right());
-                        int new_bottom = std::max(merged_rect.bottom(), rects[j].bottom());
-                        
-                        merged_rect.x = new_x;
-                        merged_rect.y = new_y;
-                        merged_rect.w = new_right - new_x;
-                        merged_rect.h = new_bottom - new_y;
-                        
-                        merged[j] = true;
-                        changed = true;
-                    }
+                    const int left = std::min(rects[i].x, rects[j].x);
+                    const int top = std::min(rects[i].y, rects[j].y);
+                    const int right = std::max(rects[i].right(), rects[j].right());
+                    const int bottom = std::max(rects[i].bottom(), rects[j].bottom());
+                    rects[i] = {.x = left, .y = top, .w = right - left, .h = bottom - top};
+                    rects.erase(rects.begin() + static_cast<std::ptrdiff_t>(j));
+                    changed = true;
+                    j = i + 1;  // the grown box may now cover earlier candidates
                 }
             }
-            
-            result.push_back(merged_rect);
         }
-        
-        rects = std::move(result);
     }
-    
+
     std::vector<SpriteFrame> extract_from_rectangles() {
         sort_reading_order(detected_rectangles_);
         if (std::cmp_greater(detected_rectangles_.size(), config_.max_sprites)) {
@@ -380,7 +373,7 @@ private:
             }
         }
         
-        // Merge overlapping components to ensure frames never overlap
+        // Fold the pieces of one sprite into a single frame
         merge_rectangles(component_bounds_);
         
         // Return true if the algorithm completed successfully, even if no components were found

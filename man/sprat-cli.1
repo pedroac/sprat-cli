@@ -244,7 +244,7 @@ The \fBLibGDX\fR transform produces a LibGDX \fBTextureAtlas\fR \fB.atlas\fR fil
 The \fBplist\fR transform produces a Cocos2d-x TextureAtlas property list (format 2). Per-sprite values use Cocos2d's \fB{x,y}\fR and \fB{x,y},{w,h}\fR notation inside \fB<string>\fR elements. The \fBoffset\fR is the center offset of the trimmed region from the original sprite center (y-up): \fB{(trim_left\-trim_right)/2, (trim_bottom\-trim_top)/2}\fR. These values are available as \fB{{plist_frame}}\fR, \fB{{plist_offset}}\fR, \fB{{plist_source_color_rect}}\fR, \fB{{plist_source_size}}\fR, and \fB{{plist_atlas_size}}\fR when writing custom transforms targeting this format.
 .SS spratframes
 Scans \fIinput_image\fR and detects sprite boundaries by finding non-transparent connected components or by detecting rectangles of a specific color.
-Frames are listed in reading order (rows top to bottom, left to right). A solid background is assumed when all four corners share one opaque color; only background pixels connected to the image edge are removed.
+Pieces of one sprite are folded into one frame when one box mostly lies inside the other; sprites whose boxes merely clip each other stay separate, so frames may overlap slightly. Frames are listed in reading order (rows top to bottom, left to right). A solid background is assumed when all four corners share one opaque color; only background pixels connected to the image edge are removed.
 Prints layout-compatible lines to stdout:
 .PP
 path \fIinput_image\fR

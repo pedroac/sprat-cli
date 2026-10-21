@@ -88,6 +88,17 @@ for y in (3, 33):
     for c in range(3):
         d.rectangle([20 + c * 20, y, 29 + c * 20, y + 19], fill=(255, 0, 0, 255))
 im.save(root + "/tall.png")
+
+# Two L-shaped sprites whose boxes clip each other, and a ring with a detached piece inside it.
+im = Image.new("RGBA", (56, 32), (0, 0, 0, 0))
+d = ImageDraw.Draw(im)
+d.rectangle([2, 2, 4, 20], fill=(255, 0, 0, 255))
+d.rectangle([2, 18, 14, 20], fill=(255, 0, 0, 255))
+d.rectangle([16, 10, 18, 28], fill=(0, 0, 255, 255))
+d.rectangle([8, 10, 18, 12], fill=(0, 0, 255, 255))
+d.rectangle([30, 2, 49, 21], outline=(0, 160, 0, 255))
+d.rectangle([38, 10, 41, 13], fill=(0, 160, 0, 255))
+im.save(root + "/merge.png")
 EOF
 
 echo "Test 1: frames are numbered in reading order"
@@ -150,5 +161,14 @@ sprite 40,33 10,20
 sprite 60,33 10,20
 EOF
 diff "$tmp_dir/tall.expected" "$tmp_dir/tall.txt"
+
+echo "Test 7: boxes merge only when one mostly covers the other"
+"$frames_bin" "$(fix_path "$tmp_dir/merge.png")" | grep '^sprite' > "$tmp_dir/merge.txt"
+cat > "$tmp_dir/merge.expected" <<'EOF'
+sprite 2,2 13,19
+sprite 8,10 11,19
+sprite 30,2 20,20
+EOF
+diff "$tmp_dir/merge.expected" "$tmp_dir/merge.txt"
 
 echo "spratframes_test.sh: ok"
