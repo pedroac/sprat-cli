@@ -723,7 +723,8 @@ for t in phaser-hash phaser-array aseprite plist godot unity.json; do
     echo "$t must refuse counter-clockwise-rotated sprites" >&2
     exit 1
   fi
-  sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform "$t" > /dev/null
+  # two atlases: per-atlas formats write one file each, so give them an output directory
+  sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform "$t" --output-dir "$tmp_dir/cw_$t" > /dev/null
 done
 # layouts without rotated sprites work with any format regardless of direction
 printf 'rotation ccw\natlas 4,4\nsprite "a.png" 0,0 4,4\n' | "$convert_bin" --transform phaser-hash > /dev/null
@@ -776,5 +777,66 @@ printf 'animation "back"\n- frame 2\n- frame 0\nanimation "run"\n- frame 0\n- fr
 "$convert_bin" --transform godot --animations "$(fix_path "$tmp_dir/godot_anim.anims")" < "$tmp_dir/godot_anim.txt" | tr -d ' \n' > "$tmp_dir/out.godot_anim"
 grep -qF '{"frames":[2,0],"loop":true,"name":"back","speed":8}' "$tmp_dir/out.godot_anim"
 grep -qF '{"frames":[0,1],"from":0,"loop":true,"name":"run","speed":8,"to":1}' "$tmp_dir/out.godot_anim"
+
+# multipack: single-texture formats write one file per atlas holding only that atlas's sprites
+printf 'atlas 32,32\nsprite "a.png" 0,0 16,16\nsprite "b.png" 16,0 8,8 slice=2,2,2,2\natlas 64,16\nsprite "c.png" 0,0 8,8\nsprite "d.png" 8,0 8,8\n' > "$tmp_dir/mp.txt"
+printf 'animation "walk"\n- frame 0\n- frame 1\n- frame 2\n- frame 3\n' > "$tmp_dir/mp.anims"
+mp_anims="$(fix_path "$tmp_dir/mp.anims")"
+if "$convert_bin" --transform plist < "$tmp_dir/mp.txt" > /dev/null 2>&1; then
+  echo "multipack plist must require --output-dir" >&2
+  exit 1
+fi
+"$convert_bin" --transform plist --output-dir "$tmp_dir/mp_plist" < "$tmp_dir/mp.txt"
+grep -qF '<string>atlas_1.png</string>' "$tmp_dir/mp_plist/atlas_1.plist"
+grep -qF '<key>c</key>' "$tmp_dir/mp_plist/atlas_1.plist"
+if grep -qF '<key>a</key>' "$tmp_dir/mp_plist/atlas_1.plist"; then
+  echo "atlas_1.plist must only list atlas 1 sprites" >&2
+  exit 1
+fi
+"$convert_bin" --transform unity.json --output-dir "$tmp_dir/mp_unity_json" < "$tmp_dir/mp.txt"
+grep -qF '"image": "atlas_1.png"' "$tmp_dir/mp_unity_json/atlas_1.json"
+grep -qF '"d": {' "$tmp_dir/mp_unity_json/atlas_1.json"
+# aseprite: tags and slice keys use frame positions inside each file; a run split across
+# atlases becomes one tag per file
+"$convert_bin" --transform aseprite --animations "$mp_anims" --output-dir "$tmp_dir/mp_aseprite" < "$tmp_dir/mp.txt"
+tr -d ' \n' < "$tmp_dir/mp_aseprite/atlas_0.json" > "$tmp_dir/mp_aseprite.0"
+tr -d ' \n' < "$tmp_dir/mp_aseprite/atlas_1.json" > "$tmp_dir/mp_aseprite.1"
+grep -qF '"frameTags":[{"direction":"forward","from":0,"name":"walk","to":1}]' "$tmp_dir/mp_aseprite.0"
+grep -qF '"frameTags":[{"direction":"forward","from":0,"name":"walk","to":1}]' "$tmp_dir/mp_aseprite.1"
+grep -qF '"frame":1}],"name":"b"' "$tmp_dir/mp_aseprite.0"
+# phaser: one multi-atlas JSON on stdout
+for t in phaser-hash phaser-array; do
+  "$convert_bin" --transform "$t" < "$tmp_dir/mp.txt" | tr -d ' \n' > "$tmp_dir/out.mp.$t"
+  grep -qF '"image":"atlas_1.png","scale":1,"size":{"h":16,"w":64}' "$tmp_dir/out.mp.$t"
+  grep -qF '"textures":[{"format":"RGBA8888","frames":[{"filename":"a"' "$tmp_dir/out.mp.$t"
+done
+# godot: one file listing atlases, each frame tagged with its atlas
+"$convert_bin" --transform godot < "$tmp_dir/mp.txt" | tr -d ' \n' > "$tmp_dir/out.mp.godot"
+grep -qF '"atlases":[{"image":"atlas_0.png","size":{"h":32,"w":32}},{"image":"atlas_1.png","size":{"h":16,"w":64}}]' "$tmp_dir/out.mp.godot"
+grep -qF '{"atlas":1,"margin"' "$tmp_dir/out.mp.godot"
+
+# multi-file output: filenames must stay inside --output-dir and be unique; a refused result
+# writes nothing
+printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/one.txt"
+printf '{ name: "escape", extension: ".x", files: [{ filename: "ok.x", content: "1" }, { filename: "../escaped.x", content: "2" }] }\n' > "$tmp_dir/escape.jsonnet"
+printf '{ name: "dupe", extension: ".x", files: [{ filename: "a.x", content: "1" }, { filename: "a.x", content: "2" }] }\n' > "$tmp_dir/dupe.jsonnet"
+for t in escape dupe; do
+  if "$convert_bin" --transform "$(fix_path "$tmp_dir/$t.jsonnet")" --output-dir "$tmp_dir/files_$t/out" < "$tmp_dir/one.txt" > /dev/null 2>&1; then
+    echo "$t.jsonnet output must be refused" >&2
+    exit 1
+  fi
+  if [ -e "$tmp_dir/files_$t" ]; then
+    echo "$t.jsonnet left output behind" >&2
+    exit 1
+  fi
+done
+
+# phaser-anims: frames use the texture key, shared by all atlases of a multipack layout
+printf 'animation "walk"\n- frame 0\n- frame 1\n' > "$tmp_dir/key.anims"
+key_anims="$(fix_path "$tmp_dir/key.anims")"
+"$convert_bin" --transform phaser-anims --animations "$key_anims" -a 'out/hero_%d.png' < "$tmp_dir/mp.txt" | grep -qF '"key": "hero"'
+"$convert_bin" --transform phaser-anims --animations "$key_anims" < "$tmp_dir/mp.txt" | grep -qF '"key": "atlas"'
+printf 'atlas 16,8\nsprite "a.png" 0,0 8,8\nsprite "b.png" 8,0 8,8\n' \
+  | "$convert_bin" --transform phaser-anims --animations "$key_anims" -a 'hero.png' | grep -qF '"key": "hero"'
 
 echo "convert_test.sh: ok"

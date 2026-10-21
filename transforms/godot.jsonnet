@@ -2,6 +2,8 @@
 local sprat = std.extVar("sprat");
 local lib = import "sprat.libsonnet";
 
+local multi = lib.is_multi_atlas(sprat);
+
 local frame_obj(s) = {
   name: s.name,
   region: { x: s.x, y: s.y, w: s.w, h: s.h },
@@ -9,7 +11,8 @@ local frame_obj(s) = {
   source_size: { w: s.source_w, h: s.source_h },
   rotated: s.rotated,
   pivot_offset: { x: s.pivot_x_norm, y: s.pivot_y_norm_raw },
-} + (if s.has_slice then {
+} + (if multi then { atlas: s.atlas_index } else {})
+  + (if s.has_slice then {
   slice: {
     left: s.slice_left,
     top: s.slice_top,
@@ -31,18 +34,22 @@ local anim_obj(a) =
     loop: true,
   } + (if std.length(runs) == 1 then { from: runs[0].from, to: runs[0].to } else {});
 
+// Texture fields of one atlas; multipack layouts list every atlas and tag frames with theirs.
+local atlas_obj(image, w, h, normal_image, collision_image) =
+  { image: image, size: { w: w, h: h } } +
+  (if sprat.has_normal_atlas then { normal_image: normal_image } else {}) +
+  (if sprat.has_collision_atlas then { collision_image: collision_image } else {});
+
 local result =
+  (if multi then {
+    atlases: [atlas_obj(at.path, at.width, at.height, at.normal_path, at.collision_path) for at in sprat.atlases],
+  } else atlas_obj(sprat.atlas_path, sprat.atlas_width, sprat.atlas_height,
+                   sprat.normal_atlas_path, sprat.collision_atlas_path)) +
   {
-    image: sprat.atlas_path,
-    size: { w: sprat.atlas_width, h: sprat.atlas_height },
     scale: sprat.scale,
     frames: [frame_obj(s) for s in sprat.sprites],
   } +
-  (if sprat.has_normal_atlas then { normal_image: sprat.normal_atlas_path } else {}) +
-  (if sprat.has_collision_atlas then {
-    collision_image: sprat.collision_atlas_path,
-    collision_scale: sprat.collision_atlas_scale,
-  } else {}) +
+  (if sprat.has_collision_atlas then { collision_scale: sprat.collision_atlas_scale } else {}) +
   (if sprat.has_animations then {
     animations: [anim_obj(a) for a in sprat.animations],
   } else {});
@@ -50,7 +57,7 @@ local result =
 {
   assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Godot", "cw"),
   name: "Godot",
-  description: "Godot-compatible JSON sprite sheet (load at runtime with AtlasTexture/SpriteFrames)",
+  description: "Godot-compatible JSON sprite sheet (load at runtime with AtlasTexture/SpriteFrames; multipack layouts list atlases and give each frame its atlas index)",
   extension: ".json",
   icon: "icons/godot-svgrepo-com(1).svg",
   content: std.manifestJsonEx(result, " ") + "\n",

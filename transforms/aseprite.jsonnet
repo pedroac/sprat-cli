@@ -2,11 +2,13 @@
 local sprat = std.extVar("sprat");
 local lib = import "sprat.libsonnet";
 
-local slice_obj(s) = {
+// `frame` is the sprite's position in its own file (local_index), which differs from the
+// global sprite index when a multipack layout is split into one file per atlas.
+local slice_obj(s, local_index) = {
   name: s.name,
   color: "#0000ffff",
   keys: [{
-    frame: s.index,
+    frame: local_index,
     bounds: { x: 0, y: 0, w: s.source_w, h: s.source_h },
     center: {
       x: s.slice_left,
@@ -28,36 +30,53 @@ local frame_obj(s) = {
   duration: 100,
 };
 
-// Build frameTags from animations: each animation may be non-contiguous, so split into runs.
-local frame_tag(anim) =
-  local runs = lib.consecutive_runs(anim.frame_indices);
-  [
-    { name: anim.name, from: run.from, to: run.to, direction: "forward" }
-    for run in runs
-  ];
+// Build frameTags from the animation frames held in `sprites`: animations may be
+// non-contiguous or span atlases, so each consecutive run becomes its own tag.
+local frame_tags(sprites) =
+  local local_index = { ["" + sprites[i].index]: i for i in std.range(0, std.length(sprites) - 1) };
+  local tags(anim) =
+    local held = [idx for idx in anim.frame_indices if std.objectHas(local_index, "" + idx)];
+    [
+      { name: anim.name, from: local_index["" + run.from], to: local_index["" + run.to], direction: "forward" }
+      for run in lib.consecutive_runs(held)
+    ];
+  if std.length(sprites) == 0 then [] else std.flatMap(tags, sprat.animations);
 
-local frame_tags = std.flatMap(frame_tag, sprat.animations);
-
-local result = {
-  frames: [frame_obj(s) for s in sprat.sprites],
-  meta: {
-    app: "https://www.aseprite.org/",
-    version: "1.3",
-    image: sprat.atlas_path,
-    format: "RGBA8888",
-    size: { w: sprat.atlas_width, h: sprat.atlas_height },
-    scale: "" + sprat.scale,
-    frameTags: frame_tags,
-    layers: [],
-    slices: [slice_obj(s) for s in sprat.sprites if s.has_slice],
-  },
-};
+local render(image, width, height, sprites) =
+  local result = {
+    frames: [frame_obj(s) for s in sprites],
+    meta: {
+      app: "https://www.aseprite.org/",
+      version: "1.3",
+      image: image,
+      format: "RGBA8888",
+      size: { w: width, h: height },
+      scale: "" + sprat.scale,
+      frameTags: frame_tags(sprites),
+      layers: [],
+      slices: [
+        slice_obj(sprites[i], i)
+        for i in std.range(0, std.length(sprites) - 1)
+        if sprites[i].has_slice
+      ],
+    },
+  };
+  std.manifestJsonEx(result, "  ") + "\n";
 
 {
   assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Aseprite", "cw"),
   name: "Aseprite",
-  description: "Aseprite JSON Array sprite sheet format (frameTags populated when animations are present)",
+  description: "Aseprite JSON Array sprite sheet format (frameTags populated when animations are present; multipack layouts write one file per atlas and need --output-dir)",
   extension: ".json",
   icon: "icons/aseprite-svgrepo-com.svg",
-  content: std.manifestJsonEx(result, "  ") + "\n",
-}
+} + (
+  // An Aseprite sheet describes one texture: multipack layouts get one file per atlas.
+  if lib.is_multi_atlas(sprat) then {
+    files: [
+      { filename: at.stem + ".json", content: render(at.path, at.width, at.height, at.sprites) }
+      for at in sprat.atlases
+    ],
+  } else {
+    content: render(sprat.atlas_path, sprat.atlas_width, sprat.atlas_height, sprat.sprites),
+  }
+)

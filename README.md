@@ -290,6 +290,24 @@ You can also extract a specific atlas index:
 ./build/spratpack --atlas-index 1 < layout.txt > second_atlas.png
 ```
 
+Each `spratconvert` format handles several atlases the way its engine expects:
+
+| Format | Multipack output |
+|---|---|
+| `json`, `xml`, `csv`, `css`, `libgdx` | One file covering every atlas |
+| `phaser-hash`, `phaser-array` | One Phaser multi-atlas JSON (`textures: [...]`), loaded with `this.load.multiatlas` |
+| `godot` | One file with an `atlases` list; each frame has an `atlas` index |
+| `plist`, `aseprite`, `unity.json` | One file per atlas, named after it (`atlas_0.plist`, ...); requires `--output-dir` |
+| `unity.meta` | One `<atlas>.meta` per atlas PNG (`atlas_0.png.meta`, ...), each with its own GUID; requires `--output-dir` |
+| `unity.anim` | Each frame references the GUID of the atlas its sprite was packed into |
+
+```sh
+./build/spratconvert --transform plist -a atlas_%d.png --output-dir ./out < layout.txt
+# out/atlas_0.plist, out/atlas_1.plist, ...
+```
+
+Single-atlas layouts are unaffected.
+
 ---
 
 ## Packing Examples
@@ -596,14 +614,14 @@ Transform files are searched in:
 | `csv` | CSV | Flat spreadsheet-friendly list |
 | `xml` | XML | Generic XML |
 | `css` | CSS | CSS sprite sheet |
-| `aseprite` | JSON | Aseprite JSON Array format; frameTags built from animations (non-contiguous animations become multiple tags) |
+| `aseprite` | JSON | Aseprite JSON Array format; frameTags built from animations (non-contiguous animations become multiple tags); one file per atlas for multipack |
 | `libgdx` | Text | LibGDX Atlas format; handles multipack; rotated sprites require `--rotate-direction ccw` |
-| `godot` | JSON | Godot SpriteFrames resource; each animation lists its `frames` in play order (`from`/`to` only when they form one ascending run) |
-| `phaser-hash` | JSON | Phaser 3 hash-keyed sprite sheet |
-| `phaser-array` | JSON | Phaser 3 array-keyed sprite sheet |
-| `phaser-anims` | JSON | Phaser 3 animation config |
-| `plist` | plist | Apple / TexturePacker plist |
-| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation; requires `--output-dir`; rotated sprites are not supported (Unity sprite rects have no rotation); in `unity.meta` the pivot and nine-slice border are relative to the trimmed sprite rect |
+| `godot` | JSON | Godot SpriteFrames resource; each animation lists its `frames` in play order (`from`/`to` only when they form one ascending run); multipack adds `atlases` and a per-frame `atlas` index |
+| `phaser-hash` | JSON | Phaser 3 hash-keyed sprite sheet; multi-atlas JSON for multipack |
+| `phaser-array` | JSON | Phaser 3 array-keyed sprite sheet; multi-atlas JSON for multipack |
+| `phaser-anims` | JSON | Phaser 3 animation config; frames use `texture_key` (e.g. `atlas` for a multipack `atlas_%d.png`) |
+| `plist` | plist | Apple / TexturePacker plist; one file per atlas for multipack |
+| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation (file named after it, with path characters and a leading dot replaced by `_`); requires `--output-dir`; multipack writes one `.json` and one `<atlas>.meta` per atlas; rotated sprites are not supported (Unity sprite rects have no rotation); in `unity.meta` the pivot and nine-slice border are relative to the trimmed sprite rect |
 
 ### Transform format
 
@@ -613,7 +631,7 @@ Each transform is a Jsonnet file that evaluates to a JSON object:
 - `description` — shown by `--list-transforms`
 - `extension` — output file extension (e.g. `".json"`)
 - `content` — string output for a single file
-- `files` — array of `{filename, content}` for multi-file output; mutually exclusive with `content`, requires `--output-dir`
+- `files` — array of `{filename, content}` for multi-file output; mutually exclusive with `content`, requires `--output-dir`. Each `filename` must be a unique plain file name (no `/`, `\`, `:` or `..`); otherwise nothing is written. `lib.safe_filename(name)` in `sprat.libsonnet` turns arbitrary names into valid ones
 
 The layout data is available as `std.extVar("sprat")`:
 
@@ -626,11 +644,12 @@ local sprat = std.extVar("sprat");
 | Field | Type | Description |
 |---|---|---|
 | `sprites` | array | All sprites across all atlases |
-| `atlases` | array | Each entry has `index`, `width`, `height`, `path`, `sprites` |
+| `atlases` | array | Each entry has `index`, `width`, `height`, `path`, `stem`, `filename`, `hash_hex` (FNV-1a of `path`), `normal_path`, `collision_path`, `sprites` |
 | `animations` | array | Animation definitions |
 | `markers` | array | All markers across all sprites |
 | `atlas_width`, `atlas_height` | number | First atlas dimensions |
 | `atlas_path`, `atlas_stem` | string | First atlas path and stem |
+| `texture_key` | string | Key for the whole atlas set: `atlas_stem` for one atlas; for multipack, the `-a` pattern's stem without `%d` (`atlas_%d.png` → `atlas`) |
 | `atlas_count` | number | Total atlas count |
 | `multipack` | boolean | `true` when layout declares `multipack true` |
 | `rotation_direction` | string | `cw` or `ccw` (from the layout's `rotation` line; default `cw`) |

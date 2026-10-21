@@ -2,10 +2,12 @@
 local sprat = std.extVar("sprat");
 local lib = import "sprat.libsonnet";
 
+// Each frame references its sprite inside the texture it was packed into, so animations
+// spanning multipack atlases point at the right .meta GUID.
 local frame_entry(frame, i, fps) =
   "    - time: " + lib.format_double(i / fps) + "\n" +
   "      value: {fileID: " + frame.name_hash_signed +
-  ", guid: " + sprat.output_stem_hash_hex + "0000000000000000, type: 3}\n";
+  ", guid: " + lib.unity_guid(sprat, sprat.sprites[frame.index].atlas_index) + ", type: 3}\n";
 
 local render_clip(anim) =
   local eff_fps = if anim.fps > 0 then anim.fps else 8;
@@ -66,7 +68,8 @@ local render_clip(anim) =
   extension: ".anim",
   icon: "icons/unity-svgrepo-com.svg",
   files: [
-    { filename: anim.name + ".anim", content: render_clip(anim) }
+    // m_Name keeps the real name; the file name only drops characters a path can't hold.
+    { filename: lib.safe_filename(anim.name) + ".anim", content: render_clip(anim) }
     for anim in sprat.animations
   ],
 }

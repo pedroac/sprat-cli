@@ -95,3 +95,30 @@ printf 'animation "#idle"\n- frame 0\n' > "$tmp_dir/anim.anims"
 anim_meta="$(printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' | "$convert_bin" --transform unity.meta | sed -n 's/^      internalID: //p')"
 grep -qF 'm_Name: "#idle"' "$tmp_dir/anim_out/"*.anim
 grep -qF "value: {fileID: $anim_meta," "$tmp_dir/anim_out/"*.anim
+
+# multipack: one <atlas>.meta per atlas with its own GUID; .anim frames reference the GUID of
+# the atlas their sprite was packed into
+printf 'atlas 32,32\nsprite "a.png" 0,0 16,16\natlas 32,32\nsprite "c.png" 0,0 8,8\n' > "$tmp_dir/mp.txt"
+printf 'animation "walk"\n- frame 0\n- frame 1\n' > "$tmp_dir/mp.anims"
+"$convert_bin" --transform unity --animations "$tmp_dir/mp.anims" --output-dir "$tmp_dir/mp_unity" < "$tmp_dir/mp.txt" > /dev/null
+[ -f "$tmp_dir/mp_unity/atlas_0.png.meta" ] && [ -f "$tmp_dir/mp_unity/atlas_1.png.meta" ]
+[ -f "$tmp_dir/mp_unity/atlas_0.json" ] && [ -f "$tmp_dir/mp_unity/atlas_1.json" ]
+guid0="$(sed -n 's/^guid: //p' "$tmp_dir/mp_unity/atlas_0.png.meta")"
+guid1="$(sed -n 's/^guid: //p' "$tmp_dir/mp_unity/atlas_1.png.meta")"
+[ -n "$guid0" ] && [ -n "$guid1" ] && [ "$guid0" != "$guid1" ]
+grep -qF '      name: c' "$tmp_dir/mp_unity/atlas_1.png.meta"
+if grep -qF '      name: a' "$tmp_dir/mp_unity/atlas_1.png.meta"; then
+  echo "atlas_1.png.meta must only list atlas 1 sprites" >&2
+  exit 1
+fi
+id_c="$(sed -n 's/^      internalID: //p' "$tmp_dir/mp_unity/atlas_1.png.meta")"
+grep -qF "fileID: $id_c, guid: $guid1, type: 3" "$tmp_dir/mp_unity/walk.anim"
+grep -qF "guid: $guid0, type: 3" "$tmp_dir/mp_unity/walk.anim"
+
+# unity.anim: file names drop path characters and a leading dot; m_Name keeps the real name
+printf 'animation "../up"\n- frame 0\nanimation "sub/dir"\n- frame 0\n' > "$tmp_dir/paths.anims"
+"$convert_bin" --transform unity.anim --animations "$tmp_dir/paths.anims" --output-dir "$tmp_dir/paths/out" < "$tmp_dir/anim.txt" > /dev/null
+[ -f "$tmp_dir/paths/out/_._up.anim" ] && [ -f "$tmp_dir/paths/out/sub_dir.anim" ]
+[ "$(find "$tmp_dir/paths" -type f | wc -l)" -eq 2 ]
+grep -qF 'm_Name: ../up' "$tmp_dir/paths/out/_._up.anim"
+grep -qF 'm_Name: sub/dir' "$tmp_dir/paths/out/sub_dir.anim"

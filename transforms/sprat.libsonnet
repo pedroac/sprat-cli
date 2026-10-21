@@ -26,6 +26,61 @@
   rotation_degrees(sprat, s)::
     if !s.rotated then 0 else if sprat.rotation_direction == "ccw" then 270 else 90,
 
+  // Multipack layouts span several atlases. Formats that describe a single texture then
+  // write one file per atlas (via `files`), or switch to their multi-texture variant.
+  is_multi_atlas(sprat)::
+    sprat.atlas_count > 1,
+
+  // Unity asset GUID of an atlas texture. Single-atlas layouts keep the output-stem hash so
+  // their .meta GUID stays stable; multipack atlases each hash their own path.
+  unity_guid(sprat, atlas_index)::
+    (if sprat.atlas_count > 1 then sprat.atlases[atlas_index].hash_hex else sprat.output_stem_hash_hex)
+    + "0000000000000000",
+
+  // Phaser 3 frame (TexturePacker JSON style); the frame size is unrotated, readers swap it.
+  phaser_frame(s):: {
+    frame: { x: s.x, y: s.y, w: s.content_w, h: s.content_h },
+    rotated: s.rotated,
+    trimmed: s.has_trim,
+    spriteSourceSize: { x: s.trim_left, y: s.trim_top, w: s.content_w, h: s.content_h },
+    sourceSize: { w: s.source_w, h: s.source_h },
+    pivot: { x: s.pivot_x_norm, y: s.pivot_y_norm_raw },
+  } + (if s.has_slice then {
+    border: { l: s.slice_left, t: s.slice_top, r: s.slice_right, b: s.slice_bottom },
+  } else {}),
+
+  // Phaser 3 multi-atlas JSON (this.load.multiatlas): one entry per atlas texture, all
+  // frames under a single texture key.
+  phaser_multiatlas(sprat):: {
+    textures: [
+      {
+        image: at.path,
+        format: "RGBA8888",
+        size: { w: at.width, h: at.height },
+        scale: sprat.scale,
+        frames: [{ filename: s.name } + $.phaser_frame(s) for s in at.sprites],
+      }
+      for at in sprat.atlases
+    ],
+    meta: {
+      app: "https://github.com/pedroac/sprat-cli",
+      format: "RGBA8888",
+      scale: "" + sprat.scale,
+    },
+  },
+
+  // Turn a name (e.g. an animation name) into a plain file name: path separators, characters
+  // invalid on Windows and a leading dot (hidden files, which Unity skips) become "_".
+  // spratconvert refuses unsafe names anyway.
+  safe_filename(s)::
+    local chars = std.stringChars(s);
+    local cleaned = std.join("", [
+      local c = chars[i];
+      if std.codepoint(c) < 32 || std.member('/\\:*?"<>|', c) || (i == 0 && c == ".") then "_" else c
+      for i in std.range(0, std.length(chars) - 1)
+    ]);
+    if cleaned == "" then "_" else cleaned,
+
   // Escape text for XML attribute values and element content.
   xml_escape(s)::
     std.strReplace(

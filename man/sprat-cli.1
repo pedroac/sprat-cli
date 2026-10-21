@@ -497,6 +497,9 @@ Full pipeline (layout and pack in one step):
 Multipack to multiple files:
 .B spratlayout ./frames --multipack --max-width 1024 --max-height 1024 | spratpack -a atlas_%d.png
 .TP
+Metadata for a multipack layout (formats that describe one texture, such as \fBplist\fR, \fBaseprite\fR, \fBunity.json\fR and \fBunity.meta\fR, write one file per atlas; \fBphaser-hash\fR and \fBphaser-array\fR write a Phaser multi-atlas JSON):
+.B spratconvert --transform plist -a atlas_%d.png --output-dir out < layout.txt
+.TP
 Convert layout to JSON:
 .B spratconvert --transform json < layout.txt > layout.json
 .TP

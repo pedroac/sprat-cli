@@ -624,6 +624,29 @@ std::string extract_variant(const std::string& stem) {
 // ─── Jsonnet helpers ──────────────────────────────────────────────────────────
 
 // Build the JSON data string passed as std.extVar("sprat") to all transforms.
+// Name for the whole atlas set, e.g. a Phaser texture key. A single atlas uses its own stem;
+// multipack atlases share one key: the pattern's stem without its %d placeholder
+// ("atlas_%d.png" -> "atlas").
+std::string texture_key(const std::string& pattern, size_t atlas_count, const std::string& atlas_stem) {
+    if (atlas_count <= 1 || pattern.empty()) {
+        return atlas_stem;
+    }
+    const std::string stem = fs::path(pattern).stem().string();
+    std::string key;
+    for (size_t i = 0; i < stem.size(); ++i) {
+        if (stem[i] == '%' && i + 1 < stem.size()) {
+            if (stem[i + 1] == '%') key.push_back('%');
+            ++i;
+            continue;
+        }
+        key.push_back(stem[i]);
+    }
+    const auto is_separator = [](char c) { return c == '_' || c == '-' || c == '.' || c == ' '; };
+    while (!key.empty() && is_separator(key.back())) key.pop_back();
+    while (!key.empty() && is_separator(key.front())) key.erase(key.begin());
+    return key.empty() ? "atlas" : key;
+}
+
 std::string build_sprat_json(
     const Layout& layout,
     const std::vector<std::string>& sprite_names,
@@ -815,6 +838,7 @@ std::string build_sprat_json(
     // Global scalars
     j += "\"atlas_path\":\"" + escape_json(atlas_path_0) + "\"";
     j += ",\"atlas_stem\":\"" + escape_json(atlas_stem_0) + "\"";
+    j += ",\"texture_key\":\"" + escape_json(texture_key(output_pattern_arg, layout.atlases.size(), atlas_stem_0)) + "\"";
     j += ",\"atlas_width\":" + std::to_string(atlas_w0);
     j += ",\"atlas_height\":" + std::to_string(atlas_h0);
     j += ",\"atlas_count\":" + std::to_string(layout.atlases.size());
@@ -867,6 +891,13 @@ std::string build_sprat_json(
         j += ",\"width\":" + std::to_string(atlas.width);
         j += ",\"height\":" + std::to_string(atlas.height);
         j += ",\"path\":\"" + escape_json(a_path) + "\"";
+        // Per-atlas names and a stable hash, for formats that write one file per atlas.
+        const fs::path a_fs_path(a_path);
+        j += ",\"stem\":\"" + escape_json(a_fs_path.stem().string()) + "\"";
+        j += ",\"filename\":\"" + escape_json(a_fs_path.filename().string()) + "\"";
+        const uint64_t a_hash = sprat::core::fnv1a_hash(
+            reinterpret_cast<const unsigned char*>(a_path.c_str()), a_path.size());
+        j += ",\"hash_hex\":\"" + to_hex16(a_hash) + "\"";
         const std::string n_path = format_atlas_path(normal_atlas_pattern_arg, static_cast<int>(ai));
         j += ",\"normal_path\":\"" + escape_json(n_path) + "\"";
         const std::string c_path = format_atlas_path(collision_atlas_pattern_arg, static_cast<int>(ai));
@@ -1078,6 +1109,18 @@ static bool find_json_string_value(const std::string& json, const std::string& k
 }
 
 // Parse the JSON object output from a Jsonnet transform evaluation.
+// A transform-provided filename must name a file directly inside --output-dir: no
+// directories, no parent references and nothing Windows treats as a drive or device path.
+static bool is_safe_output_filename(const std::string& name) {
+    if (name.empty() || name == "." || name == "..") {
+        return false;
+    }
+    return std::ranges::none_of(name, [](char c) {
+        const auto u = static_cast<unsigned char>(c);
+        return u < 0x20 || c == '/' || c == '\\' || c == ':';
+    });
+}
+
 bool parse_transform_result(const std::string& json, TransformResult& out, std::string& error) {
     // Extract name
     size_t vs = 0, ve = 0;
@@ -1142,6 +1185,17 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
                 entry.content = json_unescape_string(obj_str, fvs, fve);
             }
             if (!entry.filename.empty()) {
+                if (!is_safe_output_filename(entry.filename)) {
+                    error = tr("Transform output filename must be a plain file name: ") + entry.filename;
+                    return false;
+                }
+                const bool duplicate = std::ranges::any_of(out.files, [&](const auto& fe) {
+                    return fe.filename == entry.filename;
+                });
+                if (duplicate) {
+                    error = tr("Transform produces the same output filename twice: ") + entry.filename;
+                    return false;
+                }
                 out.files.push_back(std::move(entry));
             }
             fp = obj_end;
@@ -1225,7 +1279,7 @@ void list_transforms() {
 
     // Empty mock data for listing
     const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
-        R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
+        R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
         R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
         R"("sprite_count":0,"animation_count":0,)"
         R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
@@ -1295,7 +1349,7 @@ void list_transforms_json() {
     std::ranges::sort(paths);
 
     const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
-        R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
+        R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
         R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
         R"("sprite_count":0,"animation_count":0,)"
         R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"

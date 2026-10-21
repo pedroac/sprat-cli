@@ -49,85 +49,97 @@ local sprite_rect_entry(s) =
   "      edges: []\n" +
   "      weights: []\n";
 
+// The .meta of one atlas texture: its GUID and the sprites packed into it.
+local render(guid, sprites) =
+  "fileFormatVersion: 2\n" +
+  "guid: " + guid + "\n" +
+  "TextureImporter:\n" +
+  "  internalIDToNameTable:\n" +
+  std.join("", [id_entry(s) for s in sprites]) +
+  "  externalObjects: {}\n" +
+  "  serializedVersion: 13\n" +
+  "  mipmaps:\n" +
+  "    mipMapMode: 0\n" +
+  "    enableMipMap: 0\n" +
+  "    sRGBTexture: 1\n" +
+  "    linearTexture: 0\n" +
+  "    fadeOut: 0\n" +
+  "    borderMipMap: 0\n" +
+  "    mipMapsPreserveCoverage: 0\n" +
+  "    alphaTestReferenceValue: 0.5\n" +
+  "    mipMapFadeDistanceStart: 1\n" +
+  "    mipMapFadeDistanceEnd: 3\n" +
+  "  bumpmap:\n" +
+  "    convertToNormalMap: 0\n" +
+  "    externalNormalMap: 0\n" +
+  "    heightScale: 0.25\n" +
+  "    normalMapFilter: 0\n" +
+  "  isReadable: 0\n" +
+  "  streamingMipmaps: 0\n" +
+  "  streamingMipmapsPriority: 0\n" +
+  "  vTOnly: 0\n" +
+  "  ignoreMasterTextureLimit: 0\n" +
+  "  ignoreMipmapLimit: 0\n" +
+  "  isDirectBinding: 0\n" +
+  "  importAsync: 0\n" +
+  "  filterMode: 0\n" +
+  "  aniso: 1\n" +
+  "  mipBias: 0\n" +
+  "  textureType: 8\n" +
+  "  textureShape: 1\n" +
+  "  singleChannelComponent: 0\n" +
+  "  flipbookRows: 1\n" +
+  "  flipbookColumns: 1\n" +
+  "  maxTextureSizeSet: 0\n" +
+  "  compressionQuality: 50\n" +
+  "  textureFormat: -1\n" +
+  "  uncompressed: 0\n" +
+  "  alphaUsage: 1\n" +
+  "  alphaIsTransparency: 1\n" +
+  "  spriteMode: 2\n" +
+  "  spriteExtrude: 1\n" +
+  "  spriteMeshType: 1\n" +
+  "  alignment: 0\n" +
+  "  spritePivot: {x: 0.5, y: 0.5}\n" +
+  "  spritePixelsToUnits: 100\n" +
+  "  spriteBorder: {x: 0, y: 0, z: 0, w: 0}\n" +
+  "  spriteGenerateFallbackPhysicsShape: 1\n" +
+  "  spriteSheet:\n" +
+  "    serializedVersion: 2\n" +
+  "    sprites:\n" +
+  std.join("", [sprite_rect_entry(s) for s in sprites]) +
+  "    outline: []\n" +
+  "    physicsShape: []\n" +
+  "    bones: []\n" +
+  "    spriteID:\n" +
+  "    internalID: 0\n" +
+  "    vertices: []\n" +
+  "    indices:\n" +
+  "    edges: []\n" +
+  "    weights: []\n" +
+  "  spritePackingTag:\n" +
+  "  pSDRemoveMatte: 0\n" +
+  "  pSDShowRemoveMatteOption: 0\n" +
+  "  userData:\n" +
+  "  assetBundleName:\n" +
+  "  assetBundleVariant:\n";
+
 {
   // Unity sprite rects have no rotation field, so rotated sprites would import sideways.
   assert !sprat.has_rotated :
     "Unity .meta sprite sheets do not support rotated sprites; re-run spratlayout without --rotate",
   name: "Unity Meta",
-  description: "Unity .meta file spriteSheet section (YAML)",
+  description: "Unity .meta file spriteSheet section (YAML); multipack layouts write one <atlas>.meta per atlas and need --output-dir",
   extension: ".meta",
   icon: "icons/unity-svgrepo-com.svg",
-  content:
-    "fileFormatVersion: 2\n" +
-    "guid: " + sprat.output_stem_hash_hex + "0000000000000000\n" +
-    "TextureImporter:\n" +
-    "  internalIDToNameTable:\n" +
-    std.join("", [id_entry(s) for s in sprat.sprites]) +
-    "  externalObjects: {}\n" +
-    "  serializedVersion: 13\n" +
-    "  mipmaps:\n" +
-    "    mipMapMode: 0\n" +
-    "    enableMipMap: 0\n" +
-    "    sRGBTexture: 1\n" +
-    "    linearTexture: 0\n" +
-    "    fadeOut: 0\n" +
-    "    borderMipMap: 0\n" +
-    "    mipMapsPreserveCoverage: 0\n" +
-    "    alphaTestReferenceValue: 0.5\n" +
-    "    mipMapFadeDistanceStart: 1\n" +
-    "    mipMapFadeDistanceEnd: 3\n" +
-    "  bumpmap:\n" +
-    "    convertToNormalMap: 0\n" +
-    "    externalNormalMap: 0\n" +
-    "    heightScale: 0.25\n" +
-    "    normalMapFilter: 0\n" +
-    "  isReadable: 0\n" +
-    "  streamingMipmaps: 0\n" +
-    "  streamingMipmapsPriority: 0\n" +
-    "  vTOnly: 0\n" +
-    "  ignoreMasterTextureLimit: 0\n" +
-    "  ignoreMipmapLimit: 0\n" +
-    "  isDirectBinding: 0\n" +
-    "  importAsync: 0\n" +
-    "  filterMode: 0\n" +
-    "  aniso: 1\n" +
-    "  mipBias: 0\n" +
-    "  textureType: 8\n" +
-    "  textureShape: 1\n" +
-    "  singleChannelComponent: 0\n" +
-    "  flipbookRows: 1\n" +
-    "  flipbookColumns: 1\n" +
-    "  maxTextureSizeSet: 0\n" +
-    "  compressionQuality: 50\n" +
-    "  textureFormat: -1\n" +
-    "  uncompressed: 0\n" +
-    "  alphaUsage: 1\n" +
-    "  alphaIsTransparency: 1\n" +
-    "  spriteMode: 2\n" +
-    "  spriteExtrude: 1\n" +
-    "  spriteMeshType: 1\n" +
-    "  alignment: 0\n" +
-    "  spritePivot: {x: 0.5, y: 0.5}\n" +
-    "  spritePixelsToUnits: 100\n" +
-    "  spriteBorder: {x: 0, y: 0, z: 0, w: 0}\n" +
-    "  spriteGenerateFallbackPhysicsShape: 1\n" +
-    "  spriteSheet:\n" +
-    "    serializedVersion: 2\n" +
-    "    sprites:\n" +
-    std.join("", [sprite_rect_entry(s) for s in sprat.sprites]) +
-    "    outline: []\n" +
-    "    physicsShape: []\n" +
-    "    bones: []\n" +
-    "    spriteID:\n" +
-    "    internalID: 0\n" +
-    "    vertices: []\n" +
-    "    indices:\n" +
-    "    edges: []\n" +
-    "    weights: []\n" +
-    "  spritePackingTag:\n" +
-    "  pSDRemoveMatte: 0\n" +
-    "  pSDShowRemoveMatteOption: 0\n" +
-    "  userData:\n" +
-    "  assetBundleName:\n" +
-    "  assetBundleVariant:\n",
-}
+} + (
+  // Unity keeps one .meta beside each texture: multipack layouts get one per atlas PNG.
+  if lib.is_multi_atlas(sprat) then {
+    files: [
+      { filename: at.filename + ".meta", content: render(lib.unity_guid(sprat, at.index), at.sprites) }
+      for at in sprat.atlases
+    ],
+  } else {
+    content: render(lib.unity_guid(sprat, 0), sprat.sprites),
+  }
+)
