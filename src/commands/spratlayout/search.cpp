@@ -170,22 +170,12 @@ bool pack_atlases(
 
     // Grid mode: uniform-cell layout, split into equal-capacity atlases when needed.
     if (mode == Mode::GRID) {
-        const int ref_w = sprites[0].w;
-        const int ref_h = sprites[0].h;
-        for (const auto& s : sprites) {
-            if (s.w != ref_w || s.h != ref_h) {
-                std::cerr << tr("Error: grid mode requires all sprites to be the same size; ")
-                          << s.path << " is " << s.w << "x" << s.h
-                          << tr(", expected ") << ref_w << "x" << ref_h << '\n';
-                return false;
-            }
-        }
         int cell_w = 0;
         int cell_h = 0;
-        if (!checked_add_int(ref_w, padding, cell_w) || !checked_add_int(ref_h, padding, cell_h)) {
+        if (!grid_cell_size(sprites, padding, cell_w, cell_h)) {
             return false;
         }
-        if (cell_w <= 0 || cell_h <= 0 || cell_w > max_w || cell_h > max_h) {
+        if (cell_w > max_w || cell_h > max_h) {
             return false;
         }
         int cols = max_w / cell_w;

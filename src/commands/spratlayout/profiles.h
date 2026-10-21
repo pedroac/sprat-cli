@@ -52,9 +52,6 @@ bool parse_scale_factor(const std::string& value, double& out);
 bool parse_resolution(const std::string& value, int& out_width, int& out_height);
 bool parse_frame_sort_from_string(const std::string& value, FrameSort& out, StableMetric& out_metric);
 
-bool parse_profiles_config(std::istream& input,
-                           std::vector<ProfileDefinition>& out,
-                           std::string& error);
 bool load_profiles_config_from_file(const fs::path& path,
                                     std::vector<ProfileDefinition>& out,
                                     std::string& error);

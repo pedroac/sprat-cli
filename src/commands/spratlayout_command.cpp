@@ -744,6 +744,19 @@ bool measure_sprites(const std::vector<Sprite>& sprites, const LayoutSettings& s
     return true;
 }
 
+// The output options of a run, shared with prewarmed layouts so they match a real run.
+LayoutOutputOptions make_output_options(const LayoutArgs& args, const LayoutSettings& settings,
+                                        const fs::path& root) {
+    LayoutOutputOptions options;
+    options.scale = settings.scale;
+    options.extrude = settings.extrude;
+    options.multipack = settings.multipack;
+    options.rotate_ccw = settings.rotate_ccw;
+    options.debug = args.debug;
+    options.root = root;
+    return options;
+}
+
 // The layout cache files of this run.
 struct CacheFiles {
     fs::path base;
@@ -824,11 +837,8 @@ void prewarm_compact_profiles(const LayoutArgs& args, const LayoutSettings& sett
             continue;
         }
         const std::vector<Atlas> prewarm_atlases = {{prewarm_width, prewarm_height}};
-        LayoutOutputOptions prewarm_options;
-        prewarm_options.scale = prewarm_scale;
-        prewarm_options.extrude = settings.extrude;
-        prewarm_options.rotate_ccw = settings.rotate_ccw;
-        prewarm_options.root = root;
+        LayoutOutputOptions prewarm_options = make_output_options(args, settings, root);
+        prewarm_options.debug = false;  // cached layouts never carry the debug header
         // Deduplication ran with the same settings and trimming, so the aliases are the same.
         const std::string prewarm_output = build_layout_output_text(
             prewarm_atlases, prewarm_candidate.sprites, aliases, prewarm_options);
@@ -963,7 +973,8 @@ int run_spratlayout(int argc, char** argv) {
     const fs::path root = layout_root(input_context);
 
     CacheFiles cache;
-    if (!is_extracted_archive(input_context)) {
+    // Archives are extracted to a new folder on every run, so their layouts are not cached.
+    if (input_context.type != InputType::Archive) {
         cache.base = build_cache_path(input_context.working_folder);
     }
     const long long now_unix = now_unix_seconds();
@@ -1015,7 +1026,10 @@ int run_spratlayout(int argc, char** argv) {
     key.dedup_tolerance = args.dedup_tolerance;
     cache.layout_signature = build_layout_signature(key, sources);
     cache.seed_signature = build_layout_seed_signature(key, sources);
-    cache.layout = build_output_cache_path(cache.base, cache.layout_signature);
+    // --debug adds a comment header, so it neither reads nor writes the layout cache.
+    if (!args.debug) {
+        cache.layout = build_output_cache_path(cache.base, cache.layout_signature);
+    }
     cache.seed = build_seed_cache_path(cache.base, cache.seed_signature);
     const bool use_incremental = settings.incremental && !settings.multipack;
     if (use_incremental) {
@@ -1023,8 +1037,7 @@ int run_spratlayout(int argc, char** argv) {
         cache.incremental = build_incremental_seed_cache_path(cache.base, cache.incremental_signature);
     }
 
-    // --debug adds a comment header, so it neither reads nor writes the layout cache.
-    if (!args.debug && is_cache_file_fresh(cache.layout)) {
+    if (is_cache_file_fresh(cache.layout)) {
         std::string cached_output;
         if (load_output_cache(cache.layout, cache.layout_signature, cached_output)) {
             std::cout << cached_output;
@@ -1139,14 +1152,8 @@ int run_spratlayout(int argc, char** argv) {
         }
     }
 
-    LayoutOutputOptions output_options;
-    output_options.scale = settings.scale;
-    output_options.extrude = settings.extrude;
-    output_options.multipack = settings.multipack;
-    output_options.rotate_ccw = settings.rotate_ccw;
-    output_options.debug = args.debug;
-    output_options.root = root;
-    const std::string output_text = build_layout_output_text(atlases, sprites, layout_aliases, output_options);
+    const std::string output_text = build_layout_output_text(
+        atlases, sprites, layout_aliases, make_output_options(args, settings, root));
 
 #ifdef _WIN32
     // Suppress failure: non-fatal when running embedded or as a GUI subprocess.
@@ -1154,7 +1161,7 @@ int run_spratlayout(int argc, char** argv) {
 #endif
 
     std::cout << output_text;
-    if (!settings.multipack && !args.debug) {
+    if (!settings.multipack) {
         save_output_cache(cache.layout, cache.layout_signature, output_text);
     }
     prune_cache_family(cache.base);

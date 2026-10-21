@@ -130,6 +130,10 @@ bool pack_incremental_maxrects(
     int& out_atlas_width,
     int& out_atlas_height);
 
+// The grid cell (sprite size plus padding). Every sprite must have the same size;
+// prints an error naming the first one that doesn't.
+bool grid_cell_size(const std::vector<Sprite>& sprites, int padding, int& cell_w, int& cell_h);
+
 // Smallest bounds that contain every sprite (without trailing padding).
 bool compute_tight_atlas_bounds(const std::vector<Sprite>& sprites, int& out_width, int& out_height);
 
