@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -1403,7 +1404,7 @@ int run_spratconvert(int argc, char** argv) {
             try {
                 size_t pos = 0;
                 double parsed = std::stod(value, &pos);
-                if (pos != value.size() || parsed <= 0.0) {
+                if (pos != value.size() || !std::isfinite(parsed) || parsed <= 0.0) {
                     std::cerr << tr("Invalid collision scale: ") << value << tr(" (must be a positive number)\n");
                     return 1;
                 }

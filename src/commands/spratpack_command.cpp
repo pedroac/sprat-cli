@@ -707,7 +707,7 @@ int run_spratpack(int argc, char** argv) {
             try {
                 size_t pos = 0;
                 double parsed = std::stod(value, &pos);
-                if (pos != value.size() || parsed <= 0.0) {
+                if (pos != value.size() || !std::isfinite(parsed) || parsed <= 0.0) {
                     std::cerr << tr("Invalid output scale: ") << value << tr(" (must be a positive number)\n");
                     return 1;
                 }
@@ -849,8 +849,17 @@ int run_spratpack(int argc, char** argv) {
             return 1;
         }
 
-        const int output_width  = std::max(1, static_cast<int>(std::round(atlas_width  * output_scale)));
-        const int output_height = std::max(1, static_cast<int>(std::round(atlas_height * output_scale)));
+        // Range-check in double before converting: a large atlas times the scale can
+        // exceed INT_MAX, and an out-of-range cast would yield a bogus (tiny) atlas.
+        const double scaled_width  = std::round(atlas_width  * output_scale);
+        const double scaled_height = std::round(atlas_height * output_scale);
+        constexpr double max_output_dim = static_cast<double>(std::numeric_limits<int>::max());
+        if (!(scaled_width <= max_output_dim) || !(scaled_height <= max_output_dim)) {
+            std::cerr << tr("Error: Scaled output atlas ") << atlas_idx << tr(" dimensions are too large\n");
+            return 1;
+        }
+        const int output_width  = std::max(1, static_cast<int>(scaled_width));
+        const int output_height = std::max(1, static_cast<int>(scaled_height));
         size_t output_pixel_count = 0;
         size_t output_byte_count  = 0;
         if (!checked_mul_size_t(static_cast<size_t>(output_width), static_cast<size_t>(output_height), output_pixel_count)
@@ -859,6 +868,27 @@ int run_spratpack(int argc, char** argv) {
             return 1;
         }
         std::vector<unsigned char> atlas_data(output_byte_count, 0);
+
+        // Map a layout-space span [start, start+len) to output space. Both edges are
+        // rounded (rather than start and length separately) so adjacent and edge-flush
+        // slots stay disjoint and inside the scaled atlas.
+        // Edges are clamped to [0, limit] in double before converting, so the int
+        // results can't overflow.
+        auto scale_span = [&](int start, int len, int limit, int& out_start, int& out_len) {
+            const double max_edge = static_cast<double>(limit);
+            double lo = std::clamp(std::round(start * output_scale), 0.0, max_edge);
+            double hi = std::clamp(std::round((static_cast<double>(start) + len) * output_scale), 0.0, max_edge);
+            if (hi <= lo) {
+                if (lo < max_edge) {
+                    hi = lo + 1.0;
+                } else {
+                    lo = max_edge - 1.0;
+                    hi = max_edge;
+                }
+            }
+            out_start = static_cast<int>(lo);
+            out_len = static_cast<int>(hi - lo);
+        };
 
         auto blit_sprite = [&](const Sprite& s, std::string& error_out) -> bool {
             const std::string load_path = path_suffix.empty() ? s.path : apply_path_suffix(s.path, path_suffix);
@@ -918,13 +948,13 @@ int run_spratpack(int argc, char** argv) {
             }
 
             // Scaled destination position and slot in the output atlas
-            const int sdest_x      = static_cast<int>(std::round(s.x * output_scale));
-            const int sdest_y      = static_cast<int>(std::round(s.y * output_scale));
-            const int sdest_slot_w = std::max(1, static_cast<int>(std::round(s.w * output_scale)));
-            const int sdest_slot_h = std::max(1, static_cast<int>(std::round(s.h * output_scale)));
+            int sdest_x = 0, sdest_y = 0, sdest_slot_w = 0, sdest_slot_h = 0;
+            scale_span(s.x, s.w, output_width,  sdest_x, sdest_slot_w);
+            scale_span(s.y, s.h, output_height, sdest_y, sdest_slot_h);
 
-            if (sdest_x < 0 || sdest_y < 0 ||
-                sdest_x + sdest_slot_w > output_width || sdest_y + sdest_slot_h > output_height) {
+            if (sdest_x < 0 || sdest_y < 0 || sdest_slot_w <= 0 || sdest_slot_h <= 0 ||
+                sdest_x > output_width || sdest_y > output_height ||
+                sdest_slot_w > output_width - sdest_x || sdest_slot_h > output_height - sdest_y) {
                 error_out = "Error: Sprite " + to_quoted(load_path) + " placement out of atlas bounds";
                 return false;
             }
@@ -1047,16 +1077,19 @@ int run_spratpack(int argc, char** argv) {
             scaled_atlas_sprites.reserve(atlas_sprites.size());
             for (const auto& sp : atlas_sprites) {
                 Sprite sc = sp;
-                sc.x = static_cast<int>(std::round(sp.x * output_scale));
-                sc.y = static_cast<int>(std::round(sp.y * output_scale));
-                sc.w = std::max(1, static_cast<int>(std::round(sp.w * output_scale)));
-                sc.h = std::max(1, static_cast<int>(std::round(sp.h * output_scale)));
+                scale_span(sp.x, sp.w, output_width,  sc.x, sc.w);
+                scale_span(sp.y, sp.h, output_height, sc.y, sc.h);
                 scaled_atlas_sprites.push_back(sc);
             }
             post_sprites = &scaled_atlas_sprites;
         }
 
-        const int active_extrude = has_extrude_override ? extrude : layout.extrude;
+        // The layout's extrude reserves gaps in layout space; scale it with the atlas so it
+        // doesn't overrun neighbouring sprites. An explicit --extrude is taken as output pixels.
+        const int active_extrude = has_extrude_override
+            ? extrude
+            : static_cast<int>(std::min(std::round(layout.extrude * output_scale),
+                                        static_cast<double>(std::numeric_limits<int>::max())));
         if (active_extrude > 0) {
             extrude_atlas(atlas_data, output_width, output_height, *post_sprites, active_extrude);
         }
