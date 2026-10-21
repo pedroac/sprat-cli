@@ -35,6 +35,12 @@ add_test(
 )
 
 add_test(
+    NAME output_scale
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/output_scale_test.sh
+            $<TARGET_FILE:spratpack>
+)
+
+add_test(
     NAME multipack
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/multipack_test.sh
             $<TARGET_FILE:spratlayout>
