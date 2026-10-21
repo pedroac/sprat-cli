@@ -352,6 +352,7 @@ private:
     std::vector<SpriteFrame> extract_from_rectangles() {
         std::vector<SpriteFrame> frames;
         frames.reserve(detected_rectangles_.size());
+        sort_reading_order(detected_rectangles_);
         
         for (size_t i = 0; i < detected_rectangles_.size() && std::cmp_less(i ,config_.max_sprites); ++i) {
             const Rectangle& rect = detected_rectangles_[i];
@@ -522,28 +523,53 @@ private:
     }
     
     std::vector<SpriteFrame> extract_from_components() {
+        std::vector<Rectangle> bounds = component_bounds_;
+        // Over the limit, keep the largest frames (stray specks go first).
+        if (std::cmp_greater(bounds.size(), config_.max_sprites)) {
+            std::cerr << tr("Warning: Found ") << bounds.size() << tr(" frames; keeping the ")
+                      << config_.max_sprites << tr(" largest (see --max-sprites)") << '\n';
+            std::ranges::stable_sort(bounds, std::ranges::greater{}, &Rectangle::area);
+            bounds.resize(static_cast<size_t>(config_.max_sprites));
+        }
+        sort_reading_order(bounds);
+
         std::vector<SpriteFrame> frames;
-        frames.reserve(component_bounds_.size());
-        
-        // Sort components by area (largest first) to prioritize bigger sprites
-        std::vector<std::pair<int, int>> component_areas_with_index;
-        component_areas_with_index.reserve(component_bounds_.size());
-        for (size_t i = 0; i < component_bounds_.size(); ++i) {
-            component_areas_with_index.emplace_back(component_bounds_.at(i).area(), static_cast<int>(i));
+        frames.reserve(bounds.size());
+        for (size_t i = 0; i < bounds.size(); ++i) {
+            frames.push_back({.bounds = bounds[i], .index = static_cast<int>(i)});
         }
-        std::ranges::sort(std::ranges::reverse_view(component_areas_with_index));
-        
-        for (size_t i = 0; i < component_areas_with_index.size() && std::cmp_less(i ,config_.max_sprites); ++i) {
-            int component_idx = component_areas_with_index.at(i).second;
-            const Rectangle& bounds = component_bounds_.at(component_idx);
-            
-            SpriteFrame frame{};
-            frame.bounds = bounds;
-            frame.index = static_cast<int>(i);
-            frames.push_back(frame);
-        }
-        
         return frames;
+    }
+
+    // Frames are numbered like text is read, so animation strips and grids keep their frame
+    // order: rows top to bottom, left to right within a row. A row is started by its
+    // topmost frame and holds every frame whose vertical center falls inside that frame's
+    // height, which tolerates frames of different sizes or baselines in one row.
+    static void sort_reading_order(std::vector<Rectangle>& rects) {
+        std::ranges::stable_sort(rects, [](const Rectangle& a, const Rectangle& b) {
+            return a.y != b.y ? a.y < b.y : a.x < b.x;
+        });
+        std::vector<Rectangle> ordered;
+        ordered.reserve(rects.size());
+        std::vector<bool> placed(rects.size(), false);
+        for (size_t i = 0; i < rects.size(); ++i) {
+            if (placed[i]) {
+                continue;
+            }
+            const long long row_top = rects[i].y;
+            const long long row_bottom = static_cast<long long>(rects[i].y) + rects[i].h;
+            std::vector<Rectangle> row;
+            for (size_t j = i; j < rects.size(); ++j) {
+                const long long center_twice = (2LL * rects[j].y) + rects[j].h;
+                if (!placed[j] && center_twice >= 2 * row_top && center_twice < 2 * row_bottom) {
+                    placed[j] = true;
+                    row.push_back(rects[j]);
+                }
+            }
+            std::ranges::stable_sort(row, {}, &Rectangle::x);
+            ordered.insert(ordered.end(), row.begin(), row.end());
+        }
+        rects = std::move(ordered);
     }
     
     bool output_frames(const std::vector<SpriteFrame>& frames) {
@@ -585,29 +611,65 @@ private:
         return true;
     }
     
+    [[nodiscard]] Color pixel_at(size_t pixel_index) const {
+        const size_t idx = pixel_index * 4;
+        return {.r = image_data_[idx], .g = image_data_[idx + 1], .b = image_data_[idx + 2], .a = image_data_[idx + 3]};
+    }
+
+    // A solid background exists when all four corners share one opaque color. Only pixels of
+    // that color connected to the image edge are made transparent, so sprite pixels that
+    // happen to match it (an eye, an outline inside the sprite) are kept. A sprite touching
+    // a corner, as in tightly packed atlases, is therefore never taken for the background.
     bool preprocess_image() {
         if (width_ <= 0 || height_ <= 0) {
             return false;
         }
-        
-        // Check the first pixel (top-left corner)
-        Color first_pixel{.r=image_data_.at(0), .g=image_data_.at(1), .b=image_data_.at(2), .a=image_data_.at(3)};
-        
-        // If the first pixel is not transparent, make all pixels of that color transparent
-        if (!first_pixel.is_transparent()) {
-            has_detected_background_ = true;
-            detected_background_color_ = first_pixel;
-            // Make all pixels matching the first pixel color (within tolerance) transparent
-            for (int i = 0; i < width_ * height_; ++i) {
-                size_t idx = static_cast<size_t>(i) * 4;
-                Color pixel{.r=image_data_.at(idx), .g=image_data_.at(idx+1), .b=image_data_.at(idx+2), .a=image_data_.at(idx+3)};
-                if (color_distance(pixel, first_pixel) <= k_strict_color_distance_threshold) {
-                    // Update the image data array as well
-                    image_data_.at((static_cast<size_t>(i)*4) + 3) = 0;
-                }
-            }
+
+        const size_t w = static_cast<size_t>(width_);
+        const size_t h = static_cast<size_t>(height_);
+        const Color corner = pixel_at(0);
+        const std::array<size_t, 3> other_corners = {w - 1, (h - 1) * w, (h * w) - 1};
+        if (corner.is_transparent() ||
+            std::ranges::any_of(other_corners, [&](size_t i) {
+                const Color c = pixel_at(i);
+                return c.is_transparent() || color_distance(c, corner) > k_strict_color_distance_threshold;
+            })) {
+            return true;
         }
-        
+        has_detected_background_ = true;
+        detected_background_color_ = corner;
+
+        const auto is_background = [&](size_t i) {
+            const Color c = pixel_at(i);
+            return !c.is_transparent() && color_distance(c, corner) <= k_strict_color_distance_threshold;
+        };
+        std::vector<std::uint8_t> visited(w * h, 0);
+        std::vector<size_t> stack;
+        const auto push = [&](size_t i) {
+            if (visited[i] == 0U && is_background(i)) {
+                visited[i] = 1;
+                stack.push_back(i);
+            }
+        };
+        for (size_t x = 0; x < w; ++x) {
+            push(x);
+            push(((h - 1) * w) + x);
+        }
+        for (size_t y = 0; y < h; ++y) {
+            push(y * w);
+            push((y * w) + w - 1);
+        }
+        while (!stack.empty()) {
+            const size_t i = stack.back();
+            stack.pop_back();
+            image_data_[(i * 4) + 3] = 0;
+            const size_t x = i % w;
+            const size_t y = i / w;
+            if (x > 0) push(i - 1);
+            if (x + 1 < w) push(i + 1);
+            if (y > 0) push(i - w);
+            if (y + 1 < h) push(i + w);
+        }
         return true;
     }
 };

@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -73,6 +74,33 @@ static bool is_combined_format_passthrough(const std::string& line) {
 }
 
 namespace sprat::core {
+
+int scale_to_atlas(int value, double scale) {
+    if (scale == 1.0) {
+        return value;
+    }
+    const long double scaled = std::round(static_cast<long double>(value) * scale);
+    if (scaled >= static_cast<long double>(std::numeric_limits<int>::max())) {
+        return std::numeric_limits<int>::max();
+    }
+    if (scaled <= static_cast<long double>(std::numeric_limits<int>::min())) {
+        return std::numeric_limits<int>::min();
+    }
+    return static_cast<int>(scaled);
+}
+
+MetadataTrim metadata_trim(const Sprite& s, double scale) {
+    MetadataTrim t{s.src_x, s.src_y, s.trim_right, s.trim_bottom};
+    if (is_nine_patch_path(s.path) &&
+        t.left >= 1 && t.top >= 1 && t.right >= 1 && t.bottom >= 1) {
+        --t.left;
+        --t.top;
+        --t.right;
+        --t.bottom;
+    }
+    return {scale_to_atlas(t.left, scale), scale_to_atlas(t.top, scale),
+            scale_to_atlas(t.right, scale), scale_to_atlas(t.bottom, scale)};
+}
 
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error) {
     constexpr std::string_view prefix = "sprite";

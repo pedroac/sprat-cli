@@ -828,6 +828,8 @@ Example:
 
 `spratframes` scans an image and detects individual sprite boundaries. It can use transparency-based detection (finding connected components of non-transparent pixels) or look for specific rectangle borders.
 
+Frames are listed in reading order (rows top to bottom, left to right within a row), so animation strips and grids keep their frame order when unpacked as `sprite_0`, `sprite_1`, ... A sheet has a solid background when all four corners share one opaque color; only background pixels connected to the image edge are removed, so sprite pixels of the same color are kept unless they touch the background (for example, an outline drawn in the background color).
+
 ```sh
 ./build/spratframes sheet.png > frames.spratframes
 ```
@@ -871,11 +873,15 @@ cat atlas.png | ./build/spratunpack --frames atlas.json > sprites.tar
 Options:
 - `-f, --frames PATH`: Path to frames definition (auto-detects `.json` or `.spratframes` only when atlas path is a file).
 - `-o, --output DIR`: Destination directory.
+- `--keep-trim`: Write only the packed pixels instead of restoring each sprite's original size.
 - `-j, --threads N`: Parallel extraction.
 
 Supported formats:
-- TexturePacker/sprat JSON (Hash or Array)
-- Minimalist `.spratframes` format
+- TexturePacker/sprat JSON (Hash or Array), including `spratconvert` exports such as `phaser-hash`, `phaser-array`, `unity.json` and `aseprite`
+- Phaser multi-atlas JSON (`textures: [...]`): the texture whose `image` matches the atlas file name is unpacked
+- `spratlayout` layouts, and the minimalist `.spratframes` format
+
+Rotated sprites are turned back, and trimmed sprites are placed in a transparent canvas of their original size (`sourceSize`/`spriteSourceSize` in JSON, trim offsets in layouts, at the layout's `scale`), so unpacked animation frames stay aligned. Output files are named after the frames, with `.png` added unless the name already ends with it. Every frame is checked before anything is written: frames outside the atlas, frames that don't fit their original size, unsafe names or two frames writing the same file make `spratunpack` fail without writing output.
 
 If no frames file is specified, `spratunpack` will look for `<atlas>.json` or `<atlas>.spratframes` automatically only when atlas input is a file path.
 

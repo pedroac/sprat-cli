@@ -103,4 +103,21 @@ inline bool is_nine_patch_path(std::string_view path) {
     return path.size() >= suffix.size() && path.substr(path.size() - suffix.size()) == suffix;
 }
 
+// Layout trims, slices and markers are in original-image pixels, while the packed size is
+// already scaled. Converts one such value into atlas pixels, rounding to the nearest pixel
+// and saturating instead of overflowing for absurd layout scales.
+int scale_to_atlas(int value, double scale);
+
+// Trim margins of the sprite as engines (and unpacked sprites) see it, in atlas pixels:
+// a nine-patch's 1px marker border is removed (it is not part of the image an engine
+// gets; spratlayout only strips it when all four sides have it), then the margins are
+// scaled like the packed size.
+struct MetadataTrim {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
+};
+MetadataTrim metadata_trim(const Sprite& s, double scale);
+
 } // namespace sprat::core

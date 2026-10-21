@@ -139,46 +139,6 @@ std::string format_double(double value) {
     return std::string(buf.data(), n > 0 ? static_cast<size_t>(n) : 0);
 }
 
-// Layout trims, slices and markers are in original-image pixels, while the packed size is
-// already scaled; exported metadata uses atlas pixels throughout, like TexturePacker.
-// Saturates instead of overflowing for absurd layout scales.
-int scale_to_atlas(int value, double scale) {
-    if (scale == 1.0) {
-        return value;
-    }
-    const long double scaled = std::round(static_cast<long double>(value) * scale);
-    if (scaled >= static_cast<long double>(std::numeric_limits<int>::max())) {
-        return std::numeric_limits<int>::max();
-    }
-    if (scaled <= static_cast<long double>(std::numeric_limits<int>::min())) {
-        return std::numeric_limits<int>::min();
-    }
-    return static_cast<int>(scaled);
-}
-
-struct ExportTrim {
-    int left = 0;
-    int top = 0;
-    int right = 0;
-    int bottom = 0;
-};
-
-// Trim margins as engines should see them. A nine-patch's 1px marker border is part of
-// the layout trims (spratpack crops from the whole file) but not of the image an engine
-// gets, so it is removed; spratlayout only strips it when all four sides have it.
-ExportTrim export_trim(const Sprite& s, double scale) {
-    ExportTrim t{s.src_x, s.src_y, s.trim_right, s.trim_bottom};
-    if (sprat::core::is_nine_patch_path(s.path) &&
-        t.left >= 1 && t.top >= 1 && t.right >= 1 && t.bottom >= 1) {
-        --t.left;
-        --t.top;
-        --t.right;
-        --t.bottom;
-    }
-    return {scale_to_atlas(t.left, scale), scale_to_atlas(t.top, scale),
-            scale_to_atlas(t.right, scale), scale_to_atlas(t.bottom, scale)};
-}
-
 std::string sprite_name_from_path(const std::string& path) {
     fs::path p(path);
     std::string name = p.stem().string();
@@ -730,7 +690,7 @@ std::string build_sprat_json(
     // Helper: build JSON array of marker objects
     // Marker files use original-image pixels; exported markers use atlas pixels.
     auto marker_to_json = [&](const MarkerItem& m) -> std::string {
-        const auto sc = [&](int v) { return std::to_string(scale_to_atlas(v, layout.scale)); };
+        const auto sc = [&](int v) { return std::to_string(sprat::core::scale_to_atlas(v, layout.scale)); };
         std::string o = "{\"name\":\"" + escape_json(m.name) + "\"";
         o += ",\"type\":\"" + escape_json(m.type) + "\"";
         o += ",\"x\":" + sc(m.x);
@@ -764,7 +724,7 @@ std::string build_sprat_json(
 
         const int content_w = s.rotated ? s.h : s.w;
         const int content_h = s.rotated ? s.w : s.h;
-        const ExportTrim trim = export_trim(s, layout.scale);
+        const sprat::core::MetadataTrim trim = sprat::core::metadata_trim(s, layout.scale);
         const int source_w  = content_w + trim.left + trim.right;
         const int source_h  = content_h + trim.top + trim.bottom;
         const bool has_trim = (trim.left != 0) || (trim.top != 0) ||
@@ -789,8 +749,8 @@ std::string build_sprat_json(
         // Pivot markers are in original-image pixels; normalize from the unrounded scaled value.
         const double pivot_ax = static_cast<double>(pivot_src_x) * layout.scale;
         const double pivot_ay = static_cast<double>(pivot_src_y) * layout.scale;
-        const int px = scale_to_atlas(pivot_src_x, layout.scale);
-        const int py = scale_to_atlas(pivot_src_y, layout.scale);
+        const int px = sprat::core::scale_to_atlas(pivot_src_x, layout.scale);
+        const int py = sprat::core::scale_to_atlas(pivot_src_y, layout.scale);
 
         double pivot_x_norm = (source_w > 0) ? (pivot_ax / source_w) : 0.0;
         double pivot_y_norm = (source_h > 0) ? (1.0 - pivot_ay / source_h) : 0.0;
@@ -827,10 +787,10 @@ std::string build_sprat_json(
         o += ",\"alias_of\":\"" + escape_json(s.alias_of) + "\"";
         o += ",\"has_slice\":" + std::string(s.has_slice ? "true" : "false");
         if (s.has_slice) {
-            o += ",\"slice_left\":" + std::to_string(scale_to_atlas(s.slice_left, layout.scale));
-            o += ",\"slice_top\":" + std::to_string(scale_to_atlas(s.slice_top, layout.scale));
-            o += ",\"slice_right\":" + std::to_string(scale_to_atlas(s.slice_right, layout.scale));
-            o += ",\"slice_bottom\":" + std::to_string(scale_to_atlas(s.slice_bottom, layout.scale));
+            o += ",\"slice_left\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_left, layout.scale));
+            o += ",\"slice_top\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_top, layout.scale));
+            o += ",\"slice_right\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_right, layout.scale));
+            o += ",\"slice_bottom\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_bottom, layout.scale));
             o += ",\"slice_h\":\"" + s.slice_h + "\"";
             o += ",\"slice_v\":\"" + s.slice_v + "\"";
         }

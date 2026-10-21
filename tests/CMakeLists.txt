@@ -113,6 +113,20 @@ add_test(
 )
 
 add_test(
+    NAME spratframes
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/spratframes_test.sh
+            $<TARGET_FILE:spratframes>
+)
+
+add_test(
+    NAME unpack_roundtrip
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/unpack_roundtrip_test.sh
+            $<TARGET_FILE:spratpack>
+            $<TARGET_FILE:spratconvert>
+            $<TARGET_FILE:spratunpack>
+)
+
+add_test(
     NAME rotation_direction
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/rotation_direction_test.sh
             $<TARGET_FILE:spratpack>

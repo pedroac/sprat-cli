@@ -244,6 +244,7 @@ The \fBLibGDX\fR transform produces a LibGDX \fBTextureAtlas\fR \fB.atlas\fR fil
 The \fBplist\fR transform produces a Cocos2d-x TextureAtlas property list (format 2). Per-sprite values use Cocos2d's \fB{x,y}\fR and \fB{x,y},{w,h}\fR notation inside \fB<string>\fR elements. The \fBoffset\fR is the center offset of the trimmed region from the original sprite center (y-up): \fB{(trim_left\-trim_right)/2, (trim_bottom\-trim_top)/2}\fR. These values are available as \fB{{plist_frame}}\fR, \fB{{plist_offset}}\fR, \fB{{plist_source_color_rect}}\fR, \fB{{plist_source_size}}\fR, and \fB{{plist_atlas_size}}\fR when writing custom transforms targeting this format.
 .SS spratframes
 Scans \fIinput_image\fR and detects sprite boundaries by finding non-transparent connected components or by detecting rectangles of a specific color.
+Frames are listed in reading order (rows top to bottom, left to right). A solid background is assumed when all four corners share one opaque color; only background pixels connected to the image edge are removed.
 Prints layout-compatible lines to stdout:
 .PP
 path \fIinput_image\fR
@@ -252,7 +253,7 @@ path \fIinput_image\fR
 .br
 sprite \fIx,y\fR \fIw,h\fR
 .SS spratunpack
-Extracts individual sprites from an \fIatlas.png\fR using a frames definition (\fB.json\fR or \fB.spratframes\fR).
+Extracts individual sprites from an \fIatlas.png\fR using a frames definition: TexturePacker-style JSON (Hash, Array or Phaser multi-atlas), a \fBspratlayout\fR layout, or \fB.spratframes\fR. Rotated sprites are turned back and trimmed sprites are restored to their original size. All frames are validated before any output is written.
 .PP
 Atlas input:
 .IP "\(bu" 2
@@ -471,6 +472,9 @@ Path to frames definition file (\fB.json\fR or \fB.spratframes\fR).
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fIDIR\fR
 Directory where extracted sprites will be saved. If omitted, sprites are written as a TAR stream to stdout.
+.TP
+\fB\-\-keep\-trim\fR
+Write only the packed pixels instead of restoring each sprite's original size.
 .TP
 \fB\-j\fR, \fB\-\-threads\fR \fIN\fR
 Number of worker threads for sprite extraction. Default: auto.

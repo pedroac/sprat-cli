@@ -16,6 +16,7 @@ namespace fs = std::filesystem;
 #include <cstring>
 #include <limits>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -66,14 +67,18 @@ struct Rectangle {
     int x, y, w, h;
 };
 
+// Every frames format is normalized to this: where the pixels sit in the atlas, and where
+// they go in the sprite's original canvas.
 struct SpriteFrame {
     std::string name;
-    Rectangle frame{};
-    Rectangle sprite_source_size{};
-    int source_w{}, source_h{};
+    Rectangle frame{};   // region in the atlas, in packed orientation (w/h swapped if rotated)
     bool rotated{};
     bool rotated_ccw{};  // direction of the rotation in the atlas (layouts with "rotation ccw")
-    bool trimmed{};
+    int canvas_w{}, canvas_h{};   // original sprite size; 0 means the unrotated content size
+    int offset_x{}, offset_y{};   // content position inside the canvas
+
+    [[nodiscard]] int content_w() const { return rotated ? frame.h : frame.w; }
+    [[nodiscard]] int content_h() const { return rotated ? frame.w : frame.h; }
 };
 
 struct Config {
@@ -84,6 +89,7 @@ struct Config {
     bool input_from_stdin = false;
     bool frames_from_stdin = false;
     bool stdout_mode = false;
+    bool keep_trim = false;
     bool debug = false;
     unsigned int threads = 0;
 };
@@ -97,6 +103,10 @@ public:
             return false;
         }
         if (!load_image()) {
+            return false;
+        }
+        // Check every frame before writing anything, so a bad frames file leaves no partial output.
+        if (!validate_frames()) {
             return false;
         }
         if (config_.stdout_mode) {
@@ -184,7 +194,7 @@ private:
                 return false;
             }
             // For stdin, we try to detect format from content
-            if (content.find("\"frames\":") != std::string::npos || content.find('[') != std::string::npos) {
+            if (looks_like_json(content)) {
                 extension = ".json";
             } else {
                 extension = ".spratframes";
@@ -203,7 +213,7 @@ private:
                         std::cerr << tr("Error: No data received on stdin. Expected frames definition.\n");
                         return false;
                     }
-                    if (content.find("\"frames\":") != std::string::npos || content.find('[') != std::string::npos) {
+                    if (looks_like_json(content)) {
                         extension = ".json";
                     } else {
                         extension = ".spratframes";
@@ -224,7 +234,7 @@ private:
                             content.assign(std::istreambuf_iterator<char>(std::cin),
                                           std::istreambuf_iterator<char>());
                             if (!content.empty()) {
-                                if (content.find("\"frames\":") != std::string::npos || content.find('[') != std::string::npos) {
+                                if (looks_like_json(content)) {
                                     extension = ".json";
                                 } else {
                                     extension = ".spratframes";
@@ -281,6 +291,8 @@ private:
         std::string line;
         int index = 0;
         bool rotate_ccw = false;
+        double scale = 1.0;
+        std::vector<sprat::core::Sprite> layout_sprites;
         while (std::getline(iss, line)) {
             line = trim_copy(line);
             if (line.empty()) {
@@ -319,50 +331,76 @@ private:
                 continue;
             }
 
-            if (line.starts_with("sprite ")) {
-                std::string sprite_line = line.substr(7);
-                size_t pos = 0;
-                while (pos < sprite_line.size() && std::isspace(static_cast<unsigned char>(sprite_line[pos]))) {
-                    pos++;
+            if (line.starts_with("scale ")) {
+                if (!sprat::core::parse_scale_line(line, scale)) {
+                    std::cerr << tr("Error: Invalid scale line: ") << line << "\n";
+                    return false;
                 }
-                
-                std::string name;
-                if (pos < sprite_line.size() && sprite_line[pos] == '"') {
-                    std::string error;
-                    if (!sprat::core::parse_quoted(sprite_line, pos, name, error)) {
-                        continue;
-                    }
-                }
-
-                std::vector<std::string> tokens;
-                std::istringstream liss(sprite_line.substr(pos));
-                std::string token;
-                while (liss >> token) {
-                    tokens.push_back(token);
-                }
-
-                if (tokens.size() >= 2) {
-                    SpriteFrame frame;
-                    frame.name = name.empty() ? "sprite_" + std::to_string(index++) : name;
-                    
-                    if (!sprat::core::parse_pair(tokens[0], frame.frame.x, frame.frame.y) ||
-                        !sprat::core::parse_pair(tokens[1], frame.frame.w, frame.frame.h)) {
-                        continue;
-                    }
-
-                    for (const auto& token : tokens) {
-                        if (token == "rotated") {
-                            frame.rotated = true;
-                            break;
-                        }
-                    }
-                    
-                    frames_.push_back(frame);
-                }
+                continue;
             }
+
+            if (!line.starts_with("sprite ")) {
+                continue;
+            }
+
+            size_t pos = 7;
+            while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) {
+                pos++;
+            }
+            if (pos < line.size() && line[pos] == '"') {
+                // Layout line: named, with optional trims, rotation and slices.
+                sprat::core::Sprite sprite;
+                std::string error;
+                if (!sprat::core::parse_sprite_line(line, sprite, error)) {
+                    std::cerr << tr("Error: Invalid sprite line: ") << line << " (" << error << ")\n";
+                    return false;
+                }
+                layout_sprites.push_back(std::move(sprite));
+                continue;
+            }
+
+            // spratframes line: "sprite x,y w,h [rotated]", named by position.
+            std::vector<std::string> tokens;
+            std::istringstream liss(line.substr(pos));
+            std::string token;
+            while (liss >> token) {
+                tokens.push_back(token);
+            }
+            SpriteFrame frame;
+            if (tokens.size() < 2 ||
+                !sprat::core::parse_pair(tokens[0], frame.frame.x, frame.frame.y) ||
+                !sprat::core::parse_pair(tokens[1], frame.frame.w, frame.frame.h)) {
+                std::cerr << tr("Error: Invalid sprite line: ") << line << "\n";
+                return false;
+            }
+            frame.name = "sprite_" + std::to_string(index++);
+            frame.rotated = std::ranges::find(tokens, "rotated") != tokens.end();
+            frames_.push_back(frame);
         }
         for (auto& frame : frames_) {
             frame.rotated_ccw = rotate_ccw;
+        }
+        // Layout trims are in original-image pixels (see metadata_trim); the canvas is the
+        // original image at the layout's scale.
+        for (const auto& sprite : layout_sprites) {
+            SpriteFrame frame;
+            frame.name = sprite.path;
+            frame.frame = {.x = sprite.x, .y = sprite.y, .w = sprite.w, .h = sprite.h};
+            frame.rotated = sprite.rotated;
+            frame.rotated_ccw = rotate_ccw;
+            const sprat::core::MetadataTrim trim = sprat::core::metadata_trim(sprite, scale);
+            const long long canvas_w = static_cast<long long>(frame.content_w()) + trim.left + trim.right;
+            const long long canvas_h = static_cast<long long>(frame.content_h()) + trim.top + trim.bottom;
+            if (trim.left < 0 || trim.top < 0 || trim.right < 0 || trim.bottom < 0 ||
+                canvas_w > std::numeric_limits<int>::max() || canvas_h > std::numeric_limits<int>::max()) {
+                std::cerr << tr("Error: Invalid trim for sprite ") << to_quoted(sprite.path) << "\n";
+                return false;
+            }
+            frame.canvas_w = static_cast<int>(canvas_w);
+            frame.canvas_h = static_cast<int>(canvas_h);
+            frame.offset_x = trim.left;
+            frame.offset_y = trim.top;
+            frames_.push_back(std::move(frame));
         }
         return !frames_.empty();
     }
@@ -396,23 +434,51 @@ private:
     }
 
     // Reads a JSON number as int; TexturePacker-style files may store coordinates as floats.
-    static int json_int(const nlohmann::json& obj, const char* key) {
+    // Missing keys read as 0; values that are not numbers or do not fit an int are refused.
+    static bool json_int(const nlohmann::json& obj, const char* key, int& out) {
+        out = 0;
         const auto it = obj.find(key);
-        if (it == obj.end() || !it->is_number()) {
-            return 0;
+        if (it == obj.end()) {
+            return true;
         }
+        if (!it->is_number()) {
+            return false;
+        }
+        constexpr double k_min = std::numeric_limits<int>::min();
+        constexpr double k_max = std::numeric_limits<int>::max();
         if (it->is_number_float()) {
-            return static_cast<int>(std::lround(it->get<double>()));
+            const double v = std::round(it->get<double>());
+            if (!std::isfinite(v) || v < k_min || v > k_max) {
+                return false;
+            }
+            out = static_cast<int>(v);
+            return true;
         }
-        return it->get<int>();
+        if (it->is_number_unsigned()) {
+            const auto v = it->get<std::uint64_t>();
+            if (v > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+            out = static_cast<int>(v);
+            return true;
+        }
+        const auto v = it->get<std::int64_t>();
+        if (v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max()) {
+            return false;
+        }
+        out = static_cast<int>(v);
+        return true;
     }
 
-    static Rectangle json_rect(const nlohmann::json& obj, const char* key) {
+    static bool json_rect(const nlohmann::json& obj, const char* key, Rectangle& out, bool& present) {
+        out = {.x = 0, .y = 0, .w = 0, .h = 0};
         const auto it = obj.find(key);
-        if (it == obj.end() || !it->is_object()) {
-            return {.x=0, .y=0, .w=0, .h=0};
+        present = it != obj.end() && it->is_object();
+        if (!present) {
+            return true;
         }
-        return {.x=json_int(*it, "x"), .y=json_int(*it, "y"), .w=json_int(*it, "w"), .h=json_int(*it, "h")};
+        return json_int(*it, "x", out.x) && json_int(*it, "y", out.y) &&
+               json_int(*it, "w", out.w) && json_int(*it, "h", out.h);
     }
 
     static bool json_bool(const nlohmann::json& obj, const char* key) {
@@ -420,23 +486,99 @@ private:
         return it != obj.end() && it->is_boolean() && it->get<bool>();
     }
 
-    static SpriteFrame json_frame(const std::string& name, const nlohmann::json& obj) {
-        SpriteFrame frame;
+    // TexturePacker-style frame. "frame" holds the unrotated size even for rotated frames
+    // (the atlas region is h x w then); "sourceSize" and "spriteSourceSize" place the
+    // trimmed pixels in the original canvas.
+    static bool json_frame(const std::string& name, const nlohmann::json& obj, SpriteFrame& frame) {
+        frame = {};
         frame.name = name;
-        frame.frame = json_rect(obj, "frame");
-        frame.sprite_source_size = json_rect(obj, "spriteSourceSize");
+        frame.rotated = json_bool(obj, "rotated");
+        Rectangle rect{};
+        Rectangle sprite_source{};
+        bool has_rect = false;
+        bool has_sprite_source = false;
+        if (!json_rect(obj, "frame", rect, has_rect) ||
+            !json_rect(obj, "spriteSourceSize", sprite_source, has_sprite_source)) {
+            std::cerr << tr("Error: Frame ") << to_quoted(name) << tr(" has invalid coordinates\n");
+            return false;
+        }
+        frame.frame = rect;
+        if (frame.rotated) {
+            std::swap(frame.frame.w, frame.frame.h);
+        }
         const auto source_size = obj.find("sourceSize");
         if (source_size != obj.end() && source_size->is_object()) {
-            frame.source_w = json_int(*source_size, "w");
-            frame.source_h = json_int(*source_size, "h");
+            if (!json_int(*source_size, "w", frame.canvas_w) || !json_int(*source_size, "h", frame.canvas_h)) {
+                std::cerr << tr("Error: Frame ") << to_quoted(name) << tr(" has invalid coordinates\n");
+                return false;
+            }
         }
-        frame.rotated = json_bool(obj, "rotated");
-        frame.trimmed = json_bool(obj, "trimmed");
-        return frame;
+        if (has_sprite_source) {
+            frame.offset_x = sprite_source.x;
+            frame.offset_y = sprite_source.y;
+        }
+        return true;
     }
 
-    // Supports TexturePacker-style JSON: {"frames": {name: {...}}}, {"frames": [{"filename": ...}]}
-    // or a bare array of frames. Other top-level keys (such as "meta") are ignored.
+    bool parse_json_frames(const nlohmann::json& frames) {
+        SpriteFrame frame;
+        if (frames.is_object()) {
+            for (const auto& [name, obj] : frames.items()) {
+                if (obj.is_object()) {
+                    if (!json_frame(name, obj, frame)) {
+                        return false;
+                    }
+                    frames_.push_back(frame);
+                }
+            }
+        } else if (frames.is_array()) {
+            for (const auto& obj : frames) {
+                if (!obj.is_object()) {
+                    continue;
+                }
+                const auto filename = obj.find("filename");
+                if (filename != obj.end() && filename->is_string()) {
+                    if (!json_frame(filename->get<std::string>(), obj, frame)) {
+                        return false;
+                    }
+                    frames_.push_back(frame);
+                }
+            }
+        }
+        return true;
+    }
+
+    // Phaser multi-atlas JSON lists one entry per texture; unpack the one for this atlas:
+    // the entry whose image file name matches the atlas file, or the only entry.
+    const nlohmann::json* select_texture(const nlohmann::json& textures) const {
+        const fs::path atlas = !config_.input_path.empty() ? config_.input_path : config_.detected_input_path;
+        std::vector<std::string> images;
+        for (const auto& texture : textures) {
+            if (!texture.is_object()) {
+                continue;
+            }
+            const auto image = texture.find("image");
+            const std::string image_name = (image != texture.end() && image->is_string())
+                ? image->get<std::string>() : std::string();
+            if (!atlas.empty() && fs::path(image_name).filename() == atlas.filename()) {
+                return &texture;
+            }
+            images.push_back(image_name);
+        }
+        if (textures.size() == 1 && textures[0].is_object()) {
+            return &textures[0];
+        }
+        std::cerr << tr("Error: Multi-atlas JSON has no texture for this atlas; its images are:");
+        for (const auto& image : images) {
+            std::cerr << " " << to_quoted(image);
+        }
+        std::cerr << "\n";
+        return nullptr;
+    }
+
+    // Supports TexturePacker-style JSON: {"frames": {name: {...}}}, {"frames": [{"filename": ...}]},
+    // Phaser multi-atlas JSON {"textures": [{"image": ..., "frames": [...]}]} or a bare array of
+    // frames. Other top-level keys (such as "meta") are ignored.
     bool parse_json(const std::string& content) {
         const nlohmann::json root = nlohmann::json::parse(content, nullptr, false);
         if (root.is_discarded()) {
@@ -446,37 +588,87 @@ private:
 
         const nlohmann::json* frames = &root;
         if (root.is_object()) {
+            const auto textures = root.find("textures");
             const auto it = root.find("frames");
-            if (it == root.end()) {
+            if (it != root.end()) {
+                frames = &*it;
+            } else if (textures != root.end() && textures->is_array()) {
+                const nlohmann::json* texture = select_texture(*textures);
+                if (texture == nullptr) {
+                    return false;
+                }
+                const auto texture_frames = texture->find("frames");
+                if (texture_frames == texture->end()) {
+                    std::cerr << tr("Error: Invalid JSON format (missing \"frames\")\n");
+                    return false;
+                }
+                frames = &*texture_frames;
+            } else {
                 std::cerr << tr("Error: Invalid JSON format (missing \"frames\")\n");
                 return false;
             }
-            frames = &*it;
         }
 
-        if (frames->is_object()) {
-            for (const auto& [name, obj] : frames->items()) {
-                if (obj.is_object()) {
-                    frames_.push_back(json_frame(name, obj));
-                }
-            }
-        } else if (frames->is_array()) {
-            for (const auto& obj : *frames) {
-                if (!obj.is_object()) {
-                    continue;
-                }
-                const auto filename = obj.find("filename");
-                if (filename != obj.end() && filename->is_string()) {
-                    frames_.push_back(json_frame(filename->get<std::string>(), obj));
-                }
-            }
-        }
-        return !frames_.empty();
+        return parse_json_frames(*frames) && !frames_.empty();
     }
 
     static bool looks_like_json(const std::string& content) {
         const size_t first = content.find_first_not_of(" \t\r\n");
         return first != std::string::npos && (content[first] == '{' || content[first] == '[');
+    }
+
+    // The file a frame is written to: its name, with ".png" added unless it already ends so
+    // (names such as "walk.001" keep their dots).
+    static std::string output_filename(const std::string& name) {
+        std::string lower = name;
+        std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return lower.ends_with(".png") ? name : name + ".png";
+    }
+
+    [[nodiscard]] int output_w(const SpriteFrame& frame) const {
+        return config_.keep_trim ? frame.content_w() : frame.canvas_w;
+    }
+    [[nodiscard]] int output_h(const SpriteFrame& frame) const {
+        return config_.keep_trim ? frame.content_h() : frame.canvas_h;
+    }
+
+    bool validate_frames() {
+        std::vector<std::string> filenames;
+        filenames.reserve(frames_.size());
+        for (auto& frame : frames_) {
+            const auto& r = frame.frame;
+            // 64-bit so huge coordinates are refused instead of overflowing.
+            const bool inside = r.w > 0 && r.h > 0 && r.x >= 0 && r.y >= 0 &&
+                static_cast<long long>(r.x) + r.w <= width_ &&
+                static_cast<long long>(r.y) + r.h <= height_;
+            if (!inside) {
+                std::cerr << tr("Error: Frame ") << to_quoted(frame.name) << tr(" references pixels outside the atlas bounds\n");
+                return false;
+            }
+            if (frame.canvas_w <= 0 || frame.canvas_h <= 0) {
+                frame.canvas_w = frame.content_w();
+                frame.canvas_h = frame.content_h();
+            }
+            const bool fits = frame.offset_x >= 0 && frame.offset_y >= 0 &&
+                static_cast<long long>(frame.offset_x) + frame.content_w() <= frame.canvas_w &&
+                static_cast<long long>(frame.offset_y) + frame.content_h() <= frame.canvas_h;
+            if (!fits) {
+                std::cerr << tr("Error: Frame ") << to_quoted(frame.name) << tr(" does not fit its original size\n");
+                return false;
+            }
+            if (!check_frame_name(frame.name)) {
+                return false;
+            }
+            filenames.push_back(fs::path(output_filename(frame.name)).lexically_normal().generic_string());
+        }
+        std::vector<std::string> sorted = filenames;
+        std::ranges::sort(sorted);
+        const auto duplicate = std::ranges::adjacent_find(sorted);
+        if (duplicate != sorted.end()) {
+            std::cerr << tr("Error: Several frames would be written to ") << to_quoted(*duplicate) << "\n";
+            return false;
+        }
+        return true;
     }
 
     bool unpack_to_dir() {
@@ -490,13 +682,14 @@ private:
 
         std::cout << tr("Unpacking ") << frames_.size() << tr(" frames to ") << to_quoted(config_.output_dir.string()) << tr("...\n");
 
+        bool ok = true;
         for (const auto& frame : frames_) {
             if (!save_sprite_image(frame)) {
-                std::cerr << tr("Warning: Failed to save sprite ") << to_quoted(frame.name) << "\n";
+                std::cerr << tr("Error: Failed to save sprite ") << to_quoted(frame.name) << "\n";
+                ok = false;
             }
         }
-
-        return true;
+        return ok;
     }
 
     bool unpack_to_stdout() {
@@ -551,35 +744,33 @@ private:
         return true;
     }
 
+    // The sprite's pixels, rotation undone, placed at their offset in the original canvas
+    // (or just the trimmed pixels with --keep-trim). Frames are validated beforehand.
     std::vector<unsigned char> extract_sprite_pixels(const SpriteFrame& frame) {
         const auto& bounds = frame.frame;
+        const int content_w = frame.content_w();
+        const int content_h = frame.content_h();
+        const int out_w = output_w(frame);
+        const int out_h = output_h(frame);
+        const int ox0 = config_.keep_trim ? 0 : frame.offset_x;
+        const int oy0 = config_.keep_trim ? 0 : frame.offset_y;
 
-        // Validate frame rectangle against loaded atlas dimensions.
-        if (bounds.w <= 0 || bounds.h <= 0 ||
-            bounds.x < 0 || bounds.y < 0 ||
-            bounds.x + bounds.w > width_ || bounds.y + bounds.h > height_) {
-            return {};
-        }
-
-        const int out_w = frame.rotated ? bounds.h : bounds.w;
-        const int out_h = frame.rotated ? bounds.w : bounds.h;
-
-        std::vector<unsigned char> sprite_data(static_cast<size_t>(out_w) * out_h * NUM_CHANNELS);
+        std::vector<unsigned char> sprite_data(static_cast<size_t>(out_w) * out_h * NUM_CHANNELS, 0);
         if (!frame.rotated) {
-            const size_t row_bytes = static_cast<size_t>(out_w) * NUM_CHANNELS;
-            for (int oy = 0; oy < out_h; oy++) {
-                const size_t dst_offset = static_cast<size_t>(oy) * out_w * NUM_CHANNELS;
-                const size_t src_offset = (static_cast<size_t>(bounds.y + oy) * width_ + bounds.x) * NUM_CHANNELS;
+            const size_t row_bytes = static_cast<size_t>(content_w) * NUM_CHANNELS;
+            for (int cy = 0; cy < content_h; cy++) {
+                const size_t dst_offset = (static_cast<size_t>(oy0 + cy) * out_w + ox0) * NUM_CHANNELS;
+                const size_t src_offset = (static_cast<size_t>(bounds.y + cy) * width_ + bounds.x) * NUM_CHANNELS;
                 std::memcpy(&sprite_data[dst_offset], &image_data_[src_offset], row_bytes);
             }
         } else {
-            // Undo the packing rotation: CW maps source (ox, oy) to atlas (h-1-oy, ox),
-            // CCW maps it to atlas (oy, w-1-ox).
-            for (int oy = 0; oy < out_h; oy++) {
-                for (int ox = 0; ox < out_w; ox++) {
-                    const int atlas_x = bounds.x + (frame.rotated_ccw ? oy : out_h - 1 - oy);
-                    const int atlas_y = bounds.y + (frame.rotated_ccw ? out_w - 1 - ox : ox);
-                    const size_t dst_idx = (static_cast<size_t>(oy) * out_w + ox) * NUM_CHANNELS;
+            // Undo the packing rotation: CW maps source (cx, cy) to atlas (h-1-cy, cx),
+            // CCW maps it to atlas (cy, w-1-cx).
+            for (int cy = 0; cy < content_h; cy++) {
+                for (int cx = 0; cx < content_w; cx++) {
+                    const int atlas_x = bounds.x + (frame.rotated_ccw ? cy : content_h - 1 - cy);
+                    const int atlas_y = bounds.y + (frame.rotated_ccw ? content_w - 1 - cx : cx);
+                    const size_t dst_idx = (static_cast<size_t>(oy0 + cy) * out_w + ox0 + cx) * NUM_CHANNELS;
                     const size_t src_idx = (static_cast<size_t>(atlas_y) * width_ + atlas_x) * NUM_CHANNELS;
                     std::memcpy(&sprite_data[dst_idx], &image_data_[src_idx], NUM_CHANNELS);
                 }
@@ -589,10 +780,9 @@ private:
     }
 
     bool write_sprite_to_archive_entry(struct archive* a, const SpriteFrame& frame) {
-        const int out_w = frame.rotated ? frame.frame.h : frame.frame.w;
-        const int out_h = frame.rotated ? frame.frame.w : frame.frame.h;
-
-        std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
+        const int out_w = output_w(frame);
+        const int out_h = output_h(frame);
+        const std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
 
         // Encode as PNG in memory
         std::vector<unsigned char> png_buffer;
@@ -606,13 +796,7 @@ private:
             return false;
         }
 
-        if (!check_frame_name(frame.name)) {
-            return false;
-        }
-        std::string filename = frame.name;
-        if (filename.find('.') == std::string::npos) {
-            filename += ".png";
-        }
+        const std::string filename = output_filename(frame.name);
 
         struct archive_entry* entry = archive_entry_new();
         if (entry == nullptr) {
@@ -643,24 +827,11 @@ private:
     }
 
     bool save_sprite_image(const SpriteFrame& frame) {
-        const int out_w = frame.rotated ? frame.frame.h : frame.frame.w;
-        const int out_h = frame.rotated ? frame.frame.w : frame.frame.h;
+        const int out_w = output_w(frame);
+        const int out_h = output_h(frame);
+        const std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
 
-        std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
-        if (sprite_data.empty()) {
-            std::cerr << tr("Error: Frame ") << to_quoted(frame.name) << tr(" references pixels outside the atlas bounds\n");
-            return false;
-        }
-
-        if (!check_frame_name(frame.name)) {
-            return false;
-        }
-        fs::path name_path(frame.name);
-        fs::path output_path = (config_.output_dir / name_path).lexically_normal();
-
-        if (output_path.extension().empty()) {
-            output_path += ".png";
-        }
+        const fs::path output_path = (config_.output_dir / fs::path(output_filename(frame.name))).lexically_normal();
 
         std::error_code ec;
         fs::create_directories(output_path.parent_path(), ec);
@@ -684,6 +855,7 @@ void print_usage() {
               << tr("Options:\n")
               << tr("  -f, --frames PATH          Frames definition file (or '-' for stdin)\n")
               << tr("  -o, --output DIR           Output directory (if omitted, output as TAR to stdout)\n")
+              << tr("  --keep-trim                Write only the packed pixels instead of restoring the original size\n")
               << tr("  -j, --threads N            Number of threads to use (default: auto)\n")
               << tr("  --debug                    Enable detailed error reporting\n")
               << tr("  -h, --help                 Show this help message\n")
@@ -707,6 +879,8 @@ int run_spratunpack(int argc, char** argv) {
             return 0;
         } else if (arg == "--debug") {
             config.debug = true;
+        } else if (arg == "--keep-trim") {
+            config.keep_trim = true;
         } else if (arg == "-") {
             if (config.input_path.empty() && !config.input_from_stdin) {
                 config.input_from_stdin = true;
