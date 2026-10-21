@@ -65,7 +65,9 @@ set(STB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stb)
 file(MAKE_DIRECTORY ${STB_DIR})
 
 option(SPRAT_DOWNLOAD_STB "Download stb headers when missing" OFF)
-set(STB_REF "master" CACHE STRING "Git ref (branch, tag, or commit) used when downloading stb headers")
+# Pinned so builds are reproducible: upstream master reorganizes files (stb_image_resize2.h
+# moved to its own repository in 2026-10), which breaks downloads from a moving branch.
+set(STB_REF "2b2e64bc4778df6a06fbea3a5dbe61f7a76ecf19" CACHE STRING "Git ref (branch, tag, or commit) used when downloading stb headers")
 set(STB_BASE_URL https://raw.githubusercontent.com/nothings/stb/${STB_REF})
 
 function(ensure_stb_header header_name)
