@@ -332,7 +332,8 @@ SpriteLoadResult measure_source(const ImageSource& source, const SpriteLoadOptio
         const int content_h = h - 2 * border;
         std::vector<unsigned char> inner;
         const unsigned char* content = px;
-        if (border > 0) {
+        // Only trimming and hashing read the pixels; a plain nine-patch needs just its size.
+        if (border > 0 && (options.trim_transparent || dedup)) {
             inner = copy_region(px, w, {border, border, content_w, content_h});
             content = inner.data();
         }

@@ -11,16 +11,15 @@ namespace sprat::layout {
 enum class InputType : std::uint8_t {
     Directory,
     ListFile,
-    TarFile,
-    StdinTar,
+    Archive,  // a tar/zip/7z/rar file or a tar on stdin, extracted to working_folder
     StdinList
 };
 
 struct InputContext {
     InputType type = InputType::Directory;
     fs::path working_folder;
-    // Folders archives were extracted to; removed when the context is destroyed.
-    std::vector<fs::path> temp_dirs_to_cleanup;
+    // The folder an archive was extracted to (empty if none); removed when the context is destroyed.
+    fs::path extracted_dir;
 
     InputContext() = default;
     InputContext(const InputContext&) = delete;
@@ -34,9 +33,6 @@ bool open_path_input(const fs::path& input_path, InputContext& out_context);
 bool open_stdin_archive_input(InputContext& out_context);
 // Image paths will be read from stdin, relative to cwd.
 void open_stdin_list_input(InputContext& out_context, const fs::path& cwd);
-
-// Archives are extracted to a new folder on every run, so their layouts are not cached.
-bool is_extracted_archive(const InputContext& input);
 
 // The folder that sprite paths in the layout are written relative to.
 fs::path layout_root(const InputContext& input);

@@ -362,8 +362,7 @@ public:
         : input_(input), sources_(out) {}
 
     bool collect() {
-        if (input_.type == InputType::Directory || input_.type == InputType::TarFile ||
-            input_.type == InputType::StdinTar) {
+        if (input_.type == InputType::Directory || input_.type == InputType::Archive) {
             // Archives are already extracted to working_folder; only real folders have an ignore file.
             if (input_.type == InputType::Directory) {
                 load_ignore_file(input_.working_folder / ".spratlayoutignore", input_.working_folder);
@@ -533,6 +532,25 @@ private:
     ExclusionSet excluded_;
 };
 
+// Extracts an archive into a new temporary folder that becomes the working folder.
+// The folder is recorded before extracting, so it is removed even if extraction fails.
+template <typename Extract>
+bool open_extracted_archive(InputContext& out_context, const std::string& dir_prefix,
+                            const std::string& create_error, Extract extract) {
+    fs::path temp_dir;
+    if (!create_extraction_dir(dir_prefix, temp_dir)) {
+        std::cerr << create_error;
+        return false;
+    }
+    out_context.extracted_dir = temp_dir;
+    if (!extract(temp_dir)) {
+        return false;
+    }
+    out_context.type = InputType::Archive;
+    out_context.working_folder = temp_dir;
+    return true;
+}
+
 } // namespace
 
 bool open_path_input(const fs::path& input_path, InputContext& out_context) {
@@ -542,21 +560,16 @@ bool open_path_input(const fs::path& input_path, InputContext& out_context) {
     const bool is_compressed_tar = is_file && is_compressed_tar_file(input_path);
 
     if (is_tar || is_compressed_tar) {
-        fs::path temp_dir;
-        if (!create_extraction_dir("spratlayout_extract_", temp_dir)) {
-            std::cerr << tr("Error: Failed to create temporary directory for archive extraction\n");
-            return false;
-        }
-        out_context.temp_dirs_to_cleanup.push_back(temp_dir);
-
-        if (!extract_tar_file(input_path, temp_dir)) {
-            std::cerr << tr("Error: Failed to extract archive file: ") << to_quoted(input_path) << "\n";
-            return false;
-        }
-
-        out_context.type = InputType::TarFile;
-        out_context.working_folder = temp_dir;
-        return true;
+        return open_extracted_archive(
+            out_context, "spratlayout_extract_",
+            tr("Error: Failed to create temporary directory for archive extraction\n"),
+            [&](const fs::path& dir) {
+                if (!extract_tar_file(input_path, dir)) {
+                    std::cerr << tr("Error: Failed to extract archive file: ") << to_quoted(input_path) << "\n";
+                    return false;
+                }
+                return true;
+            });
     }
     if (is_dir) {
         out_context.type = InputType::Directory;
@@ -575,21 +588,16 @@ bool open_path_input(const fs::path& input_path, InputContext& out_context) {
 }
 
 bool open_stdin_archive_input(InputContext& out_context) {
-    fs::path temp_dir;
-    if (!create_extraction_dir("spratlayout_extract_stdin_", temp_dir)) {
-        std::cerr << tr("Error: Failed to create temporary directory for stdin tar extraction\n");
-        return false;
-    }
-    out_context.temp_dirs_to_cleanup.push_back(temp_dir);
-
-    if (!extract_tar_from_stdin(temp_dir)) {
-        std::cerr << tr("Error: Failed to extract archive from stdin\n");
-        return false;
-    }
-
-    out_context.type = InputType::StdinTar;
-    out_context.working_folder = temp_dir;
-    return true;
+    return open_extracted_archive(
+        out_context, "spratlayout_extract_stdin_",
+        tr("Error: Failed to create temporary directory for stdin tar extraction\n"),
+        [](const fs::path& dir) {
+            if (!extract_tar_from_stdin(dir)) {
+                std::cerr << tr("Error: Failed to extract archive from stdin\n");
+                return false;
+            }
+            return true;
+        });
 }
 
 void open_stdin_list_input(InputContext& out_context, const fs::path& cwd) {
@@ -598,14 +606,10 @@ void open_stdin_list_input(InputContext& out_context, const fs::path& cwd) {
 }
 
 InputContext::~InputContext() {
-    for (const auto& dir : temp_dirs_to_cleanup) {
+    if (!extracted_dir.empty()) {
         std::error_code ec;
-        fs::remove_all(dir, ec);
+        fs::remove_all(extracted_dir, ec);
     }
-}
-
-bool is_extracted_archive(const InputContext& input) {
-    return input.type == InputType::TarFile || input.type == InputType::StdinTar;
 }
 
 fs::path layout_root(const InputContext& input) {

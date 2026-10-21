@@ -87,15 +87,15 @@ bool parse_double(const std::string& token, double& out) {
     return true;
 }
 
-bool parse_pair(const std::string& token, int& a, int& b) {
-    size_t comma = token.find(',');
-    if (comma == std::string::npos || comma == 0 || comma + 1 >= token.size()) {
+bool parse_pair(const std::string& token, int& a, int& b, char separator) {
+    size_t sep = token.find(separator);
+    if (sep == std::string::npos || sep == 0 || sep + 1 >= token.size()) {
         return false;
     }
-    if (token.find(',', comma + 1) != std::string::npos) {
+    if (token.find(separator, sep + 1) != std::string::npos) {
         return false;
     }
-    return parse_int(token.substr(0, comma), a) && parse_int(token.substr(comma + 1), b);
+    return parse_int(token.substr(0, sep), a) && parse_int(token.substr(sep + 1), b);
 }
 
 bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::string& error) {

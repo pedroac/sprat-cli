@@ -1,8 +1,5 @@
 #include "commands/spratlayout/profiles.h"
 
-#include <cerrno>
-#include <cmath>
-#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
@@ -16,7 +13,9 @@
 
 namespace sprat::layout {
 
+using sprat::core::parse_double;
 using sprat::core::parse_non_negative_int;
+using sprat::core::parse_pair;
 using sprat::core::parse_positive_int;
 using sprat::core::parse_positive_uint;
 using sprat::core::tr;
@@ -375,17 +374,8 @@ bool parse_rotate_direction(const std::string& value, bool& rotate_ccw) {
 }
 
 bool parse_scale_factor(const std::string& value, double& out) {
-    if (value.empty()) {
-        return false;
-    }
-    const char* begin = value.c_str();
-    char* end = nullptr;
-    errno = 0;
-    const double parsed = std::strtod(begin, &end);
-    if (end != begin + value.size() || errno == ERANGE) {
-        return false;
-    }
-    if (!std::isfinite(parsed) || parsed <= 0.0 || parsed > 1.0) {
+    double parsed = 0.0;
+    if (!parse_double(value, parsed) || parsed <= 0.0 || parsed > 1.0) {
         return false;
     }
     out = parsed;
@@ -393,20 +383,14 @@ bool parse_scale_factor(const std::string& value, double& out) {
 }
 
 bool parse_resolution(const std::string& value, int& out_width, int& out_height) {
-    if (value.empty()) {
+    int width = 0;
+    int height = 0;
+    if (!parse_pair(value, width, height, 'x') || width <= 0 || height <= 0) {
         return false;
     }
-    const size_t sep = value.find('x');
-    if (sep == std::string::npos || sep == 0 || sep + 1 >= value.size()) {
-        return false;
-    }
-    if (value.find('x', sep + 1) != std::string::npos) {
-        return false;
-    }
-
-    const std::string width_str = value.substr(0, sep);
-    const std::string height_str = value.substr(sep + 1);
-    return !(!parse_positive_int(width_str, out_width) || !parse_positive_int(height_str, out_height));
+    out_width = width;
+    out_height = height;
+    return true;
 }
 
 bool parse_frame_sort_from_string(const std::string& value, FrameSort& out, StableMetric& out_metric) {
@@ -431,6 +415,8 @@ bool parse_frame_sort_from_string(const std::string& value, FrameSort& out, Stab
     }
     return false;
 }
+
+namespace {
 
 bool parse_profiles_config(std::istream& input,
                            std::vector<ProfileDefinition>& out,
@@ -496,6 +482,8 @@ bool parse_profiles_config(std::istream& input,
     }
     return true;
 }
+
+} // namespace
 
 bool load_profiles_config_from_file(const fs::path& path,
                                     std::vector<ProfileDefinition>& out,

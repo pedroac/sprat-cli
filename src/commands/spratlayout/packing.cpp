@@ -910,23 +910,9 @@ bool pack_grid(
         return false;
     }
 
-    const int ref_w = sprites[0].w;
-    const int ref_h = sprites[0].h;
-    for (const auto& s : sprites) {
-        if (s.w != ref_w || s.h != ref_h) {
-            std::cerr << tr("Error: grid mode requires all sprites to be the same size; ")
-                      << s.path << " is " << s.w << "x" << s.h
-                      << tr(", expected ") << ref_w << "x" << ref_h << '\n';
-            return false;
-        }
-    }
-
     int cell_w = 0;
     int cell_h = 0;
-    if (!checked_add_int(ref_w, padding, cell_w) || !checked_add_int(ref_h, padding, cell_h)) {
-        return false;
-    }
-    if (cell_w <= 0 || cell_h <= 0) {
+    if (!grid_cell_size(sprites, padding, cell_w, cell_h)) {
         return false;
     }
     if ((width_limit > 0 && cell_w > width_limit) || (height_limit > 0 && cell_h > height_limit)) {
@@ -981,6 +967,26 @@ bool pack_grid(
     out_width = static_cast<int>(total_w_ll);
     out_height = static_cast<int>(total_h_ll);
     return true;
+}
+
+bool grid_cell_size(const std::vector<Sprite>& sprites, int padding, int& cell_w, int& cell_h) {
+    if (sprites.empty()) {
+        return false;
+    }
+    const int ref_w = sprites[0].w;
+    const int ref_h = sprites[0].h;
+    for (const auto& s : sprites) {
+        if (s.w != ref_w || s.h != ref_h) {
+            std::cerr << tr("Error: grid mode requires all sprites to be the same size; ")
+                      << s.path << " is " << s.w << "x" << s.h
+                      << tr(", expected ") << ref_w << "x" << ref_h << '\n';
+            return false;
+        }
+    }
+    if (!checked_add_int(ref_w, padding, cell_w) || !checked_add_int(ref_h, padding, cell_h)) {
+        return false;
+    }
+    return cell_w > 0 && cell_h > 0;
 }
 
 bool compute_tight_atlas_bounds(const std::vector<Sprite>& sprites, int& out_width, int& out_height) {
