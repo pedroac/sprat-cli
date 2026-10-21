@@ -57,11 +57,12 @@ namespace fs = std::filesystem;
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 #include "core/fnv1a.h"
+#include "core/layout_parser.h"
 #include "core/perceptual_dedup.h"
 
 #include <stb_image.h>
 
-constexpr int k_output_cache_format_version = 4;
+constexpr int k_output_cache_format_version = 5;
 constexpr int k_seed_cache_format_version = 4;
 #ifndef SPRAT_GLOBAL_PROFILE_CONFIG
 #define SPRAT_GLOBAL_PROFILE_CONFIG "/usr/local/share/sprat/spratprofiles.cfg"
@@ -676,6 +677,32 @@ struct Sprite {
     bool has_slice = false;
     int slice_left = 0, slice_top = 0, slice_right = 0, slice_bottom = 0;
 };
+
+// Sprites may share an atlas region only if their nine-slice insets match:
+// slices are per-region metadata that an alias cannot override.
+bool same_slice(const Sprite& a, const Sprite& b) {
+    return a.has_slice == b.has_slice
+        && (!a.has_slice
+            || (a.slice_left == b.slice_left && a.slice_top == b.slice_top
+                && a.slice_right == b.slice_right && a.slice_bottom == b.slice_bottom));
+}
+
+// The alias records its own trim only when it differs from the canonical's,
+// so equal-offset duplicates keep the short two-path alias line.
+sprat::core::Alias make_layout_alias(const Sprite& duplicate, const Sprite& canonical) {
+    sprat::core::Alias alias;
+    alias.path = duplicate.path;
+    alias.canonical_path = canonical.path;
+    alias.trim_left = duplicate.trim_left;
+    alias.trim_top = duplicate.trim_top;
+    alias.trim_right = duplicate.trim_right;
+    alias.trim_bottom = duplicate.trim_bottom;
+    alias.has_trim = duplicate.trim_left != canonical.trim_left
+        || duplicate.trim_top != canonical.trim_top
+        || duplicate.trim_right != canonical.trim_right
+        || duplicate.trim_bottom != canonical.trim_bottom;
+    return alias;
+}
 
 struct Atlas {
     int width = 0;
@@ -2184,7 +2211,7 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
                                      bool trim_transparent,
                                      bool multipack,
                                      const std::vector<Sprite>& sprites,
-                                     const std::vector<std::pair<std::string, std::string>>& aliases,
+                                     const std::vector<sprat::core::Alias>& aliases,
                                      bool debug,
                                      const fs::path& root) {
     std::ostringstream output;
@@ -2238,18 +2265,23 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
             output << "\n";
         }
     }
-    for (const auto& alias_pair : aliases) {
-        fs::path alias_fs_path(alias_pair.first);
+    for (const auto& alias : aliases) {
+        fs::path alias_fs_path(alias.path);
         fs::path relative_alias_path = fs::relative(alias_fs_path, root);
         std::string alias_str = relative_alias_path.string();
         std::replace(alias_str.begin(), alias_str.end(), '\\', '/');
 
-        fs::path canonical_fs_path(alias_pair.second);
+        fs::path canonical_fs_path(alias.canonical_path);
         fs::path relative_canonical_path = fs::relative(canonical_fs_path, root);
         std::string canonical_str = relative_canonical_path.string();
         std::replace(canonical_str.begin(), canonical_str.end(), '\\', '/');
 
-        output << "alias " << to_quoted(alias_str) << " " << to_quoted(canonical_str) << "\n";
+        output << "alias " << to_quoted(alias_str) << " " << to_quoted(canonical_str);
+        if (alias.has_trim) {
+            output << " " << alias.trim_left << "," << alias.trim_top
+                   << " " << alias.trim_right << "," << alias.trim_bottom;
+        }
+        output << "\n";
     }
     return output.str();
 }
@@ -4846,15 +4878,16 @@ int run_spratlayout(int argc, char** argv) {
     save_image_cache(cache_path, cache_entries);
 
     // Step 5: Deduplication pass
-    std::vector<std::pair<std::string, std::string>> layout_aliases;
+    std::vector<sprat::core::Alias> layout_aliases;
     if (deduplicateMode == "exact") {
-        // O(N) hash-map dedup keyed by (content_hash, w, h)
+        // O(N) hash-map dedup keyed by (content_hash, w, h, slice insets)
         struct DedupKey {
             uint64_t hash;
             int w;
             int h;
+            std::array<int, 4> slice;  // all -1 when the sprite has no slice
             bool operator==(const DedupKey& o) const {
-                return hash == o.hash && w == o.w && h == o.h;
+                return hash == o.hash && w == o.w && h == o.h && slice == o.slice;
             }
         };
         struct DedupKeyHash {
@@ -4862,10 +4895,14 @@ int run_spratlayout(int argc, char** argv) {
                 size_t h = std::hash<uint64_t>{}(k.hash);
                 h ^= std::hash<int>{}(k.w) + 0x9e3779b9u + (h << 6u) + (h >> 2u);
                 h ^= std::hash<int>{}(k.h) + 0x9e3779b9u + (h << 6u) + (h >> 2u);
+                for (int v : k.slice) {
+                    h ^= std::hash<int>{}(v) + 0x9e3779b9u + (h << 6u) + (h >> 2u);
+                }
                 return h;
             }
         };
-        std::unordered_map<DedupKey, std::string, DedupKeyHash> canonical_map;
+        // Maps to the canonical sprite's index in `deduped`.
+        std::unordered_map<DedupKey, size_t, DedupKeyHash> canonical_map;
         std::vector<Sprite> deduped;
         deduped.reserve(sprites.size());
         for (const auto& s : sprites) {
@@ -4876,12 +4913,15 @@ int run_spratlayout(int argc, char** argv) {
                 deduped.push_back(s);
                 continue;
             }
-            DedupKey key{h, s.w, s.h};
-            auto [ins_it, inserted] = canonical_map.emplace(key, s.path);
+            const std::array<int, 4> slice = s.has_slice
+                ? std::array<int, 4>{s.slice_left, s.slice_top, s.slice_right, s.slice_bottom}
+                : std::array<int, 4>{-1, -1, -1, -1};
+            DedupKey key{h, s.w, s.h, slice};
+            auto [ins_it, inserted] = canonical_map.emplace(key, deduped.size());
             if (inserted) {
                 deduped.push_back(s);
             } else {
-                layout_aliases.push_back({s.path, ins_it->second});
+                layout_aliases.push_back(make_layout_alias(s, deduped[ins_it->second]));
             }
         }
         sprites = std::move(deduped);
@@ -4912,7 +4952,8 @@ int run_spratlayout(int argc, char** argv) {
             candidates, dedup_threshold, [&](size_t canonical, size_t candidate) {
                 const auto& a = region_of(canonical);
                 const auto& b = region_of(candidate);
-                return a && b && sprat::core::rgba_within_tolerance(
+                return a && b && same_slice(sprites[canonical], sprites[candidate])
+                    && sprat::core::rgba_within_tolerance(
                     a->data(), b->data(),
                     static_cast<size_t>(sprites[candidate].w) * static_cast<size_t>(sprites[candidate].h),
                     dedup_tolerance);
@@ -4923,7 +4964,7 @@ int run_spratlayout(int argc, char** argv) {
             if (canonical_of[i] == i) {
                 deduped.push_back(sprites[i]);
             } else {
-                layout_aliases.push_back({sprites[i].path, sprites[canonical_of[i]].path});
+                layout_aliases.push_back(make_layout_alias(sprites[i], sprites[canonical_of[i]]));
             }
         }
         sprites = std::move(deduped);
@@ -5668,7 +5709,7 @@ int run_spratlayout(int argc, char** argv) {
                             : best_space_candidate;
                     std::vector<Atlas> prewarm_atlases;
                     prewarm_atlases.push_back({prewarm_candidate.w, prewarm_candidate.h});
-                    std::vector<std::pair<std::string, std::string>> empty_prewarm_aliases;
+                    std::vector<sprat::core::Alias> empty_prewarm_aliases;
                     const fs::path prewarm_root = (input_context.type == InputType::ListFile)
                         ? input_context.working_folder.parent_path()
                         : input_context.working_folder;

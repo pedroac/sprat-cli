@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 static bool parse_slice(const std::string& val, int& left, int& top, int& right, int& bottom,
@@ -289,7 +290,7 @@ bool parse_multipack_line(const std::string& line, bool& multipack) {
     return true;
 }
 
-bool parse_alias_line(const std::string& line, std::string& alias_path, std::string& canonical_path, std::string& error) {
+bool parse_alias_line(const std::string& line, Alias& out, std::string& error) {
     constexpr std::string_view prefix = "alias";
     if (!line.starts_with(prefix)) {
         error = "line does not start with alias";
@@ -306,7 +307,8 @@ bool parse_alias_line(const std::string& line, std::string& alias_path, std::str
         return false;
     }
 
-    if (!parse_quoted(line, pos, alias_path, error)) {
+    Alias parsed;
+    if (!parse_quoted(line, pos, parsed.path, error)) {
         return false;
     }
 
@@ -319,19 +321,35 @@ bool parse_alias_line(const std::string& line, std::string& alias_path, std::str
         return false;
     }
 
-    if (!parse_quoted(line, pos, canonical_path, error)) {
+    if (!parse_quoted(line, pos, parsed.canonical_path, error)) {
         return false;
     }
 
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
-        ++pos;
+    // Optional trim offsets, same syntax as on sprite lines: L,T R,B
+    std::istringstream tail(line.substr(pos));
+    std::vector<std::string> tokens;
+    std::string token;
+    while (tail >> token) {
+        tokens.push_back(token);
     }
-
-    if (pos < line.size()) {
+    if (tokens.size() == 2) {
+        if (!parse_pair(tokens[0], parsed.trim_left, parsed.trim_top)
+            || !parse_pair(tokens[1], parsed.trim_right, parsed.trim_bottom)) {
+            error = "invalid alias trim offset pair";
+            return false;
+        }
+        if (parsed.trim_left < 0 || parsed.trim_top < 0
+            || parsed.trim_right < 0 || parsed.trim_bottom < 0) {
+            error = "alias trim offsets must not be negative";
+            return false;
+        }
+        parsed.has_trim = true;
+    } else if (!tokens.empty()) {
         error = "extra content after canonical path";
         return false;
     }
 
+    out = std::move(parsed);
     return true;
 }
 
@@ -431,12 +449,12 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             }
             parsed.sprites.push_back(s);
         } else if (line.starts_with("alias")) {
-            std::string alias_path, canonical_path;
-            if (!parse_alias_line(line, alias_path, canonical_path, error)) {
+            Alias alias;
+            if (!parse_alias_line(line, alias, error)) {
                 error = "Invalid alias line: " + error;
                 return false;
             }
-            parsed.aliases.push_back({alias_path, canonical_path});
+            parsed.aliases.push_back(std::move(alias));
         } else if (is_combined_format_passthrough(line)) {
             // These lines are valid in the combined raw layout format but carry no
             // meaning for the basic layout parser. See is_combined_format_passthrough.
@@ -464,6 +482,35 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
     }
 
     out = std::move(parsed);
+    return true;
+}
+
+bool expand_layout_aliases(Layout& layout, std::string& error) {
+    std::unordered_map<std::string, size_t> index_by_path;
+    index_by_path.reserve(layout.sprites.size());
+    for (size_t i = 0; i < layout.sprites.size(); ++i) {
+        index_by_path.emplace(layout.sprites[i].path, i);
+    }
+    layout.sprites.reserve(layout.sprites.size() + layout.aliases.size());
+    for (const Alias& alias : layout.aliases) {
+        const auto it = index_by_path.find(alias.canonical_path);
+        if (it == index_by_path.end()) {
+            error = "Alias \"" + alias.path + "\" refers to unknown sprite \"" + alias.canonical_path + "\"";
+            return false;
+        }
+        Sprite expanded = layout.sprites[it->second];
+        expanded.path = alias.path;
+        expanded.alias_of = alias.canonical_path;
+        if (alias.has_trim) {
+            expanded.src_x = alias.trim_left;
+            expanded.src_y = alias.trim_top;
+            expanded.trim_right = alias.trim_right;
+            expanded.trim_bottom = alias.trim_bottom;
+            expanded.has_trim = true;
+        }
+        layout.sprites.push_back(std::move(expanded));
+    }
+    layout.aliases.clear();
     return true;
 }
 

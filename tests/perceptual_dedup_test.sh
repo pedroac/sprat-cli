@@ -109,4 +109,76 @@ for bad in -1 256 abc; do
     expect_rejected --dedup-tolerance "$bad" 'Invalid dedup tolerance'
 done
 
+# ── Aliases keep their own trim; nine-slice insets block merging ──────────────
+# Same trimmed pixels at a different place in the canvas is still a duplicate, but the
+# alias must record its own trim or engines restoring the canvas would misplace it.
+mkdir -p "$tmp_dir/offsets"
+offsets_dir="$frames_dir/../offsets"
+python3 - "$offsets_dir" <<'PY'
+import sys
+from PIL import Image
+
+def frame(path, top):
+    im = Image.new("RGBA", (16, 24))
+    for y in range(8):
+        for x in range(8):
+            im.putpixel((4 + x, top + y), (200, 40, 40, 255))
+    im.save(path)
+
+def nine(path, guide):
+    # 12x12 interior inside the 1px nine-patch border; guides mark the stretch region.
+    im = Image.new("RGBA", (14, 14), (40, 200, 40, 255))
+    for i in range(14):
+        im.putpixel((i, 0), (0, 0, 0, 0))
+        im.putpixel((0, i), (0, 0, 0, 0))
+        im.putpixel((i, 13), (0, 0, 0, 0))
+        im.putpixel((13, i), (0, 0, 0, 0))
+    for i in range(guide, 13 - guide):
+        im.putpixel((i, 0), (0, 0, 0, 255))
+        im.putpixel((0, i), (0, 0, 0, 255))
+    im.save(path)
+
+out = sys.argv[1]
+frame(out + "/idle_00.png", 10)
+frame(out + "/idle_01.png", 4)
+frame(out + "/idle_02.png", 10)
+nine(out + "/btn_a.9.png", 3)
+nine(out + "/btn_b.9.png", 3)
+nine(out + "/btn_c.9.png", 5)
+PY
+"$spratlayout_bin" "$offsets_dir" --trim-transparent --deduplicate exact > "$tmp_dir/offsets.txt"
+python3 - "$tmp_dir/offsets.txt" <<'PY'
+import sys
+sprites, aliases = {}, {}
+for line in open(sys.argv[1]):
+    parts = line.split()
+    if parts and parts[0] == "sprite":
+        sprites[parts[1].strip('"')] = parts[2:]
+    elif parts and parts[0] == "alias":
+        aliases[parts[1].strip('"')] = (parts[2].strip('"'), parts[3:])
+idle = sorted(n for n in sprites if n.startswith("idle"))
+assert len(idle) == 1, (sprites, aliases)
+canonical = idle[0]
+top = int(sprites[canonical][2].split(",")[1])
+for name in ("idle_00.png", "idle_01.png", "idle_02.png"):
+    if name == canonical:
+        continue
+    target, trim = aliases[name]
+    assert target == canonical, (name, target)
+    own_top = 4 if name == "idle_01.png" else 10
+    if own_top == top:
+        assert trim == [], (name, trim)  # same offsets: short alias line
+    else:
+        assert trim == ["4,%d" % own_top, "4,%d" % (16 - own_top)], (name, trim)
+# btn_a and btn_b share pixels and guides; btn_c has the same pixels but other insets
+buttons = sorted(n for n in sprites if n.startswith("btn"))
+assert len(buttons) == 2 and "btn_c.9.png" in buttons, (sprites, aliases)
+assert {n for n in aliases if n.startswith("btn")} <= {"btn_a.9.png", "btn_b.9.png"}, aliases
+PY
+"$spratlayout_bin" "$offsets_dir" --trim-transparent --deduplicate perceptual > "$tmp_dir/offsets_p.txt"
+if grep -q '"btn_c.9.png"' <(grep '^alias' "$tmp_dir/offsets_p.txt"); then
+    echo "perceptual dedup merged sprites with different nine-slice insets" >&2
+    exit 1
+fi
+
 echo "perceptual_dedup_test.sh: ok"

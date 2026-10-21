@@ -165,7 +165,8 @@ Transform files are searched in the directory beside the executable, the user da
 .PP
 Optional \fB\-\-markers\fR and \fB\-\-animations\fR files can be loaded and referenced by transform placeholders.
 .PP
-If \fB\-\-auto\-animations\fR is enabled, frames are automatically grouped into animations based on common name prefixes and numeric suffixes.
+If \fB\-\-auto\-animations\fR is enabled, frames are automatically grouped into animations based on common name prefixes and numeric suffixes, ordered by name (\fBrun_2\fR before \fBrun_10\fR).
+Layout \fBalias\fR lines are expanded into frames that share the canonical sprite's atlas region; the \fB{{alias_of}}\fR sprite field holds the canonical path (empty for regular sprites).
 .PP
 Transform sections use explicit open/close tags (for example \fB[meta]\fR ... \fB[/meta]\fR) or the modern line-based DSL (for example \fBmeta\fR, \fBheader\fR, \fBsprites\fR, \fB- sprite\fR).
 .PP
@@ -318,7 +319,7 @@ Split into multiple atlases if they don't fit in the specified max dimensions.
 Reuse positions of unchanged sprites from the previous run and pack only new or changed sprites into the remaining space, keeping coordinates stable across iterations. Single atlas only; falls back to a full repack if the incremental fit fails. Also available as profile key \fBincremental=true\fR.
 .TP
 \fB\-\-deduplicate\fR none|exact|perceptual
-Pack one copy of duplicate sprites and emit \fBalias\fR lines for the rest. \fBexact\fR merges pixel-identical sprites (content hash). \fBperceptual\fR merges near-identical sprites: a dHash selects candidate pairs, which are merged only if every RGBA channel of every pixel is within \fB\-\-dedup\-tolerance\fR (pixels fully transparent in both are ignored). Each duplicate is compared against its group's canonical sprite, so differences do not accumulate across chains. Default: \fBnone\fR.
+Pack one copy of duplicate sprites and emit \fBalias\fR lines for the rest. \fBexact\fR merges pixel-identical sprites (content hash). \fBperceptual\fR merges near-identical sprites: a dHash selects candidate pairs, which are merged only if every RGBA channel of every pixel is within \fB\-\-dedup\-tolerance\fR (pixels fully transparent in both are ignored). Each duplicate is compared against its group's canonical sprite, so differences do not accumulate across chains. Sprites with different nine-slice insets are never merged. An alias whose trim offsets differ from its canonical sprite's keeps its own: \fBalias "b.png" "a.png" \fIleft\fB,\fItop right\fB,\fIbottom\fR. Default: \fBnone\fR.
 .TP
 \fB\-\-dedup\-threshold\fR \fIN\fR
 Maximum Hamming distance (0-64) between perceptual hashes for a pair to be compared by \fB\-\-deduplicate perceptual\fR. Higher values consider more pairs (slower) but never merge sprites that fail the pixel check. Default: \fB5\fR.

@@ -751,13 +751,13 @@ int run_spratpack(int argc, char** argv) {
             }
         }
         for (auto& alias : layout.aliases) {
-            std::filesystem::path ap(alias.first);
+            std::filesystem::path ap(alias.path);
             if (ap.is_relative()) {
-                alias.first = (root_path / ap).string();
+                alias.path = (root_path / ap).string();
             }
-            std::filesystem::path cp(alias.second);
+            std::filesystem::path cp(alias.canonical_path);
             if (cp.is_relative()) {
-                alias.second = (root_path / cp).string();
+                alias.canonical_path = (root_path / cp).string();
             }
         }
     }

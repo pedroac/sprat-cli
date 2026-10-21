@@ -461,6 +461,46 @@ assert any(m['name'] == 'hit' for m in b_sp['markers']), 'root-relative marker p
 " "$(fix_path "$tmp_dir/out.rootrel.phaser.json")" "$(fix_path "$tmp_dir/out.rootrel.json")"
 fi
 
+# ── Layout aliases are expanded into frames ───────────────────────────────────
+alias_layout="$tmp_dir/alias_layout.txt"
+cat > "$alias_layout" <<'ALIASLAYOUT'
+atlas 8,8
+sprite "idle_10.png" 0,0 4,4 1,6 2,0
+sprite "idle_2.png" 4,0 4,4
+alias "idle_1.png" "idle_10.png"
+alias "idle_3.png" "idle_10.png" 1,0 2,6
+ALIASLAYOUT
+"$convert_bin" --transform phaser-hash --atlas atlas.png < "$alias_layout" > "$tmp_dir/out.alias.phaser.json"
+"$convert_bin" --transform json --auto-animations < "$alias_layout" > "$tmp_dir/out.alias_sprites.json"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "
+import json, sys
+frames = json.load(open(sys.argv[1]))['frames']
+assert sorted(frames) == ['idle_1', 'idle_10', 'idle_2', 'idle_3'], sorted(frames)
+canonical = frames['idle_10']
+for name in ('idle_1', 'idle_3'):
+    assert frames[name]['frame'] == canonical['frame'], name
+    assert frames[name]['sourceSize'] == canonical['sourceSize'], name
+# idle_1 shares the canonical placement; idle_3 keeps its own (6px higher)
+assert frames['idle_1']['spriteSourceSize'] == canonical['spriteSourceSize']
+assert frames['idle_3']['spriteSourceSize']['y'] == 0, frames['idle_3']
+assert canonical['spriteSourceSize']['y'] == 6, canonical
+d = json.load(open(sys.argv[2]))
+by_name = {s['name']: s for s in d['sprites']}
+assert by_name['idle_1']['alias_of'] == 'idle_10.png', by_name['idle_1']
+assert 'alias_of' not in by_name['idle_2'], by_name['idle_2']
+# auto-detected frames play in natural name order, not layout order
+idle = next(a for a in d['animations'] if a['name'] == 'idle')
+assert idle['sprite_names'] == ['idle_1', 'idle_2', 'idle_3', 'idle_10'], idle
+" "$(fix_path "$tmp_dir/out.alias.phaser.json")" "$(fix_path "$tmp_dir/out.alias_sprites.json")"
+fi
+printf 'atlas 4,4\nsprite "a.png" 0,0 4,4\nalias "b.png" "missing.png"\n' > "$tmp_dir/alias_missing.txt"
+if "$convert_bin" --transform json < "$tmp_dir/alias_missing.txt" > /dev/null 2> "$tmp_dir/alias_missing.err"; then
+  echo "alias to an unknown sprite should fail" >&2
+  exit 1
+fi
+grep -q 'missing.png' "$tmp_dir/alias_missing.err"
+
 # ── Empty animations file ─────────────────────────────────────────────────────
 empty_anims_file="$tmp_dir/empty_anims.txt"
 cat > "$empty_anims_file" <<'EMPTYANIMS'
