@@ -122,3 +122,13 @@ printf 'animation "../up"\n- frame 0\nanimation "sub/dir"\n- frame 0\n' > "$tmp_
 [ "$(find "$tmp_dir/paths" -type f | wc -l)" -eq 2 ]
 grep -qF 'm_Name: ../up' "$tmp_dir/paths/out/_._up.anim"
 grep -qF 'm_Name: sub/dir' "$tmp_dir/paths/out/sub_dir.anim"
+
+# unity.meta without a pivot marker: the original image's center, relative to the trimmed rect
+printf 'atlas 64,64\nsprite "plain.png" 0,0 10,10\nsprite "trim.png" 10,0 10,10 10,0 0,10\n' > "$tmp_dir/nopivot.txt"
+"$convert_bin" --transform unity.meta < "$tmp_dir/nopivot.txt" > "$tmp_dir/nopivot.meta"
+grep -qF 'pivot: {x: 0.5, y: 0.5}' "$tmp_dir/nopivot.meta"
+grep -qF 'pivot: {x: 0, y: 0}' "$tmp_dir/nopivot.meta"
+
+# unity.meta nine-patch: border is relative to the trimmed rect inside the content, not the file
+printf 'atlas 16,16\nsprite "padded.9.png" 0,0 8,8 4,3 4,3 slice=4,4,2,2\n' \
+  | "$convert_bin" --transform unity.meta | grep -qF 'border: {x: 1, y: 0, z: 0, w: 2}'

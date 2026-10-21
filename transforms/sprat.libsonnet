@@ -44,8 +44,11 @@
     trimmed: s.has_trim,
     spriteSourceSize: { x: s.trim_left, y: s.trim_top, w: s.content_w, h: s.content_h },
     sourceSize: { w: s.source_w, h: s.source_h },
-    pivot: { x: s.pivot_x_norm, y: s.pivot_y_norm_raw },
-  } + (if s.has_slice then {
+  }
+  // Phaser applies any pivot as the sprite's origin, so only write one that was set and
+  // leave Phaser's own default otherwise.
+  + (if s.has_pivot then { pivot: { x: s.pivot_x_norm, y: s.pivot_y_norm_raw } } else {})
+  + (if s.has_slice then {
     border: { l: s.slice_left, t: s.slice_top, r: s.slice_right, b: s.slice_bottom },
   } else {}),
 

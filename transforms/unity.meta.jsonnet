@@ -8,11 +8,15 @@ local id_entry(s) =
   "      second: " + lib.yaml_string(s.name) + "\n";
 
 // Unity's sprite rect is the trimmed content, so the pivot and the nine-slice border are
-// expressed relative to it instead of the original source image.
-local rect_pivot(s) = {
-  x: if s.content_w > 0 then (s.pivot_x - s.trim_left) / s.content_w else 0,
-  y: if s.content_h > 0 then 1 - (s.pivot_y - s.trim_top) / s.content_h else 0,
-};
+// expressed relative to it instead of the original source image. Without a pivot marker
+// the pivot is the original image's center (Unity's default), which keeps trimmed
+// animation frames aligned.
+local rect_pivot(s) =
+  if s.has_pivot then { x: s.pivot_rect_x_norm, y: s.pivot_rect_y_norm }
+  else {
+    x: if s.content_w > 0 then (s.source_w / 2 - s.trim_left) / s.content_w else 0,
+    y: if s.content_h > 0 then 1 - (s.source_h / 2 - s.trim_top) / s.content_h else 0,
+  };
 
 local rect_border(s) =
   if !s.has_slice then { x: 0, y: 0, z: 0, w: 0 }

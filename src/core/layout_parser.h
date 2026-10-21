@@ -95,4 +95,12 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error);
 // clears layout.aliases. Fails if an alias names a canonical sprite that is missing.
 bool expand_layout_aliases(Layout& layout, std::string& error);
 
+// Android nine-patch images (".9.png") carry a 1px stretch-marker border around the
+// content. Layouts keep that border inside the trim offsets, since spratpack crops from
+// the whole file; slice insets are relative to the content.
+inline bool is_nine_patch_path(std::string_view path) {
+    constexpr std::string_view suffix = ".9.png";
+    return path.size() >= suffix.size() && path.substr(path.size() - suffix.size()) == suffix;
+}
+
 } // namespace sprat::core

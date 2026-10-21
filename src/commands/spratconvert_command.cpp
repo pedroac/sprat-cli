@@ -25,6 +25,7 @@
 namespace fs = std::filesystem;
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -138,14 +139,52 @@ std::string format_double(double value) {
     return std::string(buf.data(), n > 0 ? static_cast<size_t>(n) : 0);
 }
 
+// Layout trims, slices and markers are in original-image pixels, while the packed size is
+// already scaled; exported metadata uses atlas pixels throughout, like TexturePacker.
+// Saturates instead of overflowing for absurd layout scales.
+int scale_to_atlas(int value, double scale) {
+    if (scale == 1.0) {
+        return value;
+    }
+    const long double scaled = std::round(static_cast<long double>(value) * scale);
+    if (scaled >= static_cast<long double>(std::numeric_limits<int>::max())) {
+        return std::numeric_limits<int>::max();
+    }
+    if (scaled <= static_cast<long double>(std::numeric_limits<int>::min())) {
+        return std::numeric_limits<int>::min();
+    }
+    return static_cast<int>(scaled);
+}
+
+struct ExportTrim {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
+};
+
+// Trim margins as engines should see them. A nine-patch's 1px marker border is part of
+// the layout trims (spratpack crops from the whole file) but not of the image an engine
+// gets, so it is removed; spratlayout only strips it when all four sides have it.
+ExportTrim export_trim(const Sprite& s, double scale) {
+    ExportTrim t{s.src_x, s.src_y, s.trim_right, s.trim_bottom};
+    if (sprat::core::is_nine_patch_path(s.path) &&
+        t.left >= 1 && t.top >= 1 && t.right >= 1 && t.bottom >= 1) {
+        --t.left;
+        --t.top;
+        --t.right;
+        --t.bottom;
+    }
+    return {scale_to_atlas(t.left, scale), scale_to_atlas(t.top, scale),
+            scale_to_atlas(t.right, scale), scale_to_atlas(t.bottom, scale)};
+}
+
 std::string sprite_name_from_path(const std::string& path) {
     fs::path p(path);
     std::string name = p.stem().string();
     // Strip the ".9" from Android nine-patch stems ("button.9" → "button").
-    constexpr std::string_view np_suffix = ".9.png";
     if (name.size() >= 2 && name.compare(name.size() - 2, 2, ".9") == 0 &&
-        path.size() >= np_suffix.size() &&
-        path.compare(path.size() - np_suffix.size(), np_suffix.size(), np_suffix) == 0) {
+        sprat::core::is_nine_patch_path(path)) {
         name.resize(name.size() - 2);
     }
     if (!name.empty()) {
@@ -689,22 +728,24 @@ std::string build_sprat_json(
     };
 
     // Helper: build JSON array of marker objects
+    // Marker files use original-image pixels; exported markers use atlas pixels.
     auto marker_to_json = [&](const MarkerItem& m) -> std::string {
+        const auto sc = [&](int v) { return std::to_string(scale_to_atlas(v, layout.scale)); };
         std::string o = "{\"name\":\"" + escape_json(m.name) + "\"";
         o += ",\"type\":\"" + escape_json(m.type) + "\"";
-        o += ",\"x\":" + std::to_string(m.x);
-        o += ",\"y\":" + std::to_string(m.y);
+        o += ",\"x\":" + sc(m.x);
+        o += ",\"y\":" + sc(m.y);
         if (m.type == "circle") {
-            o += ",\"radius\":" + std::to_string(m.radius);
+            o += ",\"radius\":" + sc(m.radius);
         } else if (m.type == "rectangle") {
-            o += ",\"w\":" + std::to_string(m.w);
-            o += ",\"h\":" + std::to_string(m.h);
+            o += ",\"w\":" + sc(m.w);
+            o += ",\"h\":" + sc(m.h);
         } else if (m.type == "polygon") {
             o += ",\"vertices\":[";
             for (size_t vi = 0; vi < m.vertices.size(); ++vi) {
                 if (vi > 0) o += ',';
-                o += "{\"x\":" + std::to_string(m.vertices[vi].first);
-                o += ",\"y\":" + std::to_string(m.vertices[vi].second) + "}";
+                o += "{\"x\":" + sc(m.vertices[vi].first);
+                o += ",\"y\":" + sc(m.vertices[vi].second) + "}";
             }
             o += "]";
         }
@@ -723,29 +764,40 @@ std::string build_sprat_json(
 
         const int content_w = s.rotated ? s.h : s.w;
         const int content_h = s.rotated ? s.w : s.h;
-        const int source_w  = content_w + s.src_x + s.trim_right;
-        const int source_h  = content_h + s.src_y + s.trim_bottom;
-        const bool has_trim = (s.src_x != 0) || (s.src_y != 0) ||
-                              (s.trim_right != 0) || (s.trim_bottom != 0);
+        const ExportTrim trim = export_trim(s, layout.scale);
+        const int source_w  = content_w + trim.left + trim.right;
+        const int source_h  = content_h + trim.top + trim.bottom;
+        const bool has_trim = (trim.left != 0) || (trim.top != 0) ||
+                              (trim.right != 0) || (trim.bottom != 0);
 
         int unity_y = 0;
         if (s.atlas_index >= 0 && static_cast<size_t>(s.atlas_index) < layout.atlases.size()) {
             unity_y = layout.atlases[static_cast<size_t>(s.atlas_index)].height - s.y - s.h;
         }
 
-        int px = has_global_pivot ? global_pivot_x : 0;
-        int py = has_global_pivot ? global_pivot_y : 0;
+        bool has_pivot = has_global_pivot;
+        int pivot_src_x = has_global_pivot ? global_pivot_x : 0;
+        int pivot_src_y = has_global_pivot ? global_pivot_y : 0;
         for (const auto& marker : sprite_markers[i]) {
             if (marker.name == "pivot" && marker.type == "point") {
-                px = marker.x;
-                py = marker.y;
+                pivot_src_x = marker.x;
+                pivot_src_y = marker.y;
+                has_pivot = true;
                 break;
             }
         }
+        // Pivot markers are in original-image pixels; normalize from the unrounded scaled value.
+        const double pivot_ax = static_cast<double>(pivot_src_x) * layout.scale;
+        const double pivot_ay = static_cast<double>(pivot_src_y) * layout.scale;
+        const int px = scale_to_atlas(pivot_src_x, layout.scale);
+        const int py = scale_to_atlas(pivot_src_y, layout.scale);
 
-        double pivot_x_norm = (source_w > 0) ? (static_cast<double>(px) / source_w) : 0.0;
-        double pivot_y_norm = (source_h > 0) ? (1.0 - static_cast<double>(py) / source_h) : 0.0;
-        double pivot_y_norm_raw = (source_h > 0) ? (static_cast<double>(py) / source_h) : 0.0;
+        double pivot_x_norm = (source_w > 0) ? (pivot_ax / source_w) : 0.0;
+        double pivot_y_norm = (source_h > 0) ? (1.0 - pivot_ay / source_h) : 0.0;
+        double pivot_y_norm_raw = (source_h > 0) ? (pivot_ay / source_h) : 0.0;
+        // Relative to the trimmed rect, for engines whose sprite rect has no trim (Unity).
+        const double pivot_rect_x_norm = (content_w > 0) ? ((pivot_ax - trim.left) / content_w) : 0.0;
+        const double pivot_rect_y_norm_raw = (content_h > 0) ? ((pivot_ay - trim.top) / content_h) : 0.0;
 
         const uint64_t nh = sprat::core::fnv1a_hash(
             reinterpret_cast<const unsigned char*>(sname.c_str()), sname.size());
@@ -766,19 +818,19 @@ std::string build_sprat_json(
         o += ",\"y\":" + std::to_string(s.y);
         o += ",\"w\":" + std::to_string(s.w);
         o += ",\"h\":" + std::to_string(s.h);
-        o += ",\"trim_left\":" + std::to_string(s.src_x);
-        o += ",\"trim_top\":" + std::to_string(s.src_y);
-        o += ",\"trim_right\":" + std::to_string(s.trim_right);
-        o += ",\"trim_bottom\":" + std::to_string(s.trim_bottom);
+        o += ",\"trim_left\":" + std::to_string(trim.left);
+        o += ",\"trim_top\":" + std::to_string(trim.top);
+        o += ",\"trim_right\":" + std::to_string(trim.right);
+        o += ",\"trim_bottom\":" + std::to_string(trim.bottom);
         o += ",\"has_trim\":" + std::string(has_trim ? "true" : "false");
         o += ",\"rotated\":" + std::string(s.rotated ? "true" : "false");
         o += ",\"alias_of\":\"" + escape_json(s.alias_of) + "\"";
         o += ",\"has_slice\":" + std::string(s.has_slice ? "true" : "false");
         if (s.has_slice) {
-            o += ",\"slice_left\":" + std::to_string(s.slice_left);
-            o += ",\"slice_top\":" + std::to_string(s.slice_top);
-            o += ",\"slice_right\":" + std::to_string(s.slice_right);
-            o += ",\"slice_bottom\":" + std::to_string(s.slice_bottom);
+            o += ",\"slice_left\":" + std::to_string(scale_to_atlas(s.slice_left, layout.scale));
+            o += ",\"slice_top\":" + std::to_string(scale_to_atlas(s.slice_top, layout.scale));
+            o += ",\"slice_right\":" + std::to_string(scale_to_atlas(s.slice_right, layout.scale));
+            o += ",\"slice_bottom\":" + std::to_string(scale_to_atlas(s.slice_bottom, layout.scale));
             o += ",\"slice_h\":\"" + s.slice_h + "\"";
             o += ",\"slice_v\":\"" + s.slice_v + "\"";
         }
@@ -787,11 +839,14 @@ std::string build_sprat_json(
         o += ",\"source_w\":" + std::to_string(source_w);
         o += ",\"source_h\":" + std::to_string(source_h);
         o += ",\"unity_y\":" + std::to_string(unity_y);
+        o += ",\"has_pivot\":" + std::string(has_pivot ? "true" : "false");
         o += ",\"pivot_x\":" + std::to_string(px);
         o += ",\"pivot_y\":" + std::to_string(py);
         o += ",\"pivot_x_norm\":" + format_double(pivot_x_norm);
         o += ",\"pivot_y_norm\":" + format_double(pivot_y_norm);
         o += ",\"pivot_y_norm_raw\":" + format_double(pivot_y_norm_raw);
+        o += ",\"pivot_rect_x_norm\":" + format_double(pivot_rect_x_norm);
+        o += ",\"pivot_rect_y_norm\":" + format_double(1.0 - pivot_rect_y_norm_raw);
         o += ",\"name_hash_hex\":\"" + nh_hex + "\"";
         o += ",\"name_hash_decimal\":\"" + nh_dec + "\"";
         o += ",\"name_hash_signed\":\"" + nh_signed + "\"";

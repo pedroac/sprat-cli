@@ -176,12 +176,6 @@ std::optional<std::vector<unsigned char>> load_sprite_region(const Sprite& s) {
 // Every fully transparent sprite gets the same hashes, so they deduplicate together.
 constexpr uint64_t k_transparent_sprite_hash = 0xFFFFFFFFFFFFFFFFULL;
 
-bool is_nine_patch_path(const std::string& p) {
-    constexpr std::string_view suffix = ".9.png";
-    return p.size() >= suffix.size() &&
-           p.compare(p.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
 // Parses Android nine-patch markers from the 1px opaque border of a full image.
 // rgba  : RGBA pixel data for the full fw x fh image (including the 1px border).
 // On success, fills sl/st/sr/sb with content-space insets and returns true.
@@ -295,7 +289,7 @@ SpriteLoadResult measure_source(const ImageSource& source, const SpriteLoadOptio
     sprite.path = source.path;
     const std::string& path = source.path;
     const bool dedup = options.deduplicate_mode != "none";
-    const bool is_nine_patch = is_nine_patch_path(path);
+    const bool is_nine_patch = sprat::core::is_nine_patch_path(path);
     uint64_t content_hash = 0;
     uint64_t perceptual_hash = 0;
 

@@ -839,4 +839,35 @@ key_anims="$(fix_path "$tmp_dir/key.anims")"
 printf 'atlas 16,8\nsprite "a.png" 0,0 8,8\nsprite "b.png" 8,0 8,8\n' \
   | "$convert_bin" --transform phaser-anims --animations "$key_anims" -a 'hero.png' | grep -qF '"key": "hero"'
 
+# scaled layouts: trims and markers are in original-image pixels, the packed size is scaled;
+# exported metadata uses atlas pixels throughout
+printf 'scale 0.5\natlas 200,250\nsprite "f.png" 0,0 161,228 4,5 2,0\n' > "$tmp_dir/scaled.txt"
+printf 'path "f.png"\n- marker "pivot" point 164,230\n- marker "hit" rectangle 10,20 30,40\n' > "$tmp_dir/scaled.markers"
+"$convert_bin" --transform phaser-hash < "$tmp_dir/scaled.txt" | tr -d ' \n' > "$tmp_dir/out.scaled.phaser"
+grep -qF '"sourceSize":{"h":231,"w":164}' "$tmp_dir/out.scaled.phaser"
+grep -qF '"spriteSourceSize":{"h":228,"w":161,"x":2,"y":3}' "$tmp_dir/out.scaled.phaser"
+"$convert_bin" --transform json --markers "$(fix_path "$tmp_dir/scaled.markers")" < "$tmp_dir/scaled.txt" | tr -d ' \n' > "$tmp_dir/out.scaled.json"
+grep -qF '"pivot":{"x":82,"y":115}' "$tmp_dir/out.scaled.json"
+grep -qF '"type":"rectangle","w":15,"x":5,"y":10}' "$tmp_dir/out.scaled.json"
+grep -qF '"h":20,"index":1,"name":"hit"' "$tmp_dir/out.scaled.json"
+
+# phaser applies any pivot as the origin: only write one when a pivot marker sets it
+printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/nopivot.txt"
+if "$convert_bin" --transform phaser-hash < "$tmp_dir/nopivot.txt" | grep -q '"pivot"'; then
+  echo "phaser frames without a pivot marker must not carry a pivot" >&2
+  exit 1
+fi
+printf 'path "a.png"\n- marker "pivot" point 4,8\n' > "$tmp_dir/nopivot.markers"
+"$convert_bin" --transform phaser-array --markers "$(fix_path "$tmp_dir/nopivot.markers")" < "$tmp_dir/nopivot.txt" \
+  | tr -d ' \n' | grep -qF '"pivot":{"x":0.5,"y":1}'
+
+# nine-patch: the 1px marker border is not part of the exported image
+printf 'atlas 16,16\nsprite "padded.9.png" 0,0 8,8 4,3 4,3 slice=4,4,2,2\n' > "$tmp_dir/ninepatch.txt"
+"$convert_bin" --transform plist < "$tmp_dir/ninepatch.txt" > "$tmp_dir/out.ninepatch.plist"
+grep -qF '<string>{14,12}</string>' "$tmp_dir/out.ninepatch.plist"
+grep -qF '<string>{{3,2},{8,8}}</string>' "$tmp_dir/out.ninepatch.plist"
+grep -qF '<string>{{4,4},{8,6}}</string>' "$tmp_dir/out.ninepatch.plist"
+printf 'atlas 16,16\nsprite "plain.9.png" 0,0 14,12 1,1 1,1 slice=4,4,2,2\n' \
+  | "$convert_bin" --transform phaser-hash | tr -d ' \n' | grep -qF '"sourceSize":{"h":12,"w":14},"spriteSourceSize":{"h":12,"w":14,"x":0,"y":0},"trimmed":false'
+
 echo "convert_test.sh: ok"

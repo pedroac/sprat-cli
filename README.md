@@ -578,7 +578,11 @@ Define pivot points (anchors) for sprites using markers.
 1.  **Per-sprite pivot**: Add a marker named `pivot` of type `point` to a specific sprite.
 2.  **Global pivot**: Add a marker named `pivot` of type `point` without a `path`.
 
-`spratconvert` resolves pivot positions and exposes them as `pivot_x`, `pivot_y`, `pivot_x_norm`, `pivot_y_norm`, and `pivot_y_norm_raw` on each sprite object.
+`spratconvert` resolves pivot positions and exposes them as `has_pivot`, `pivot_x`, `pivot_y`, `pivot_x_norm`, `pivot_y_norm`, `pivot_y_norm_raw`, `pivot_rect_x_norm` and `pivot_rect_y_norm` on each sprite object.
+
+Marker coordinates (pivots, hitboxes, ...) are in the original image's pixels, so they don't change when you pack at another `--scale`. Exported metadata is in atlas pixels: `spratconvert` scales markers, trims and nine-slice insets by the layout's `scale`, the way the packed sprite size already is. For nine-patch (`.9.png`) images, the original image is the content inside the 1px marker border.
+
+Sprites without a pivot marker get no pivot in formats where a pivot overrides the engine default (`phaser-*`, `unity.json`), and `unity.meta` uses the center of the original image.
 
 Example `markers.txt`:
 ```txt
@@ -668,15 +672,17 @@ local sprat = std.extVar("sprat");
 | `x`, `y`, `w`, `h` | Packed rectangle in the atlas |
 | `content_w`, `content_h` | Dimensions accounting for rotation |
 | `source_w`, `source_h` | Original size including trim margins |
-| `trim_left`, `trim_top`, `trim_right`, `trim_bottom`, `has_trim` | Trim margins |
+| `trim_left`, `trim_top`, `trim_right`, `trim_bottom`, `has_trim` | Trim margins in atlas pixels (scaled; a nine-patch's marker border excluded) |
 | `rotated` | `true` when packed rotated 90° (direction given by `rotation_direction`) |
 | `has_slice` | `true` when nine-slice data is present |
 | `slice_left`, `slice_top`, `slice_right`, `slice_bottom` | Nine-slice insets (only present when `has_slice` is true) |
 | `slice_h`, `slice_v` | Per-axis fill mode: `stretch`, `repeat`, `mirror`, or `fixed` (only present when `has_slice` is true) |
 | `unity_y` | `atlas_height - y - h` (Y-up coordinate for Unity) |
-| `pivot_x`, `pivot_y` | Pivot in pixels from marker lookup (0 if not set) |
+| `has_pivot` | `true` when a per-sprite or global pivot marker applies |
+| `pivot_x`, `pivot_y` | Pivot in atlas pixels from marker lookup (0 if not set) |
 | `pivot_x_norm`, `pivot_y_norm` | Normalized; `pivot_y_norm` is Y-up (Unity convention) |
 | `pivot_y_norm_raw` | Normalized Y-down |
+| `pivot_rect_x_norm`, `pivot_rect_y_norm` | Normalized relative to the trimmed rect (`x`, `y`, `content_w`, `content_h`); `pivot_rect_y_norm` is Y-up |
 | `name_hash_hex` | 16-char FNV-1a hex string |
 | `name_hash_decimal` | FNV-1a as a decimal string (serialized as JSON string to avoid float precision loss) |
 | `name_hash_signed` | Same hash as a signed 64-bit decimal string, for IDs stored as `int64` (Unity `internalID`/`fileID`) |
@@ -698,7 +704,7 @@ local sprat = std.extVar("sprat");
 | Field | Description |
 |---|---|
 | `index`, `name`, `type` | Identity; `type` is `point`, `circle`, `rectangle`, or `polygon` |
-| `x`, `y`, `radius`, `w`, `h`, `vertices` | Geometry (fields present depend on type) |
+| `x`, `y`, `radius`, `w`, `h`, `vertices` | Geometry in atlas pixels, scaled from the marker file's original-image pixels (fields present depend on type) |
 | `sprite_index`, `sprite_name`, `sprite_path` | Owning sprite |
 
 ### Shared helpers (`sprat.libsonnet`)
