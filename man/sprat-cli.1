@@ -39,6 +39,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 .B spratconvert
 [\fB\-\-transform\fR \fINAME|PATH\fR]
 [\fB\-\-atlas\fR \fIPATTERN\fR]
+[\fB\-\-image\-path\fR \fIPATTERN\fR]
 [\fB\-\-output\-dir\fR \fIPATH\fR]
 [\fB\-\-list\-transforms\fR]
 [\fB\-\-markers\fR \fIPATH\fR]
@@ -406,7 +407,10 @@ Enable detailed error reporting and debug visualization.
 Transform name or path to a custom transform file. Default: \fBjson\fR.
 .TP
 \fB\-a\fR, \fB\-\-atlas\fR \fIPATTERN\fR
-Atlas path pattern used by \fB{{atlas_path}}\fR/\fB{{atlas_*}}\fR placeholders. Example: \fBatlas_%d.png\fR.
+Atlas path pattern used by \fB{{atlas_path}}\fR/\fB{{atlas_*}}\fR placeholders. Example: \fBatlas_%d.png\fR. It names the per-atlas output files and seeds stable IDs (such as Unity GUIDs), and by default it is also how the metadata refers to the atlas images.
+.TP
+\fB\-\-image\-path\fR \fIPATTERN\fR
+Path written into the metadata to refer to each atlas image, with the same \fB%d\fR syntax. Default: the \fB\-\-atlas\fR path as given. Engines usually resolve it relative to the metadata file, so use it when \fB\-\-atlas\fR includes a directory, e.g. \fB\-\-atlas out/atlas_%d.png \-\-image\-path atlas_%d.png \-\-output\-dir out\fR. Without \fB\-\-atlas\fR, it also names the atlas files. \fB\-\-normal\-atlas\fR and \fB\-\-collision\-atlas\fR are written as given.
 .TP
 \fB\-\-output\-dir\fR \fIPATH\fR
 Write transform output to \fIPATH/{variant}{extension}\fR instead of stdout.
@@ -464,7 +468,7 @@ Minimum width/height for a detected sprite to be included. Default: \fB4\fR.
 Limit the maximum number of sprites to detect. Default: \fB10000\fR.
 .TP
 \fB\-\-threads\fR \fIN\fR
-Number of worker threads. Default: auto.
+Accepted for compatibility; detection runs on one thread.
 .SS spratunpack
 .TP
 \fB\-f\fR, \fB\-\-frames\fR \fIPATH\fR
@@ -480,7 +484,7 @@ Write only the packed pixels instead of restoring each sprite's original size.
 For a multipack layout, the atlas the given image is. Default: the layout's only atlas, or the only one with the image's size. Deduplicated sprites (\fBalias\fR lines) are unpacked too.
 .TP
 \fB\-j\fR, \fB\-\-threads\fR \fIN\fR
-Number of worker threads for sprite extraction. Default: auto.
+Number of threads encoding the extracted PNGs. Default: all cores. The output does not depend on it.
 .TP
 \fB\-\-debug\fR
 Enable detailed error reporting.
@@ -555,6 +559,6 @@ All commands return:
 Success.
 .TP
 \fB1\fR
-Invalid arguments, invalid input data, image decode/encode failure, or packing failure.
+Invalid arguments, invalid input data, image decode/encode failure, or packing failure. \fBspratframes\fR also returns 1 when it finds no frames.
 .SH SEE ALSO
 \fBspratlayout\fR(1), \fBspratpack\fR(1), \fBspratconvert\fR(1), \fBspratframes\fR(1), \fBspratunpack\fR(1)

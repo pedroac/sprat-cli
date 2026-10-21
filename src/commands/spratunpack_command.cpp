@@ -3,6 +3,7 @@
 // Compile: g++ -std=c++20 -O2 src/spratunpack.cpp -o spratunpack
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <iostream>
 #include <utility>
@@ -131,7 +132,7 @@ private:
         std::vector<unsigned char> buffer;
         fs::path actual_input_path = config_.input_path;
         if (actual_input_path.empty() && !config_.detected_input_path.empty()) {
-            actual_input_path = config_.detected_input_path;
+            actual_input_path = resolve_detected_path(config_.detected_input_path);
         }
 
         if (actual_input_path.empty() && config_.input_from_stdin) {
@@ -179,6 +180,21 @@ private:
         image_data_.assign(data, data + (static_cast<size_t>(width_) * height_ * NUM_CHANNELS));
         stbi_image_free(data);
         return true;
+    }
+
+    // spratframes writes the "path" line as given on its command line, so a relative path is
+    // relative to the directory it ran in, which is usually also where spratunpack runs. When
+    // it isn't there, try next to the frames file (a frames file moved along with its sheet).
+    [[nodiscard]] fs::path resolve_detected_path(const fs::path& path) const {
+        if (path.is_absolute() || config_.frames_path.empty()) {
+            return path;
+        }
+        std::error_code ec;
+        if (fs::exists(path, ec)) {
+            return path;
+        }
+        const fs::path beside_frames = config_.frames_path.parent_path() / path;
+        return fs::exists(beside_frames, ec) ? beside_frames : path;
     }
 
     bool load_frames() {
@@ -757,6 +773,62 @@ private:
         return true;
     }
 
+    // PNG encoding is the expensive part, so frames are encoded on --threads workers, a batch
+    // at a time to bound memory, and written in frame order by the caller; the output is the
+    // same as a single-threaded run.
+    template <typename Write>
+    bool encode_and_write(Write&& write) {
+        const size_t workers = std::max<size_t>(1, config_.threads);
+        const size_t batch_size = std::max<size_t>(64, workers * 8);
+        std::vector<std::vector<unsigned char>> pngs;
+        for (size_t begin = 0; begin < frames_.size(); begin += batch_size) {
+            const size_t end = std::min(frames_.size(), begin + batch_size);
+            pngs.assign(end - begin, {});
+            std::atomic<size_t> next{begin};
+            const auto encode = [&] {
+                for (size_t i = next++; i < end; i = next++) {
+                    pngs[i - begin] = encode_png(frames_[i]);
+                }
+            };
+            std::vector<std::thread> threads;
+            const size_t spawn = std::min(workers, end - begin) - 1;
+            threads.reserve(spawn);
+            for (size_t t = 0; t < spawn; ++t) {
+                threads.emplace_back(encode);
+            }
+            encode();
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            for (size_t i = begin; i < end; ++i) {
+                if (pngs[i - begin].empty()) {
+                    std::cerr << tr("Error: Failed to encode sprite ") << to_quoted(frames_[i].name) << "\n";
+                    return false;
+                }
+                if (!write(frames_[i], pngs[i - begin])) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    std::vector<unsigned char> encode_png(const SpriteFrame& frame) {
+        const int out_w = output_w(frame);
+        const int out_h = output_h(frame);
+        const std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
+        std::vector<unsigned char> png;
+        auto write_to_vec = [](void* context, void* data, int size) {
+            auto* vec = static_cast<std::vector<unsigned char>*>(context);
+            const auto* bytes = static_cast<const unsigned char*>(data);
+            vec->insert(vec->end(), bytes, bytes + size);
+        };
+        if (!stbi_write_png_to_func(write_to_vec, &png, out_w, out_h, NUM_CHANNELS, sprite_data.data(), out_w * NUM_CHANNELS)) {
+            png.clear();
+        }
+        return png;
+    }
+
     bool unpack_to_dir() {
         if (!fs::exists(config_.output_dir)) {
             std::error_code ec;
@@ -768,14 +840,13 @@ private:
 
         std::cout << tr("Unpacking ") << frames_.size() << tr(" frames to ") << to_quoted(config_.output_dir.string()) << tr("...\n");
 
-        bool ok = true;
-        for (const auto& frame : frames_) {
-            if (!save_sprite_image(frame)) {
+        return encode_and_write([&](const SpriteFrame& frame, const std::vector<unsigned char>& png) {
+            if (!save_png(frame, png)) {
                 std::cerr << tr("Error: Failed to save sprite ") << to_quoted(frame.name) << "\n";
-                ok = false;
+                return false;
             }
-        }
-        return ok;
+            return true;
+        });
     }
 
     bool unpack_to_stdout() {
@@ -812,12 +883,16 @@ private:
             return false;
         }
 
-        for (const auto& frame : frames_) {
-            if (!write_sprite_to_archive_entry(a, frame)) {
-                std::cerr << tr("Warning: Failed to add sprite ") << to_quoted(frame.name) << tr(" to archive\n");
-                archive_write_free(a);
+        const bool written = encode_and_write([&](const SpriteFrame& frame, const std::vector<unsigned char>& png) {
+            if (!write_archive_entry(a, frame, png)) {
+                std::cerr << tr("Error: Failed to add sprite ") << to_quoted(frame.name) << tr(" to archive\n");
                 return false;
             }
+            return true;
+        });
+        if (!written) {
+            archive_write_free(a);
+            return false;
         }
 
         if (archive_write_close(a) != ARCHIVE_OK) {
@@ -865,23 +940,7 @@ private:
         return sprite_data;
     }
 
-    bool write_sprite_to_archive_entry(struct archive* a, const SpriteFrame& frame) {
-        const int out_w = output_w(frame);
-        const int out_h = output_h(frame);
-        const std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
-
-        // Encode as PNG in memory
-        std::vector<unsigned char> png_buffer;
-        auto write_to_vec = [](void* context, void* data, int size) {
-            auto* vec = static_cast<std::vector<unsigned char>*>(context);
-            const auto* bytes = static_cast<const unsigned char*>(data);
-            vec->insert(vec->end(), bytes, bytes + size);
-        };
-
-        if (!stbi_write_png_to_func(write_to_vec, &png_buffer, out_w, out_h, NUM_CHANNELS, sprite_data.data(), out_w * NUM_CHANNELS)) {
-            return false;
-        }
-
+    bool write_archive_entry(struct archive* a, const SpriteFrame& frame, const std::vector<unsigned char>& png) {
         const std::string filename = output_filename(frame.name);
 
         struct archive_entry* entry = archive_entry_new();
@@ -890,7 +949,7 @@ private:
         }
 
         archive_entry_set_pathname(entry, filename.c_str());
-        archive_entry_set_size(entry, static_cast<la_int64_t>(png_buffer.size()));
+        archive_entry_set_size(entry, static_cast<la_int64_t>(png.size()));
         archive_entry_set_filetype(entry, AE_IFREG);
         constexpr int DEFAULT_FILE_PERMISSIONS = 0644;
         archive_entry_set_perm(entry, DEFAULT_FILE_PERMISSIONS);
@@ -902,7 +961,7 @@ private:
             return false;
         }
 
-        if (archive_write_data(a, png_buffer.data(), png_buffer.size()) != static_cast<ssize_t>(png_buffer.size())) {
+        if (archive_write_data(a, png.data(), png.size()) != static_cast<ssize_t>(png.size())) {
             std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(a) << '\n';
             archive_entry_free(entry);
             return false;
@@ -912,11 +971,7 @@ private:
         return true;
     }
 
-    bool save_sprite_image(const SpriteFrame& frame) {
-        const int out_w = output_w(frame);
-        const int out_h = output_h(frame);
-        const std::vector<unsigned char> sprite_data = extract_sprite_pixels(frame);
-
+    bool save_png(const SpriteFrame& frame, const std::vector<unsigned char>& png) const {
         const fs::path output_path = (config_.output_dir / fs::path(output_filename(frame.name))).lexically_normal();
 
         std::error_code ec;
@@ -926,9 +981,9 @@ private:
             return false;
         }
 
-        return stbi_write_png(output_path.string().c_str(),
-                             out_w, out_h, NUM_CHANNELS,
-                             sprite_data.data(), out_w * NUM_CHANNELS) != 0;
+        std::ofstream out(output_path, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        return static_cast<bool>(out);
     }
 };
 

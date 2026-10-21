@@ -179,4 +179,23 @@ fi
 same_images "$tmp_dir/out_same1/b.png" "$tmp_dir/b.png"
 [ ! -e "$tmp_dir/out_same1/a.png" ]
 
+echo "Test 10: a relative path line is also looked up next to the frames file"
+mkdir -p "$tmp_dir/sheets"
+cp "$tmp_dir/atlas.png" "$tmp_dir/sheets/sheet.png"
+printf 'path "sheet.png"\nsprite 4,0 3,4\n' > "$tmp_dir/sheets/sheet.spratframes"
+(cd "$tmp_dir" && "$unpack_bin" -f "$(fix_path "sheets/sheet.spratframes")" -o "$(fix_path "out_pathline")" > /dev/null)
+[ -f "$tmp_dir/out_pathline/sprite_0.png" ]
+
+echo "Test 11: the output does not depend on the thread count"
+"$unpack_bin" "$(fix_path "$tmp_dir/atlas.png")" -f "$(fix_path "$layout")" -j 1 > "$tmp_dir/j1.tar"
+"$unpack_bin" "$(fix_path "$tmp_dir/atlas.png")" -f "$(fix_path "$layout")" -j 4 > "$tmp_dir/j4.tar"
+"$python_bin" - "$(fix_path "$tmp_dir/j1.tar")" "$(fix_path "$tmp_dir/j4.tar")" <<'EOF'
+import sys, tarfile
+def entries(path):
+    with tarfile.open(path) as t:
+        return [(m.name, t.extractfile(m).read()) for m in t.getmembers()]
+if entries(sys.argv[1]) != entries(sys.argv[2]):
+    sys.exit("FAILED: -j 1 and -j 4 produce different archives")
+EOF
+
 echo "unpack_roundtrip_test.sh: ok"

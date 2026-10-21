@@ -656,6 +656,7 @@ std::string build_sprat_json(
     int global_pivot_y,
     bool has_global_pivot,
     const std::string& output_pattern_arg,
+    const std::string& image_pattern_arg,
     const std::string& output_stem,
     const std::string& markers_path_arg,
     const std::string& animations_path_arg,
@@ -664,6 +665,11 @@ std::string build_sprat_json(
     const std::string& collision_atlas_pattern_arg,
     double collision_atlas_scale)
 {
+    // How the metadata refers to atlas image N: --image-path when given, else the -a path.
+    // The -a path itself still names the per-atlas output files and seeds stable hashes.
+    const std::string& reference_pattern = image_pattern_arg.empty() ? output_pattern_arg : image_pattern_arg;
+    auto image_path = [&](int atlas_index) { return format_atlas_path(reference_pattern, atlas_index); };
+
     // Helper: format uint64 as 16-char hex string
     auto to_hex16 = [](uint64_t v) -> std::string {
         char buf[17];
@@ -766,7 +772,7 @@ std::string build_sprat_json(
         // Unity stores internalID/fileID as signed 64-bit; reinterpret the hash bits.
         const std::string nh_signed = std::to_string(static_cast<int64_t>(nh));
 
-        std::string a_path = format_atlas_path(output_pattern_arg, s.atlas_index);
+        const std::string a_path = image_path(s.atlas_index);
 
         std::string o = "{";
         o += "\"index\":" + std::to_string(i);
@@ -841,8 +847,8 @@ std::string build_sprat_json(
         reinterpret_cast<const unsigned char*>(hash_source.c_str()), hash_source.size());
     const std::string stem_hash_hex = to_hex16(stem_hash);
 
-    const std::string atlas_path_0 = format_atlas_path(output_pattern_arg, 0);
-    const std::string atlas_stem_0 = fs::path(atlas_path_0).stem().string();
+    const std::string atlas_path_0 = image_path(0);
+    const std::string atlas_stem_0 = fs::path(format_atlas_path(output_pattern_arg, 0)).stem().string();
 
     const int eff_fps = animation_fps > 0 ? animation_fps : DEFAULT_ANIMATION_FPS;
     const int atlas_w0 = layout.atlases.empty() ? 0 : layout.atlases[0].width;
@@ -905,7 +911,7 @@ std::string build_sprat_json(
         j += "{\"index\":" + std::to_string(ai);
         j += ",\"width\":" + std::to_string(atlas.width);
         j += ",\"height\":" + std::to_string(atlas.height);
-        j += ",\"path\":\"" + escape_json(a_path) + "\"";
+        j += ",\"path\":\"" + escape_json(image_path(static_cast<int>(ai))) + "\"";
         // Per-atlas names and a stable hash, for formats that write one file per atlas.
         const fs::path a_fs_path(a_path);
         j += ",\"stem\":\"" + escape_json(a_fs_path.stem().string()) + "\"";
@@ -1425,6 +1431,7 @@ void print_usage() {
               << tr("Options:\n")
               << tr("  --transform NAME|PATH      Transform name or path (default: json)\n")
               << tr("  --atlas, -a PATTERN        Atlas path pattern for atlas_* placeholders\n")
+              << tr("  --image-path PATTERN       Image path written into the metadata (default: the --atlas path as given)\n")
               << tr("  --output-dir PATH          Write output to PATH/{variant}{extension} instead of stdout\n")
               << tr("  --list-transforms          Print available transforms and exit\n")
               << tr("  --list-transforms-json     Print available transforms as JSON and exit\n")
@@ -1452,6 +1459,7 @@ int run_spratconvert(int argc, char** argv) {
     std::string markers_path_arg;
     std::string animations_path_arg;
     std::string output_pattern_arg;
+    std::string image_pattern_arg;
     std::string normal_atlas_pattern_arg;
     std::string collision_atlas_pattern_arg;
     double collision_atlas_scale = 1.0;
@@ -1467,6 +1475,8 @@ int run_spratconvert(int argc, char** argv) {
             transform_arg = argv[++i];
         } else if ((arg == "--atlas" || arg == "-a" || arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern_arg = argv[++i];
+        } else if (arg == "--image-path" && i + 1 < argc) {
+            image_pattern_arg = argv[++i];
         } else if (arg == "--normal-atlas" && i + 1 < argc) {
             normal_atlas_pattern_arg = argv[++i];
         } else if (arg == "--collision-atlas" && i + 1 < argc) {
@@ -1541,6 +1551,17 @@ int run_spratconvert(int argc, char** argv) {
         return 1;
     }
 
+    if (!image_pattern_arg.empty()) {
+        std::string image_pattern_error;
+        if (!validate_output_pattern(image_pattern_arg, layout.atlases.size(), true, image_pattern_error)) {
+            std::cerr << tr("Invalid image path pattern: ") << image_pattern_error << "\n";
+            return 1;
+        }
+    }
+    if (output_pattern_arg.empty()) {
+        // Without -a, the --image-path pattern also names the atlas files.
+        output_pattern_arg = image_pattern_arg;
+    }
     if (output_pattern_arg.empty()) {
         if (layout.multipack || layout.atlases.size() > 1) {
             output_pattern_arg = "atlas_%d.png";
@@ -1735,7 +1756,7 @@ int run_spratconvert(int argc, char** argv) {
             const std::string sprat_json = build_sprat_json(
                 layout, sprite_names, marker_items, normalized_animations, sprite_markers,
                 global_pivot_x, global_pivot_y, has_global_pivot,
-                output_pattern_arg, member.variant,
+                output_pattern_arg, image_pattern_arg, member.variant,
                 markers_path_arg, animations_path_arg, animation_fps,
                 normal_atlas_pattern_arg,
                 collision_atlas_pattern_arg, collision_atlas_scale);
@@ -1784,7 +1805,7 @@ int run_spratconvert(int argc, char** argv) {
     const std::string sprat_json = build_sprat_json(
         layout, sprite_names, marker_items, normalized_animations, sprite_markers,
         global_pivot_x, global_pivot_y, has_global_pivot,
-        output_pattern_arg, output_stem,
+        output_pattern_arg, image_pattern_arg, output_stem,
         markers_path_arg, animations_path_arg, animation_fps,
         normal_atlas_pattern_arg,
         collision_atlas_pattern_arg, collision_atlas_scale);

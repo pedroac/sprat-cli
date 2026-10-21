@@ -870,4 +870,25 @@ grep -qF '<string>{{4,4},{8,6}}</string>' "$tmp_dir/out.ninepatch.plist"
 printf 'atlas 16,16\nsprite "plain.9.png" 0,0 14,12 1,1 1,1 slice=4,4,2,2\n' \
   | "$convert_bin" --transform phaser-hash | tr -d ' \n' | grep -qF '"sourceSize":{"h":12,"w":14},"spriteSourceSize":{"h":12,"w":14,"x":0,"y":0},"trimmed":false'
 
+# --image-path: the reference written into metadata; -a still names files and seeds GUIDs
+printf 'atlas 32,32\nsprite "a.png" 0,0 16,16\natlas 32,32\nsprite "b.png" 0,0 8,8\n' > "$tmp_dir/ip.txt"
+"$convert_bin" --transform libgdx -a 'out/atlas_%d.png' < "$tmp_dir/ip.txt" | grep -qx 'out/atlas_1.png'
+"$convert_bin" --transform libgdx -a 'out/atlas_%d.png' --image-path 'atlas_%d.png' < "$tmp_dir/ip.txt" > "$tmp_dir/out.ip.atlas"
+grep -qx 'atlas_1.png' "$tmp_dir/out.ip.atlas"
+if grep -q 'out/' "$tmp_dir/out.ip.atlas"; then
+  echo "--image-path must replace the -a path inside the metadata" >&2
+  exit 1
+fi
+"$convert_bin" --transform plist -a 'out/sheet_%d.png' --image-path 'tex/sheet_%d.png' --output-dir "$tmp_dir/ip_plist" < "$tmp_dir/ip.txt"
+grep -qF '<string>tex/sheet_1.png</string>' "$tmp_dir/ip_plist/sheet_1.plist"
+"$convert_bin" --transform unity.meta -a 'out/sheet_%d.png' --output-dir "$tmp_dir/ip_meta_a" < "$tmp_dir/ip.txt"
+"$convert_bin" --transform unity.meta -a 'out/sheet_%d.png' --image-path 'x_%d.png' --output-dir "$tmp_dir/ip_meta_b" < "$tmp_dir/ip.txt"
+diff "$tmp_dir/ip_meta_a/sheet_1.png.meta" "$tmp_dir/ip_meta_b/sheet_1.png.meta"
+"$convert_bin" --transform plist --image-path 'tex/hero_%d.png' --output-dir "$tmp_dir/ip_only" < "$tmp_dir/ip.txt"
+[ -f "$tmp_dir/ip_only/hero_1.plist" ]
+if "$convert_bin" --transform json --image-path 'same.png' < "$tmp_dir/ip.txt" > /dev/null 2>&1; then
+  echo "--image-path without %d must be refused for multipack layouts" >&2
+  exit 1
+fi
+
 echo "convert_test.sh: ok"

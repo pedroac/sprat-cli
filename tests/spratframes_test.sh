@@ -108,6 +108,8 @@ for i in range(3):
 for i in (0, 2):
     d.rectangle([9 + i * 22, 9, 14 + i * 22, 16], fill=(0, 0, 200, 255))
 im.save(root + "/whiteboxes.png")
+
+Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(root + "/empty.png")
 EOF
 
 echo "Test 1: frames are numbered in reading order"
@@ -187,5 +189,14 @@ sprite 5,5 16,16
 sprite 49,5 16,16
 EOF
 diff "$tmp_dir/whiteboxes.expected" "$tmp_dir/whiteboxes.txt"
+
+echo "Test 9: an image without frames is an error in both modes"
+for mode in "" "--has-rectangles"; do
+    if "$frames_bin" $mode "$(fix_path "$tmp_dir/empty.png")" > /dev/null 2> "$tmp_dir/empty.err"; then
+        echo "FAILED: spratframes $mode must fail when it finds no frames" >&2
+        exit 1
+    fi
+    grep -q 'No frames found' "$tmp_dir/empty.err"
+done
 
 echo "spratframes_test.sh: ok"

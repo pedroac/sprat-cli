@@ -567,6 +567,20 @@ Provide `--atlas` so atlas paths are deterministic in multi-atlas layouts:
 ./build/spratconvert --transform json --atlas atlas_%d.png < layout.txt > layout.json
 ```
 
+#### Image paths inside the metadata
+
+By default, the metadata refers to each atlas image exactly as `--atlas` names it. Engines (Cocos2d-x, libGDX, Phaser, Unity, ...) usually resolve that reference relative to the metadata file, so a directory in `--atlas` ends up repeated: with `--atlas out/atlas_%d.png --output-dir out`, the files land in `out/`, but they point to `out/atlas_0.png`, i.e. `out/out/atlas_0.png` from the metadata's point of view.
+
+Use `--image-path PATTERN` (same `%d` syntax) to choose the reference written into the metadata. `--atlas` still names the per-atlas output files and seeds stable IDs such as Unity GUIDs; without `--atlas`, `--image-path` names them too.
+
+```sh
+./build/spratconvert --transform plist --atlas out/atlas_%d.png --image-path atlas_%d.png \
+  --output-dir out < layout.txt
+# out/atlas_0.plist refers to "atlas_0.png"
+```
+
+`--normal-atlas` and `--collision-atlas` are written as given.
+
 ### Automatic Animations
 Automatically group sprites into animations based on their filenames (e.g., `hero_walk_01.png`, `hero_walk_02.png` -> animation `hero_walk`).
 ```sh
@@ -839,7 +853,7 @@ Options:
 - `--rectangle-color COLOR`: Border color to detect (e.g., `#FF00FF`, `255,0,255`).
 - `--tolerance N`: Manhattan distance for grouping pixels (default: 1). Raise it to 3–5 for effect sheets whose sprites are clouds of separate particles (blood, sparks, smoke), so each effect frame stays whole; keep it at 1 for tightly packed characters, which a higher tolerance can join together. Frames always fit the sprite pixels exactly; the gaps that tolerance bridges are not added to them.
 - `--min-size N`: Filter out sprites smaller than NxN pixels.
-- `--threads N`: Parallel processing.
+- `--threads N`: Accepted for compatibility; detection runs on one thread.
 
 Example with magenta borders:
 ```sh
@@ -855,7 +869,7 @@ It can read atlas PNG from a file path, `-`, or stdin (when no atlas path is pro
 ```sh
 ./build/spratframes atlas.png | ./build/spratunpack --output ./extracted
 ```
-When piped from `spratframes`, `spratunpack` can automatically detect the atlas path from the `path ...` line in the stream.
+When piped from `spratframes`, `spratunpack` can automatically detect the atlas path from the `path ...` line in the stream. That path is as `spratframes` was given it, so relative to the directory it ran in; if it isn't found there, `spratunpack` also looks next to the frames file. `spratframes` exits with an error when it finds no frames, so such a pipeline stops with a clear message.
 
 **Manual usage:**
 ```sh
@@ -875,7 +889,7 @@ Options:
 - `-o, --output DIR`: Destination directory.
 - `--keep-trim`: Write only the packed pixels instead of restoring each sprite's original size.
 - `--atlas-index N`: For a multipack layout, the atlas the given image is. By default it is the layout's only atlas, or the only one with the image's size; same-size atlases need this option.
-- `-j, --threads N`: Parallel extraction.
+- `-j, --threads N`: Number of threads encoding the extracted PNGs (default: all cores). The output is the same with any thread count.
 
 Supported formats:
 - TexturePacker/sprat JSON (Hash or Array), including `spratconvert` exports such as `phaser-hash`, `phaser-array`, `unity.json` and `aseprite`

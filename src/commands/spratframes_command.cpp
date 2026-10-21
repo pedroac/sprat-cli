@@ -48,7 +48,6 @@ constexpr int k_default_rectangle_color_b = 255;
 constexpr int k_default_tolerance = 1; // Standardized to match other tools
 constexpr int k_default_min_sprite_size = 4;
 constexpr int k_default_max_sprites = 10000;
-constexpr int k_default_threads = 0; // Auto-detect
 constexpr unsigned char k_max_alpha = 255;
 constexpr unsigned char k_min_alpha = 0;
 constexpr int k_max_image_dimension = 32768;
@@ -121,7 +120,6 @@ struct FramesConfig {
     int tolerance = k_default_tolerance;
     int min_sprite_size = k_default_min_sprite_size;
     int max_sprites = k_default_max_sprites;
-    unsigned int threads = k_default_threads;
     bool force = false;
 };
 
@@ -210,9 +208,10 @@ public:
             frames = extract_from_components();
         }
         
+        // Exit non-zero so a pipeline into spratunpack stops here with a clear reason.
         if (frames.empty()) {
-            std::cerr << tr("Warning: No frames found") << '\n';
-            return true;
+            std::cerr << tr("Error: No frames found in ") << to_quoted(config_.input_path.string()) << '\n';
+            return false;
         }
         
         return output_frames(frames);
@@ -281,7 +280,7 @@ private:
         // merging folds it back into the cell around it.
         merge_rectangles(detected_rectangles_);
 
-        return !detected_rectangles_.empty();
+        return true;
     }
 
     // Visible and not the sheet's background. Background enclosed by rectangle lines is not
@@ -778,7 +777,7 @@ void print_usage() {
         << tr("  --tolerance N            Distance tolerance for sprite grouping (default: ") << k_default_tolerance << ")\n"
         << tr("  --min-size N             Minimum sprite size in pixels (default: ") << k_default_min_sprite_size << ")\n"
         << tr("  --max-sprites N          Maximum number of sprites to extract (default: ") << k_default_max_sprites << ")\n"
-        << tr("  --threads N              Number of threads to use (default: ") << k_default_threads << tr(" = auto)\n")
+        << tr("  --threads N              Accepted for compatibility; detection runs on one thread\n")
         << tr("  --help, -h               Show this help message\n")
         << tr("  --version, -v            Show version\n\n")
         << tr("Examples:\n")
@@ -836,7 +835,7 @@ int run_spratframes(int argc, char** argv) {
                 std::cerr << tr("Error: Invalid threads value: ") << argv[i] << '\n';
                 return 1;
             }
-            config.threads = static_cast<unsigned int>(threads_int);
+            // Accepted for compatibility with callers that pass it; detection is single-threaded.
         } else if (arg.empty() || arg[0] == '-') {
             std::cerr << tr("Error: Unknown option: ") << arg << '\n';
             print_usage();
@@ -871,16 +870,10 @@ int run_spratframes(int argc, char** argv) {
         return 1;
     }
     
-    // Set default threads if not specified
-    if (config.threads == 0) {
-        config.threads = std::max(1U, std::thread::hardware_concurrency());
-    }
-    
     // Detect frames
     SpriteFramesDetector detector(config);
     if (!detector.detect_frames()) {
-        std::cerr << tr("Error: Failed to detect frames") << '\n';
-        return 1;
+        return 1;  // the detector has reported why
     }
     
     return 0;
