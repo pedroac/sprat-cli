@@ -46,6 +46,7 @@ local result =
   } else {});
 
 {
+  assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Godot", "cw"),
   name: "Godot",
   description: "Godot-compatible JSON sprite sheet (load at runtime with AtlasTexture/SpriteFrames)",
   extension: ".json",

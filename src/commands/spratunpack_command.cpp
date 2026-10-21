@@ -12,6 +12,7 @@
 #include <memory>
 namespace fs = std::filesystem;
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <cstddef>
@@ -21,6 +22,7 @@ namespace fs = std::filesystem;
 #include <thread>
 #include <iterator>
 #include "core/cli_parse.h"
+#include "core/layout_parser.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -49,6 +51,7 @@ typedef SSIZE_T ssize_t;
 
 // Libarchive for proper tar format
 #include <archive.h>
+#include <json.hpp>
 #include <archive_entry.h>
 #include "core/i18n.h"
 
@@ -69,6 +72,7 @@ struct SpriteFrame {
     Rectangle sprite_source_size{};
     int source_w{}, source_h{};
     bool rotated{};
+    bool rotated_ccw{};  // direction of the rotation in the atlas (layouts with "rotation ccw")
     bool trimmed{};
 };
 
@@ -258,7 +262,7 @@ private:
         }
 
         // Try to auto-detect from content if extension is unknown
-        if (content.find("\"frames\":") != std::string::npos || content.find("[") != std::string::npos) {
+        if (looks_like_json(content)) {
             if (parse_json(content)) {
                 return true;
             }
@@ -276,6 +280,7 @@ private:
         std::istringstream iss(content);
         std::string line;
         int index = 0;
+        bool rotate_ccw = false;
         while (std::getline(iss, line)) {
             line = trim_copy(line);
             if (line.empty()) {
@@ -303,6 +308,14 @@ private:
             }
             
             if (line.starts_with("background ")) {
+                continue;
+            }
+
+            if (line.starts_with("rotation ")) {
+                if (!sprat::core::parse_rotation_line(line, rotate_ccw)) {
+                    std::cerr << tr("Error: Invalid rotation line (expected cw or ccw): ") << line << "\n";
+                    return false;
+                }
                 continue;
             }
 
@@ -348,6 +361,9 @@ private:
                 }
             }
         }
+        for (auto& frame : frames_) {
+            frame.rotated_ccw = rotate_ccw;
+        }
         return !frames_.empty();
     }
 
@@ -363,169 +379,104 @@ private:
         return s.substr(start, end - start);
     }
 
-    bool parse_json(const std::string& content) {
-        // Very basic JSON parser for TexturePacker/sprat format
-        size_t frames_start = content.find("\"frames\":");
-        if (frames_start == std::string::npos) {
-            // Check if it's an array-based format
-            if (content.find('[') != std::string::npos) {
-                return parse_json_array(content);
-            }
-            std::cerr << tr("Error: Invalid JSON format (missing \"frames\")\n");
+    // Frame names become file paths (on disk or inside the TAR), so they must stay
+    // relative and must not climb out of the output location (path traversal guard).
+    static bool check_frame_name(const std::string& name) {
+        const fs::path name_path(name);
+        if (name_path.has_root_path()) {
+            std::cerr << tr("Error: Frame name is an absolute path: ") << to_quoted(name) << "\n";
             return false;
         }
-
-        // Detect if frames is an object or array
-        constexpr size_t JSON_FRAMES_KEY_OFFSET = 9; // strlen("\"frames\":")
-        size_t search_pos = frames_start + JSON_FRAMES_KEY_OFFSET;
-        while (search_pos < content.size() && (std::isspace(content[search_pos]) != 0)) {
-            search_pos++;
+        const fs::path normalized = name_path.lexically_normal();
+        if (normalized.empty() || normalized.begin()->string() == "..") {
+            std::cerr << tr("Error: Frame name escapes output directory: ") << to_quoted(name) << "\n";
+            return false;
         }
-
-        if (search_pos < content.size() && content[search_pos] == '[') {
-            return parse_json_array(content.substr(search_pos));
-        }
-        return parse_json_object(content.substr(search_pos));
-    }
-
-    bool parse_json_object(const std::string& content) {
-        size_t pos = 0;
-        while (true) {
-            size_t key_start = content.find('\"', pos);
-            if (key_start == std::string::npos) {
-                break;
-            }
-            size_t key_end = content.find('\"', key_start + 1);
-            if (key_end == std::string::npos) {
-                break;
-            }
-
-            std::string key = content.substr(key_start + 1, key_end - key_start - 1);
-
-            size_t obj_start = content.find('{', key_end);
-            if (obj_start == std::string::npos) {
-                break;
-            }
-
-            size_t obj_end = find_closing_bracket(content, obj_start, '{', '}');
-            if (obj_end == std::string::npos) {
-                break;
-            }
-
-            std::string obj_content = content.substr(obj_start, obj_end - obj_start + 1);
-            SpriteFrame frame;
-            frame.name = key;
-            if (parse_frame_details(obj_content, frame)) {
-                frames_.push_back(frame);
-            }
-
-            pos = obj_end + 1;
-        }
-        return !frames_.empty();
-    }
-
-    bool parse_json_array(const std::string& content) {
-        size_t pos = 0;
-        while (true) {
-            size_t obj_start = content.find('{', pos);
-            if (obj_start == std::string::npos) {
-                break;
-            }
-
-            size_t obj_end = find_closing_bracket(content, obj_start, '{', '}');
-            if (obj_end == std::string::npos) {
-                break;
-            }
-
-            std::string obj_content = content.substr(obj_start, obj_end - obj_start + 1);
-            
-            // Extract name
-            size_t name_pos = obj_content.find("\"filename\":");
-            if (name_pos != std::string::npos) {
-                constexpr size_t JSON_FILENAME_KEY_OFFSET = 11; // strlen("\"filename\":")
-                size_t v_start = obj_content.find('\"', name_pos + JSON_FILENAME_KEY_OFFSET);
-                size_t v_end = obj_content.find('\"', v_start + 1);
-                if (v_start != std::string::npos && v_end != std::string::npos) {
-                    SpriteFrame frame;
-                    frame.name = obj_content.substr(v_start + 1, v_end - v_start - 1);
-                    if (parse_frame_details(obj_content, frame)) {
-                        frames_.push_back(frame);
-                    }
-                }
-            }
-
-            pos = obj_end + 1;
-        }
-        return !frames_.empty();
-    }
-
-    bool parse_frame_details(const std::string& content, SpriteFrame& frame) {
-        frame.frame = extract_rect(content, "\"frame\":");
-        frame.sprite_source_size = extract_rect(content, "\"spriteSourceSize\":");
-        
-        size_t source_size_pos = content.find("\"sourceSize\":");
-        if (source_size_pos != std::string::npos) {
-            frame.source_w = extract_int(content, "\"w\":", source_size_pos);
-            frame.source_h = extract_int(content, "\"h\":", source_size_pos);
-        }
-
-        frame.rotated = content.find("\"rotated\": true") != std::string::npos;
-        frame.trimmed = content.find("\"trimmed\": true") != std::string::npos;
-        
         return true;
     }
 
-    Rectangle extract_rect(const std::string& content, const std::string& key) {
-        size_t pos = content.find(key);
-        if (pos == std::string::npos) {
+    // Reads a JSON number as int; TexturePacker-style files may store coordinates as floats.
+    static int json_int(const nlohmann::json& obj, const char* key) {
+        const auto it = obj.find(key);
+        if (it == obj.end() || !it->is_number()) {
+            return 0;
+        }
+        if (it->is_number_float()) {
+            return static_cast<int>(std::lround(it->get<double>()));
+        }
+        return it->get<int>();
+    }
+
+    static Rectangle json_rect(const nlohmann::json& obj, const char* key) {
+        const auto it = obj.find(key);
+        if (it == obj.end() || !it->is_object()) {
             return {.x=0, .y=0, .w=0, .h=0};
         }
-        
-        return {
-            .x=extract_int(content, "\"x\":", pos),
-            .y=extract_int(content, "\"y\":", pos),
-            .w=extract_int(content, "\"w\":", pos),
-            .h=extract_int(content, "\"h\":", pos)
-        };
+        return {.x=json_int(*it, "x"), .y=json_int(*it, "y"), .w=json_int(*it, "w"), .h=json_int(*it, "h")};
     }
 
-    static int extract_int(const std::string& content, const std::string& key, size_t start_pos) {
-        size_t pos = content.find(key, start_pos);
-        if (pos == std::string::npos) {
-            return 0;
-        }
-
-        size_t val_start = pos + key.length();
-        while (val_start < content.size() && ((std::isspace(content[val_start]) != 0) || content[val_start] == ':')) {
-            val_start++;
-        }
-
-        size_t val_end = val_start;
-        while (val_end < content.size() && (std::isdigit(content[val_end]) != 0)) {
-            val_end++;
-        }
-
-        if (val_start == val_end) {
-            return 0;
-        }
-        int result = 0;
-        std::from_chars(content.data() + val_start, content.data() + val_end, result);
-        return result;
+    static bool json_bool(const nlohmann::json& obj, const char* key) {
+        const auto it = obj.find(key);
+        return it != obj.end() && it->is_boolean() && it->get<bool>();
     }
 
-    static size_t find_closing_bracket(const std::string& s, size_t start, char open, char close) {
-        int depth = 0;
-        for (size_t i = start; i < s.size(); i++) {
-            if (s[i] == open) {
-                depth++;
-            } else if (s[i] == close) {
-                depth--;
-                if (depth == 0) {
-                    return i;
+    static SpriteFrame json_frame(const std::string& name, const nlohmann::json& obj) {
+        SpriteFrame frame;
+        frame.name = name;
+        frame.frame = json_rect(obj, "frame");
+        frame.sprite_source_size = json_rect(obj, "spriteSourceSize");
+        const auto source_size = obj.find("sourceSize");
+        if (source_size != obj.end() && source_size->is_object()) {
+            frame.source_w = json_int(*source_size, "w");
+            frame.source_h = json_int(*source_size, "h");
+        }
+        frame.rotated = json_bool(obj, "rotated");
+        frame.trimmed = json_bool(obj, "trimmed");
+        return frame;
+    }
+
+    // Supports TexturePacker-style JSON: {"frames": {name: {...}}}, {"frames": [{"filename": ...}]}
+    // or a bare array of frames. Other top-level keys (such as "meta") are ignored.
+    bool parse_json(const std::string& content) {
+        const nlohmann::json root = nlohmann::json::parse(content, nullptr, false);
+        if (root.is_discarded()) {
+            std::cerr << tr("Error: Invalid JSON in frames file\n");
+            return false;
+        }
+
+        const nlohmann::json* frames = &root;
+        if (root.is_object()) {
+            const auto it = root.find("frames");
+            if (it == root.end()) {
+                std::cerr << tr("Error: Invalid JSON format (missing \"frames\")\n");
+                return false;
+            }
+            frames = &*it;
+        }
+
+        if (frames->is_object()) {
+            for (const auto& [name, obj] : frames->items()) {
+                if (obj.is_object()) {
+                    frames_.push_back(json_frame(name, obj));
+                }
+            }
+        } else if (frames->is_array()) {
+            for (const auto& obj : *frames) {
+                if (!obj.is_object()) {
+                    continue;
+                }
+                const auto filename = obj.find("filename");
+                if (filename != obj.end() && filename->is_string()) {
+                    frames_.push_back(json_frame(filename->get<std::string>(), obj));
                 }
             }
         }
-        return std::string::npos;
+        return !frames_.empty();
+    }
+
+    static bool looks_like_json(const std::string& content) {
+        const size_t first = content.find_first_not_of(" \t\r\n");
+        return first != std::string::npos && (content[first] == '{' || content[first] == '[');
     }
 
     bool unpack_to_dir() {
@@ -622,10 +573,12 @@ private:
                 std::memcpy(&sprite_data[dst_offset], &image_data_[src_offset], row_bytes);
             }
         } else {
+            // Undo the packing rotation: CW maps source (ox, oy) to atlas (h-1-oy, ox),
+            // CCW maps it to atlas (oy, w-1-ox).
             for (int oy = 0; oy < out_h; oy++) {
                 for (int ox = 0; ox < out_w; ox++) {
-                    const int atlas_x = bounds.x + (out_h - 1 - oy);
-                    const int atlas_y = bounds.y + ox;
+                    const int atlas_x = bounds.x + (frame.rotated_ccw ? oy : out_h - 1 - oy);
+                    const int atlas_y = bounds.y + (frame.rotated_ccw ? out_w - 1 - ox : ox);
                     const size_t dst_idx = (static_cast<size_t>(oy) * out_w + ox) * NUM_CHANNELS;
                     const size_t src_idx = (static_cast<size_t>(atlas_y) * width_ + atlas_x) * NUM_CHANNELS;
                     std::memcpy(&sprite_data[dst_idx], &image_data_[src_idx], NUM_CHANNELS);
@@ -653,6 +606,9 @@ private:
             return false;
         }
 
+        if (!check_frame_name(frame.name)) {
+            return false;
+        }
         std::string filename = frame.name;
         if (filename.find('.') == std::string::npos) {
             filename += ".png";
@@ -696,18 +652,11 @@ private:
             return false;
         }
 
-        // Reject frame names that escape the output directory (path traversal guard).
+        if (!check_frame_name(frame.name)) {
+            return false;
+        }
         fs::path name_path(frame.name);
-        if (name_path.is_absolute()) {
-            std::cerr << tr("Error: Frame name is an absolute path: ") << to_quoted(frame.name) << "\n";
-            return false;
-        }
         fs::path output_path = (config_.output_dir / name_path).lexically_normal();
-        fs::path rel = output_path.lexically_relative(config_.output_dir.lexically_normal());
-        if (rel.empty() || rel.begin()->string() == "..") {
-            std::cerr << tr("Error: Frame name escapes output directory: ") << to_quoted(frame.name) << "\n";
-            return false;
-        }
 
         if (output_path.extension().empty()) {
             output_path += ".png";

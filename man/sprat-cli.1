@@ -18,6 +18,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
 [\fB\-\-rotate\fR]
+[\fB\-\-rotate\-direction\fR \fIcw|ccw\fR]
 [\fB\-\-multipack\fR]
 [\fB\-\-sort\fR name|none]
 [\fB\-\-threads\fR \fIN\fR]
@@ -87,7 +88,7 @@ sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR] [rotated] 
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
-If rotation is used for a sprite, the sprite line includes the \fBrotated\fR token.
+If rotation is used for a sprite, the sprite line includes the \fBrotated\fR token. Rotated sprites are turned 90 degrees clockwise, or counter-clockwise when the layout contains a \fBrotation ccw\fR line (written by \fB\-\-rotate\-direction ccw\fR).
 .PP
 The optional \fBslice=\fR token defines nine-slice insets and per-axis fill modes.
 The format is \fBslice=L,T,R,B[,H_MODE,V_MODE]\fR where \fBL\fR, \fBT\fR, \fBR\fR, \fBB\fR are
@@ -128,9 +129,9 @@ Profile values act as defaults; CLI options override them per run.
 .PP
 Performance cache:
 .IP "\(bu" 2
-Metadata and output caches are stored in the system temp directory.
+Metadata and output caches are stored in a private per-user directory in the system temp directory (\fB$TMPDIR/sprat-\fR\fIuid\fR on Linux/macOS, \fB%TEMP%\\sprat\fR on Windows). On Linux/macOS the cache is skipped if that directory is not owned by the user or is writable by others.
 .IP "\(bu" 2
-Unchanged inputs/options reuse cached results.
+Unchanged inputs/options reuse cached results; every option that affects the layout is part of the cache key.
 .IP "\(bu" 2
 Entries older than one hour are pruned automatically.
 .SS spratpack
@@ -140,11 +141,17 @@ Layout accepts:
 .br
 atlas \fIwidth,height\fR (multiple sections supported for multipack)
 .br
+rotation \fBcw\fR|\fBccw\fR (direction of rotated sprites; default \fBcw\fR)
+.br
 scale \fIfactor\fR
 .br
 sprite lines in current or legacy numeric format
 .br
 current sprite lines may include \fBrotated\fR, \fBdither\fR, \fBcolors=N\fR, and \fBslice=L,T,R,B[,H,V]\fR tokens.
+.br
+\fBcolors=N\fR posterizes to N levels per RGB channel (2-256), i.e. at most N\(ha3 colors. Trim offsets must not be negative.
+.PP
+Unknown options, and options missing their value, are rejected with an error.
 .PP
 Output:
 .IP "\(bu" 2
@@ -196,7 +203,7 @@ Placeholders:
 .IP "\(bu" 2
 \fBStable IDs\fR: \fB{{name_hash}}\fR, \fB{{name_hash_hex}}\fR \(em FNV-1a hash of the sprite name, useful for engine-specific internal IDs (such as Unity's spriteID).
 .IP "\(bu" 2
-\fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR).
+\fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR). Jsonnet transforms also receive \fBrotation_direction\fR (\fBcw\fR or \fBccw\fR) and \fBhas_rotated\fR.
 .IP "\(bu" 2
 \fBMarker fields\fR: \fB{{marker_name}}\fR, \fB{{marker_type}}\fR, \fB{{marker_sprite_index}}\fR, \fB{{marker_sprite_name}}\fR.
 .IP "\(bu" 2
@@ -312,6 +319,9 @@ Enable transparent-border trimming (overrides profile value).
 \fB\-\-rotate\fR
 Enable 90-degree sprite rotation during packing (overrides profile value).
 .TP
+\fB\-\-rotate\-direction\fR \fIcw|ccw\fR
+Direction rotated sprites are turned in the atlas (default \fBcw\fR). libGDX needs \fBccw\fR; TexturePacker-style formats (Phaser, Aseprite, plist, Godot, Unity JSON) need \fBcw\fR, and their transforms fail on the other direction. \fBunity.meta\fR refuses rotated sprites in either direction; a transform group writes no files when any member fails. Writes a \fBrotation ccw\fR layout line. Profile key: \fBrotate_direction\fR.
+.TP
 \fB\-\-multipack\fR
 Split into multiple atlases if they don't fit in the specified max dimensions.
 .TP
@@ -350,9 +360,11 @@ Config keys available per profile section:
 \fBpadding\fR
 .IP "\(bu" 2
 \fBscale\fR (\fB0 < scale <= 1\fR), \fBtrim_transparent\fR, \fBthreads\fR, \fBmultipack\fR
+.IP "\(bu" 2
+\fBrotate=true|false\fR, \fBrotate_direction=cw|ccw\fR
 .SS spratpack
 .TP
-\fB\-a\fR, \fB\-\-atlas\fR \fIPATTERN\fR
+\fB\-a\fR, \fB\-\-atlas\fR, \fB\-o\fR, \fB\-\-output\fR \fIPATTERN\fR
 Output filename pattern (e.g. \fBatlas_%d.png\fR). Required for multipack layouts when not writing to stdout.
 .TP
 \fB\-\-atlas\-index\fR \fIN\fR
@@ -365,7 +377,7 @@ Repeat edge pixels N times (overrides layout value).
 Protect output PNG with basic XOR-based obfuscation.
 .TP
 \fB\-\-zopfli\fR
-Optimize output PNG using Zopfli (very slow, requires build-time support).
+Optimize output PNG using Zopfli (very slow). Only valid for PNG output; fails if zopflipng support was not compiled in.
 .TP
 \fB\-\-output\-scale\fR \fIFACTOR\fR
 Scale the output atlas dimensions and sprite positions by \fIFACTOR\fR (for example \fB0.5\fR for half size). Uses the filter selected by \fB\-\-scale\-filter\fR.

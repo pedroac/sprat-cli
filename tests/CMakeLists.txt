@@ -101,6 +101,31 @@ add_test(
 )
 
 add_test(
+    NAME spratunpack_json
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/spratunpack_json_test.sh
+            $<TARGET_FILE:spratunpack>
+)
+
+add_test(
+    NAME spratpack_args
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/spratpack_args_test.sh
+            $<TARGET_FILE:spratpack>
+)
+
+add_test(
+    NAME rotation_direction
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/rotation_direction_test.sh
+            $<TARGET_FILE:spratpack>
+            $<TARGET_FILE:spratunpack>
+)
+
+add_test(
+    NAME cache_keys
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/cache_keys_test.sh
+            $<TARGET_FILE:spratlayout>
+)
+
+add_test(
     NAME unity
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/unity_test.sh
             $<TARGET_FILE:spratconvert>

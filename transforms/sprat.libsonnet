@@ -11,6 +11,47 @@
       else str;
     rtrim(s),
 
+  // Rotated sprites are turned 90 degrees in the atlas, clockwise by default or counter-clockwise
+  // for layouts with "rotation ccw". Formats with a fixed convention assert it:
+  //   assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Phaser", "cw"),
+  rotation_matches(sprat, direction)::
+    !sprat.has_rotated || sprat.rotation_direction == direction,
+
+  rotation_error(format, direction)::
+    format + " expects rotated sprites turned "
+    + (if direction == "ccw" then "counter-clockwise" else "clockwise")
+    + "; re-run spratlayout with --rotate-direction " + direction + " (or without --rotate)",
+
+  // Rotation of a sprite in clockwise degrees: 0, 90 (cw) or 270 (ccw).
+  rotation_degrees(sprat, s)::
+    if !s.rotated then 0 else if sprat.rotation_direction == "ccw" then 270 else 90,
+
+  // Escape text for XML attribute values and element content.
+  xml_escape(s)::
+    std.strReplace(
+      std.strReplace(
+        std.strReplace(
+          std.strReplace(
+            std.strReplace(s, "&", "&amp;"),
+            "<", "&lt;"),
+          ">", "&gt;"),
+        '"', "&quot;"),
+      "'", "&apos;"),
+
+  // Escape text for a single-quoted CSS string, e.g. url('...').
+  css_string_escape(s)::
+    std.strReplace(
+      std.strReplace(
+        std.strReplace(
+          std.strReplace(s, "\\", "\\\\"),
+          "'", "\\'"),
+        "\n", "\\a "),
+      "\r", ""),
+
+  // Make text safe inside a CSS /* ... */ comment.
+  css_comment_escape(s)::
+    std.strReplace(s, "*/", "* /"),
+
   // Split an array of frame indices into contiguous runs.
   // Returns [{from: N, to: M}, ...].
   consecutive_runs(indices)::

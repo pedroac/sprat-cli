@@ -223,6 +223,7 @@ Profile definitions are searched in:
 - `--extrude N`: Repeat edge pixels N times (requires padding >= extrude * 2).
 - `--trim-transparent`: Remove empty borders to save space.
 - `--rotate`: Allow 90-degree rotation during packing for tighter layouts.
+- `--rotate-direction cw|ccw`: Direction rotated sprites are turned in the atlas (default `cw`). Use `ccw` for libGDX. Also available as profile key `rotate_direction=ccw`.
 - `--multipack`: Enable multi-atlas candidate search and splitting.
 - `--deduplicate none|exact|perceptual`: Detect duplicate sprites and create aliases (saves atlas space).
 - `--dedup-threshold N`: Max perceptual-hash distance (0-64, default `5`) for a pair to be compared in `perceptual` mode.
@@ -235,7 +236,7 @@ Profile definitions are searched in:
 - Directory inputs honor `.spratlayoutignore`; list files may include `exclude "path"` entries.
 
 ### Layout Caching
-`spratlayout` automatically caches image metadata in the system temp directory. If your source images haven't changed, subsequent runs will be nearly instantaneous. Entries older than one hour are pruned automatically.
+`spratlayout` automatically caches image metadata and layouts in a private per-user directory inside the system temp directory (`$TMPDIR/sprat-<uid>` on Linux/macOS, `%TEMP%\sprat` on Windows). If your source images and options haven't changed, subsequent runs will be nearly instantaneous. Every option that affects the result is part of the cache key, so changing one always recomputes the layout. Entries older than one hour are pruned automatically. On Linux/macOS the cache is skipped if that directory is not owned by you or is writable by others.
 
 ### Duplicate Detection
 Detect and alias duplicate sprites to save atlas space. `spratlayout` packs only one canonical copy per unique content and emits aliases for the rest:
@@ -363,12 +364,19 @@ Automatically scales sprites based on a target resolution. Useful for multi-plat
 
 ### Rotation
 
-Allows 90-degree clockwise rotation of sprites to achieve even tighter packing.
+Allows 90-degree rotation of sprites to achieve even tighter packing. Sprites are turned clockwise by default, which is what TexturePacker-style formats expect (`phaser-hash`, `phaser-array`, `aseprite`, `plist`, `godot`, `unity.json`). libGDX expects counter-clockwise, so pass `--rotate-direction ccw`; the layout then carries a `rotation ccw` line that `spratpack`, `spratunpack` and `spratconvert` honor.
 
 ```sh
 ./build/spratlayout ./frames --rotate --trim-transparent > layout.txt
 ./build/spratpack < layout.txt > rotation.png
+
+# libGDX
+./build/spratlayout ./frames --rotate --rotate-direction ccw > layout.txt
+./build/spratpack < layout.txt > atlas.png
+./build/spratconvert --transform libgdx -a atlas.png < layout.txt > atlas.atlas
 ```
+
+Formats with a fixed convention fail with an explanatory error instead of writing wrong metadata when the layout's direction doesn't match. `unity.meta` (and so the `unity` group) refuses rotated sprites in either direction. A group writes no files when any of its members fails. `json`, `xml` and `csv` report the rotation in clockwise degrees (`90` or `270`), and `css` handles both directions.
 ![rotation](README-assets/rotation_pad2.png)
 
 ## Complete Optimization Workflow
@@ -418,7 +426,7 @@ For GPU-native compression (when libsquish is available):
 ## Advanced Packing (`spratpack`)
 
 ### Zopfli Compression
-Produce smaller PNGs using the Zopfli algorithm. It is significantly slower but provides better compression than standard deflate.
+Produce smaller PNGs using the Zopfli algorithm. It is significantly slower but provides better compression than standard deflate. Only valid for PNG output; `spratpack` exits with an error if it was built without zopflipng support.
 ```sh
 ./build/spratpack --zopfli < layout.txt > optimized.png
 ```
@@ -511,7 +519,7 @@ Auto-detected insets always use `stretch` for both fill modes. To use `repeat`, 
 ### Per-sprite Dithering & Quantization
 Advanced users can manually edit `layout.txt` to apply per-sprite effects.
 - `dither`: Enables ordered dithering for the sprite.
-- `colors=N`: Quantizes the sprite to N colors (2-256).
+- `colors=N`: Posterizes the sprite to N levels per RGB channel (2-256), i.e. at most N³ colors; alpha is kept.
 
 Example layout line:
 `sprite "./frames/robot.png" 0,0 128,128 dither colors=16`
@@ -589,13 +597,13 @@ Transform files are searched in:
 | `xml` | XML | Generic XML |
 | `css` | CSS | CSS sprite sheet |
 | `aseprite` | JSON | Aseprite JSON Array format; frameTags built from animations (non-contiguous animations become multiple tags) |
-| `libgdx` | Text | LibGDX Atlas format; handles multipack |
+| `libgdx` | Text | LibGDX Atlas format; handles multipack; rotated sprites require `--rotate-direction ccw` |
 | `godot` | JSON | Godot SpriteFrames resource |
 | `phaser-hash` | JSON | Phaser 3 hash-keyed sprite sheet |
 | `phaser-array` | JSON | Phaser 3 array-keyed sprite sheet |
 | `phaser-anims` | JSON | Phaser 3 animation config |
 | `plist` | plist | Apple / TexturePacker plist |
-| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation; requires `--output-dir` |
+| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation; requires `--output-dir`; rotated sprites are not supported (Unity sprite rects have no rotation) |
 
 ### Transform format
 
@@ -625,6 +633,8 @@ local sprat = std.extVar("sprat");
 | `atlas_path`, `atlas_stem` | string | First atlas path and stem |
 | `atlas_count` | number | Total atlas count |
 | `multipack` | boolean | `true` when layout declares `multipack true` |
+| `rotation_direction` | string | `cw` or `ccw` (from the layout's `rotation` line; default `cw`) |
+| `has_rotated` | boolean | `true` when any sprite is rotated |
 | `scale`, `extrude` | number | Layout-level values |
 | `has_animations`, `has_markers` | boolean | Whether extra files were loaded |
 | `animation_count`, `marker_count`, `sprite_count` | number | Counts |
@@ -640,7 +650,7 @@ local sprat = std.extVar("sprat");
 | `content_w`, `content_h` | Dimensions accounting for rotation |
 | `source_w`, `source_h` | Original size including trim margins |
 | `trim_left`, `trim_top`, `trim_right`, `trim_bottom`, `has_trim` | Trim margins |
-| `rotated` | `true` when packed rotated 90° clockwise |
+| `rotated` | `true` when packed rotated 90° (direction given by `rotation_direction`) |
 | `has_slice` | `true` when nine-slice data is present |
 | `slice_left`, `slice_top`, `slice_right`, `slice_bottom` | Nine-slice insets (only present when `has_slice` is true) |
 | `slice_h`, `slice_v` | Per-axis fill mode: `stretch`, `repeat`, `mirror`, or `fixed` (only present when `has_slice` is true) |
@@ -764,7 +774,7 @@ Column meanings for the `sprite` line in trim mode:
 - `<w>,<h>`: trimmed width and height written into the atlas.
 - `<left>,<top>`: pixels trimmed from the left and top of the original image.
 - `<right>,<bottom>`: pixels trimmed from the right and bottom of the original image.
-- `rotated` (optional trailing token): sprite was packed rotated 90 degrees clockwise in the atlas.
+- `rotated` (optional trailing token): sprite was packed rotated 90 degrees in the atlas, clockwise unless the layout has a `rotation ccw` line.
 
 `spratpack` reads that layout from stdin and writes the final atlas output:
 - Single atlas: PNG to stdout.

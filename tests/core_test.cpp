@@ -1,3 +1,5 @@
+// These tests rely on assert(); keep it active in Release builds (CI builds Release).
+#undef NDEBUG
 #include "../src/core/checked_math.h"
 #include "../src/core/cli_parse.h"
 #include "../src/core/output_pattern.h"

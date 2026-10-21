@@ -34,6 +34,9 @@ local sprite_rect_entry(s) =
   "      weights: []\n";
 
 {
+  // Unity sprite rects have no rotation field, so rotated sprites would import sideways.
+  assert !sprat.has_rotated :
+    "Unity .meta sprite sheets do not support rotated sprites; re-run spratlayout without --rotate",
   name: "Unity Meta",
   description: "Unity .meta file spriteSheet section (YAML)",
   extension: ".meta",

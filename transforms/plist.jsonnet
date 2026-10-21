@@ -1,16 +1,6 @@
 // plist.jsonnet – Cocos2d-x TextureAtlas plist format (format 2).
 local sprat = std.extVar("sprat");
-
-local xml_escape(s) =
-  std.strReplace(
-    std.strReplace(
-      std.strReplace(
-        std.strReplace(
-          std.strReplace(s, "&", "&amp;"),
-          "<", "&lt;"),
-        ">", "&gt;"),
-      '"', "&quot;"),
-    "'", "&apos;");
+local lib = import "sprat.libsonnet";
 
 local sprite_entry(s) =
   local content_w = s.content_w;
@@ -23,7 +13,7 @@ local sprite_entry(s) =
   local plist_offset = "{" + cx + "," + cy + "}";
   local plist_source_color_rect = "{" + s.trim_left + "," + s.trim_top + "},{" + content_w + "," + content_h + "}";
   local plist_source_size = "{" + source_w + "," + source_h + "}";
-  '\t\t<key>' + xml_escape(s.name) + '</key>\n' +
+  '\t\t<key>' + lib.xml_escape(s.name) + '</key>\n' +
   '\t\t<dict>\n' +
   '\t\t\t<key>frame</key>\n' +
   '\t\t\t<string>' + plist_frame + '</string>\n' +
@@ -46,6 +36,7 @@ local sprite_entry(s) =
 local plist_atlas_size = "{" + sprat.atlas_width + "," + sprat.atlas_height + "}";
 
 {
+  assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Cocos2d-x plist", "cw"),
   name: "plist",
   description: "Cocos2d-x TextureAtlas plist format (format 2)",
   extension: ".plist",
@@ -64,11 +55,11 @@ local plist_atlas_size = "{" + sprat.atlas_width + "," + sprat.atlas_height + "}
     '\t\t<key>format</key>\n' +
     '\t\t<integer>2</integer>\n' +
     '\t\t<key>realTextureFileName</key>\n' +
-    '\t\t<string>' + xml_escape(sprat.atlas_path) + '</string>\n' +
+    '\t\t<string>' + lib.xml_escape(sprat.atlas_path) + '</string>\n' +
     '\t\t<key>size</key>\n' +
     '\t\t<string>' + plist_atlas_size + '</string>\n' +
     '\t\t<key>textureFileName</key>\n' +
-    '\t\t<string>' + xml_escape(sprat.atlas_path) + '</string>\n' +
+    '\t\t<string>' + lib.xml_escape(sprat.atlas_path) + '</string>\n' +
     '\t</dict>\n' +
     '</dict>\n' +
     '</plist>\n',

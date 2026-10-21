@@ -1,5 +1,6 @@
 // csv.jsonnet – CSV rows for spreadsheets and data tools.
 local sprat = std.extVar("sprat");
+local lib = import "sprat.libsonnet";
 
 local csv_escape(s) =
   local needs_quotes = std.length(
@@ -40,7 +41,7 @@ local sprite_row(s) =
   s.trim_left + "," + s.trim_top + "," + s.trim_right + "," + s.trim_bottom + "," +
   std.length(s.markers) + "," +
   markers_json_array(s.markers) + "," +
-  (if s.rotated then "90" else "0") + "," +
+  lib.rotation_degrees(sprat, s) + "," +
   (if has_slice then "true" else "false") + "," +
   (if has_slice then "" + s.slice_left else "") + "," +
   (if has_slice then "" + s.slice_top else "") + "," +

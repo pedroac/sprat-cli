@@ -695,4 +695,51 @@ assert name == 'button', 'expected name \"button\", got \"' + name + '\"'
 " "$(fix_path "$tmp_dir/ninepatch_name.json")"
 fi
 
+# libgdx: pages are separated by a blank line and rotated regions use the unrotated size
+cat > "$tmp_dir/libgdx_multi.txt" <<'EOF'
+multipack true
+rotation ccw
+atlas 100,50
+sprite "rot.png" 0,0 30,50 rotated
+atlas 10,10
+sprite "plain.png" 0,0 10,10
+EOF
+"$convert_bin" --transform libgdx -a 'atlas_%d.png' < "$tmp_dir/libgdx_multi.txt" | tr -d '\r' > "$tmp_dir/out.multi.atlas"
+if [ -n "$(grep -B1 '^atlas_1.png$' "$tmp_dir/out.multi.atlas" | head -n1 | grep -v '^atlas_1.png$')" ]; then
+  echo "libgdx pages must be separated by a blank line" >&2
+  cat "$tmp_dir/out.multi.atlas" >&2
+  exit 1
+fi
+grep -A3 '^rot$' "$tmp_dir/out.multi.atlas" | grep -q '  size: 50, 30'
+grep -A4 '^rot$' "$tmp_dir/out.multi.atlas" | grep -q '  orig: 50, 30'
+
+# rotation direction: formats with a fixed convention refuse the other direction
+if sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform libgdx > /dev/null 2>&1; then
+  echo "libgdx must refuse clockwise-rotated sprites" >&2
+  exit 1
+fi
+for t in phaser-hash phaser-array aseprite plist godot unity.json; do
+  if "$convert_bin" --transform "$t" < "$tmp_dir/libgdx_multi.txt" > /dev/null 2>&1; then
+    echo "$t must refuse counter-clockwise-rotated sprites" >&2
+    exit 1
+  fi
+  sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform "$t" > /dev/null
+done
+# layouts without rotated sprites work with any format regardless of direction
+printf 'rotation ccw\natlas 4,4\nsprite "a.png" 0,0 4,4\n' | "$convert_bin" --transform phaser-hash > /dev/null
+"$convert_bin" --transform json < "$tmp_dir/libgdx_multi.txt" | grep -q '"rotation": 270'
+"$convert_bin" --transform csv < "$tmp_dir/libgdx_multi.txt" | grep -q ',270,'
+"$convert_bin" --transform xml < "$tmp_dir/libgdx_multi.txt" | grep -q 'rotation="270"'
+sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform json | grep -q '"rotation": 90'
+"$convert_bin" --transform css < "$tmp_dir/libgdx_multi.txt" | grep -q 'rotate(90deg) translate(0, -100%)'
+
+# css: quotes in the atlas path and comment terminators in paths are escaped
+printf 'atlas 4,4\nsprite "a*/b.png" 0,0 4,4\n' > "$tmp_dir/css_escape.txt"
+"$convert_bin" --transform css -a "it's.png" < "$tmp_dir/css_escape.txt" > "$tmp_dir/out.escape.css"
+grep -qF "url('it\\'s.png')" "$tmp_dir/out.escape.css"
+if grep -qF 'a*/b.png' "$tmp_dir/out.escape.css"; then
+  echo "css output must not contain a raw comment terminator" >&2
+  exit 1
+fi
+
 echo "convert_test.sh: ok"

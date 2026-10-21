@@ -1,5 +1,6 @@
 // unity.json.jsonnet – Unity-compatible JSON sprite sheet (TexturePacker JSON Hash format).
 local sprat = std.extVar("sprat");
+local lib = import "sprat.libsonnet";
 
 local frame_obj(s) = {
   frame: { x: s.x, y: s.y, w: s.w, h: s.h },
@@ -39,6 +40,7 @@ local result = {
 };
 
 {
+  assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Unity JSON", "cw"),
   name: "Unity JSON",
   description: "Unity-compatible JSON sprite sheet (TexturePacker JSON Hash format with normalized pivots)",
   extension: ".json",

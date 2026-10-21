@@ -7,10 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(-fpermissive)
-endif()
-
 if(WIN32)
     add_definitions(-DNOMINMAX)
     option(SPRAT_STATIC "Prefer static linking for dependencies on Windows" OFF)
@@ -473,6 +469,8 @@ add_library(spratcore STATIC
 
 target_include_directories(spratcore PUBLIC src)
 target_include_directories(spratcore SYSTEM PRIVATE ${STB_DIR})
+# nlohmann/json, bundled with jsonnet; used to read JSON frame definitions.
+target_include_directories(spratcore SYSTEM PRIVATE ${jsonnet_SOURCE_DIR}/third_party/json)
 target_include_directories(spratcore PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_link_libraries(spratcore PRIVATE ${LIBARCHIVE_LIBRARIES})
 # Under Emscripten BUILD_STATIC_LIBS is OFF (see above), so the _static alias

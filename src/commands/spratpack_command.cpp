@@ -31,6 +31,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <fstream>
 #include <filesystem>
@@ -89,14 +90,6 @@ using sprat::core::tr;
 using sprat::core::checked_mul_size_t;
 using sprat::core::validate_output_pattern;
 namespace fs = std::filesystem;
-
-bool checked_add_size_t(size_t a, size_t b, size_t& out) {
-    if (b <= std::numeric_limits<size_t>::max() - a) {
-        out = a + b;
-        return true;
-    }
-    return false;
-}
 
 bool parse_line_color(const std::string& value, std::array<unsigned char, 4>& out) {
     constexpr int MAX_CHANNELS = 4;
@@ -549,11 +542,11 @@ void print_usage() {
               << tr("Writes PNG to stdout for single-atlas input; TAR to stdout for multipack input.\n")
               << tr("\n")
               << tr("Options:\n")
-              << tr("  -a, --atlas PATTERN    Output filename pattern (e.g. atlas_%d.png)\n")
+              << tr("  -a, --atlas PATTERN    Output filename pattern (e.g. atlas_%d.png); alias: -o, --output\n")
               << tr("  --atlas-index N        Pick a specific atlas index to output\n")
               << tr("  --extrude N            Repeat edge pixels N times (overrides layout)\n")
               << tr("  --dilate N             Bleed opaque pixels into transparent neighbors (N passes)\n")
-              << tr("  --gpu-compress FORMAT  Compress to DCS: dxt1 or dxt5 (requires libsquish)\n")
+              << tr("  --gpu-compress FORMAT  Compress to DDS: dxt1 or dxt5 (requires libsquish)\n")
               << tr("  --frame-lines          Draw rectangle outlines for each sprite\n")
               << tr("  --line-width N         Outline thickness in pixels (default: 1)\n")
               << tr("  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n")
@@ -594,8 +587,17 @@ int run_spratpack(int argc, char** argv) {
     int quality = -1;  // -1 = default (lossless for webp/avif)
     std::string path_suffix;
     double output_scale = 1.0;
+    static const std::unordered_set<std::string> k_value_options = {
+        "--atlas", "-a", "--output", "-o", "--atlas-index", "--extrude", "--dilate",
+        "--gpu-compress", "--line-width", "--line-color", "--scale-filter", "--threads",
+        "--format", "--quality", "--path-suffix", "--output-scale"
+    };
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
+        if (k_value_options.contains(arg) && i + 1 >= argc) {
+            std::cerr << tr("Error: Missing value for ") << arg << "\n";
+            return 1;
+        }
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
@@ -607,6 +609,10 @@ int run_spratpack(int argc, char** argv) {
         } else if (arg == "--protect") {
             protect = true;
         } else if (arg == "--zopfli") {
+#ifndef SPRAT_HAS_ZOPFLI
+            std::cerr << tr("Error: --zopfli requires zopflipng support (not compiled in)\n");
+            return 1;
+#endif
             use_zopfli = true;
         } else if ((arg == "--atlas" || arg == "-a" || arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern = argv[++i];
@@ -710,7 +716,16 @@ int run_spratpack(int argc, char** argv) {
                 std::cerr << tr("Invalid output scale: ") << value << tr(" (must be a positive number)\n");
                 return 1;
             }
+        } else {
+            std::cerr << tr("Error: Unknown option: ") << arg << "\n";
+            std::cerr << tr("Run 'spratpack --help' for usage.\n");
+            return 1;
         }
+    }
+
+    if (use_zopfli && output_format != "png") {
+        std::cerr << tr("Error: --zopfli only applies to PNG output\n");
+        return 1;
     }
 
     if (debug) {
@@ -890,7 +905,7 @@ int run_spratpack(int argc, char** argv) {
             unsigned char* data = stbi_load(load_path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
             if (!data) {
                 // stbi_failure_reason() is global, but since we are stopping on first error, it's acceptable here.
-                error_out = "Failed to load image: " + to_quoted(load_path) + " (Reason: " + stbi_failure_reason() + ")";
+                error_out = std::string(tr("Failed to load image: ")) + to_quoted(load_path) + tr(" (Reason: ") + stbi_failure_reason() + ")";
                 return false;
             }
             // Use RAII for image data
@@ -930,16 +945,21 @@ int run_spratpack(int argc, char** argv) {
                 }
             }
 
+            // 64-bit so out-of-range trim offsets are rejected instead of overflowing.
+            const long long crop_w = s.has_trim
+                ? static_cast<long long>(w) - s.src_x - s.trim_right : static_cast<long long>(w);
+            const long long crop_h = s.has_trim
+                ? static_cast<long long>(h) - s.src_y - s.trim_bottom : static_cast<long long>(h);
             const int source_x = s.has_trim ? s.src_x : 0;
             const int source_y = s.has_trim ? s.src_y : 0;
-            const int source_w = s.has_trim ? (w - s.src_x - s.trim_right) : w;
-            const int source_h = s.has_trim ? (h - s.src_y - s.trim_bottom) : h;
 
-            if (source_x < 0 || source_y < 0 || source_w <= 0 || source_h <= 0 ||
-                source_x > w - source_w || source_y > h - source_h) {
-                error_out = "Error: Crop/Trim out of bounds for " + to_quoted(load_path);
+            if (source_x < 0 || source_y < 0 || crop_w <= 0 || crop_h <= 0 ||
+                source_x > w - crop_w || source_y > h - crop_h) {
+                error_out = tr("Error: Crop/Trim out of bounds for ") + to_quoted(load_path);
                 return false;
             }
+            const int source_w = static_cast<int>(crop_w);
+            const int source_h = static_cast<int>(crop_h);
 
             // Scaled destination position and slot in the output atlas
             int sdest_x = 0, sdest_y = 0, sdest_slot_w = 0, sdest_slot_h = 0;
@@ -949,7 +969,7 @@ int run_spratpack(int argc, char** argv) {
             if (sdest_x < 0 || sdest_y < 0 || sdest_slot_w <= 0 || sdest_slot_h <= 0 ||
                 sdest_x > output_width || sdest_y > output_height ||
                 sdest_slot_w > output_width - sdest_x || sdest_slot_h > output_height - sdest_y) {
-                error_out = "Error: Sprite " + to_quoted(load_path) + " placement out of atlas bounds";
+                error_out = std::string(tr("Error: Sprite ")) + to_quoted(load_path) + tr(" placement out of atlas bounds");
                 return false;
             }
 
@@ -991,14 +1011,14 @@ int run_spratpack(int argc, char** argv) {
                 stbir_set_filters(&resize,
                     to_stbir_filter(scale_filter), to_stbir_filter(scale_filter));
                 if (!stbir_resize_extended(&resize)) {
-                    error_out = "Error: Failed to resize image " + to_quoted(load_path);
+                    error_out = tr("Error: Failed to resize image ") + to_quoted(load_path);
                     return false;
                 }
                 blit_ptr = scaled_buf.data();
                 blit_stride_bytes = dest_w * static_cast<int>(NUM_CHANNELS);
             }
 
-            // Blit to atlas, handling 90° CW rotation if needed
+            // Blit to atlas, handling 90° rotation (CW by default, CCW for "rotation ccw") if needed
             if (!s.rotated) {
                 const size_t row_bytes = static_cast<size_t>(dest_w) * NUM_CHANNELS;
                 for (int row = 0; row < dest_h; ++row) {
@@ -1009,11 +1029,12 @@ int run_spratpack(int argc, char** argv) {
                     std::memcpy(atlas_data.data() + dest_off, blit_ptr + src_off, row_bytes);
                 }
             } else {
-                // atlas(sdest_x+col, sdest_y+row) <- source(px=row, py=dest_h-1-col)
+                // CW:  atlas(sdest_x+col, sdest_y+row) <- source(px=row, py=dest_h-1-col)
+                // CCW: atlas(sdest_x+col, sdest_y+row) <- source(px=dest_w-1-row, py=col)
                 for (int row = 0; row < sdest_slot_h; ++row) {
                     for (int col = 0; col < sdest_slot_w; ++col) {
-                        const int px = row;
-                        const int py = dest_h - 1 - col;
+                        const int px = layout.rotate_ccw ? dest_w - 1 - row : row;
+                        const int py = layout.rotate_ccw ? col : dest_h - 1 - col;
                         const size_t dest_off =
                             (static_cast<size_t>(sdest_y + row) * output_width + (sdest_x + col)) * NUM_CHANNELS;
                         const size_t src_off =

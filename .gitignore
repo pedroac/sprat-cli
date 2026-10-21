@@ -45,7 +45,10 @@ vcpkg_installed/
 **/CMakeFiles/
 **/CMakeCache
 **/CMakeCache.txt
-*.cmake
+cmake_install.cmake
+CTestTestfile.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
 **/Makefile
 **/build/
 **/build-win/

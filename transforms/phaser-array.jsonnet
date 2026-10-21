@@ -1,5 +1,6 @@
 // phaser-array.jsonnet – Phaser 3 JSON Array atlas format.
 local sprat = std.extVar("sprat");
+local lib = import "sprat.libsonnet";
 
 local frame_obj(s) = {
   filename: s.name,
@@ -24,6 +25,7 @@ local result = {
 };
 
 {
+  assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Phaser", "cw"),
   name: "Phaser JSON Array",
   description: "Phaser 3 atlas format (JSON Array, compatible with TexturePacker JSON Array output)",
   extension: ".json",

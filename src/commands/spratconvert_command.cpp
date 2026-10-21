@@ -87,19 +87,19 @@ using sprat::core::validate_output_pattern;
 bool read_text_file(const fs::path& path, std::string& out, std::string& error) {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in) {
-        error = "Failed to open file: " + path.string();
+        error = tr("Failed to open file: ") + path.string();
         return false;
     }
     const auto size = in.tellg();
     if (size < 0) {
-        error = "Failed to read file: " + path.string();
+        error = tr("Failed to read file: ") + path.string();
         return false;
     }
     in.seekg(0);
     out.resize(static_cast<size_t>(size));
     in.read(out.data(), size);
     if (!in.good() && !in.eof()) {
-        error = "Failed to read file: " + path.string();
+        error = tr("Failed to read file: ") + path.string();
         return false;
     }
     return true;
@@ -818,6 +818,9 @@ std::string build_sprat_json(
     j += ",\"multipack\":" + std::string(layout.multipack ? "true" : "false");
     j += ",\"scale\":" + format_double(layout.scale);
     j += ",\"extrude\":" + std::to_string(layout.extrude);
+    const bool has_rotated = std::ranges::any_of(layout.sprites, [](const Sprite& s) { return s.rotated; });
+    j += ",\"rotation_direction\":\"" + std::string(layout.rotate_ccw ? "ccw" : "cw") + "\"";
+    j += ",\"has_rotated\":" + std::string(has_rotated ? "true" : "false");
     j += ",\"sprite_count\":" + std::to_string(layout.sprites.size());
     j += ",\"animation_count\":" + std::to_string(normalized_animations.size());
     j += ",\"marker_count\":" + std::to_string(marker_items.size());
@@ -948,7 +951,7 @@ std::string evaluate_transform(
 {
     jsonnet::Jsonnet vm;
     if (!vm.init()) {
-        error = "Failed to initialize Jsonnet VM";
+        error = tr("Failed to initialize Jsonnet VM");
         return "";
     }
     vm.bindExtCodeVar("sprat", sprat_json);
@@ -1086,7 +1089,7 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
     if (find_json_string_value(json, "extension", vs, ve)) {
         out.extension = json_unescape_string(json, vs, ve);
     } else {
-        error = "Transform result missing required field: extension";
+        error = tr("Transform result missing required field: extension");
         return false;
     }
 
@@ -1100,7 +1103,7 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
         // skip to '['
         while (fp < json.size() && json[fp] != '[') ++fp;
         if (fp >= json.size()) {
-            error = "Malformed files array in transform result";
+            error = tr("Malformed files array in transform result");
             return false;
         }
         ++fp; // skip '['
@@ -1148,7 +1151,7 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
         return true;
     }
 
-    error = "Transform result must have either 'content' or 'files' field";
+    error = tr("Transform result must have either 'content' or 'files' field");
     return false;
 }
 
@@ -1219,7 +1222,8 @@ void list_transforms() {
     // Empty mock data for listing
     const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
         R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
-        R"("multipack":false,"scale":1,"extrude":0,"sprite_count":0,"animation_count":0,)"
+        R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
+        R"("sprite_count":0,"animation_count":0,)"
         R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
         R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
         R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
@@ -1288,7 +1292,8 @@ void list_transforms_json() {
 
     const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
         R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
-        R"("multipack":false,"scale":1,"extrude":0,"sprite_count":0,"animation_count":0,)"
+        R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
+        R"("sprite_count":0,"animation_count":0,)"
         R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
         R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
         R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
@@ -1649,12 +1654,9 @@ int run_spratconvert(int argc, char** argv) {
     };
 
     if (group_mode) {
-        std::error_code ec;
-        fs::create_directories(output_dir_arg, ec);
-        if (ec) {
-            std::cerr << tr("Failed to create output directory: ") << ec.message() << "\n";
-            return 1;
-        }
+        // Evaluate every member before writing anything, so a member that refuses the
+        // layout (for example rotated sprites in unity.meta) leaves no partial output.
+        std::vector<std::pair<std::string, TransformResult>> results;
         int exit_code = 0;
         for (const GroupMember& member : group_members) {
             const std::string sprat_json = build_sprat_json(
@@ -1680,8 +1682,21 @@ int run_spratconvert(int argc, char** argv) {
                 exit_code = 1;
                 continue;
             }
+            results.emplace_back(member.variant, std::move(result));
+        }
+        if (exit_code != 0) {
+            std::cerr << tr("No files were written.\n");
+            return exit_code;
+        }
 
-            const int r = write_result(result, output_dir_arg, member.variant, nullptr);
+        std::error_code ec;
+        fs::create_directories(output_dir_arg, ec);
+        if (ec) {
+            std::cerr << tr("Failed to create output directory: ") << ec.message() << "\n";
+            return 1;
+        }
+        for (const auto& [variant, result] : results) {
+            const int r = write_result(result, output_dir_arg, variant, nullptr);
             if (r != 0) exit_code = r;
         }
         return exit_code;

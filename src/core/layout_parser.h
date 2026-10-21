@@ -74,6 +74,10 @@ struct Layout {
     bool has_extrude = false;
     bool multipack = false;
     bool has_multipack = false;
+    // Direction of the 90-degree rotation applied to sprites marked "rotated".
+    // Clockwise is the default; libGDX needs counter-clockwise.
+    bool rotate_ccw = false;
+    bool has_rotation = false;
     std::vector<Sprite> sprites;
     std::vector<Marker> global_markers;
     std::vector<Alias> aliases;
@@ -84,6 +88,7 @@ bool parse_atlas_line(const std::string& line, int& width, int& height);
 bool parse_scale_line(const std::string& line, double& scale);
 bool parse_extrude_line(const std::string& line, int& extrude);
 bool parse_multipack_line(const std::string& line, bool& multipack);
+bool parse_rotation_line(const std::string& line, bool& rotate_ccw);
 bool parse_alias_line(const std::string& line, Alias& out, std::string& error);
 bool parse_layout(std::istream& in, Layout& out, std::string& error);
 // Appends one sprite per alias, sharing its canonical sprite's atlas region, and

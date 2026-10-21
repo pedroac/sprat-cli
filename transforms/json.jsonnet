@@ -1,5 +1,6 @@
 // json.jsonnet – Generic JSON metadata format.
 local sprat = std.extVar("sprat");
+local lib = import "sprat.libsonnet";
 
 local sprite_obj(s) = {
   name: s.name,
@@ -9,7 +10,7 @@ local sprite_obj(s) = {
   pivot: { x: s.pivot_x, y: s.pivot_y },
   trim: { left: s.trim_left, top: s.trim_top, right: s.trim_right, bottom: s.trim_bottom },
   markers: s.markers,
-  rotation: if s.rotated then 90 else 0,
+  rotation: lib.rotation_degrees(sprat, s),
   has_slice: s.has_slice,
 } + (if s.alias_of != "" then { alias_of: s.alias_of } else {})
   + (if s.has_slice then {

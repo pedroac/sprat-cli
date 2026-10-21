@@ -19,6 +19,9 @@
 #ifndef _setmode
 #define _setmode setmode
 #endif
+#else
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -108,6 +111,7 @@ struct ProfileDefinition {
     std::optional<double> scale;
     std::optional<bool> trim_transparent;
     std::optional<bool> rotate;
+    std::optional<bool> rotate_ccw;
     std::optional<bool> multipack;
     std::optional<unsigned int> threads;
     std::optional<bool> incremental;
@@ -218,7 +222,7 @@ bool parse_mode_from_string(const std::string& value, Mode& out, std::string& er
         out = Mode::GRID;
         return true;
     }
-    error = "invalid mode '" + value + "'";
+    error = std::string(tr("invalid mode '")) + value + "'";
     return false;
 }
 
@@ -232,7 +236,7 @@ bool parse_optimize_target_from_string(const std::string& value, OptimizeTarget&
         out = OptimizeTarget::SPACE;
         return true;
     }
-    error = "invalid optimize target '" + value + "'";
+    error = std::string(tr("invalid optimize target '")) + value + "'";
     return false;
 }
 
@@ -274,15 +278,21 @@ bool parse_resolution_reference_from_string(const std::string& value,
         out = ResolutionReference::Smallest;
         return true;
     }
-    error = "invalid resolution reference '" + value + "'";
+    error = std::string(tr("invalid resolution reference '")) + value + "'";
     return false;
 }
 
-std::string strip_trailing_cr(std::string value) {
-    while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) {
-        value.pop_back();
+// "cw" (default) or "ccw": direction of the 90-degree rotation of rotated sprites.
+bool parse_rotate_direction(const std::string& value, bool& rotate_ccw) {
+    if (value == "cw") {
+        rotate_ccw = false;
+        return true;
     }
-    return value;
+    if (value == "ccw") {
+        rotate_ccw = true;
+        return true;
+    }
+    return false;
 }
 
 bool parse_scale_factor(const std::string& value, double& out) {
@@ -343,12 +353,12 @@ bool parse_profile_section_header(const std::string& header_content,
     std::istringstream iss(header_content);
     std::string section_type;
     if (!(iss >> section_type)) {
-        error = "empty section header at line " + std::to_string(line_number);
+        error = tr("empty section header at line ") + std::to_string(line_number);
         return false;
     }
     section_type = to_lower_copy(section_type);
     if (section_type != "profile") {
-        error = "unsupported section '" + section_type + "' at line " + std::to_string(line_number);
+        error = std::string(tr("unsupported section '")) + section_type + tr("' at line ") + std::to_string(line_number);
         return false;
     }
 
@@ -356,7 +366,7 @@ bool parse_profile_section_header(const std::string& header_content,
     std::getline(iss, remainder);
     remainder = trim_copy(remainder);
     if (remainder.empty()) {
-        error = "missing profile name at line " + std::to_string(line_number);
+        error = tr("missing profile name at line ") + std::to_string(line_number);
         return false;
     }
 
@@ -365,29 +375,29 @@ bool parse_profile_section_header(const std::string& header_content,
         size_t pos = 0;
         std::string parse_error;
         if (!sprat::core::parse_quoted(remainder, pos, name, parse_error)) {
-            error = "invalid quoted profile name at line " + std::to_string(line_number) + ": " + parse_error;
+            error = std::string(tr("invalid quoted profile name at line ")) + std::to_string(line_number) + ": " + parse_error;
             return false;
         }
         if (!trim_copy(remainder.substr(pos)).empty()) {
-            error = "unexpected token after quoted profile name at line " + std::to_string(line_number);
+            error = tr("unexpected token after quoted profile name at line ") + std::to_string(line_number);
             return false;
         }
     } else {
         std::istringstream name_iss(remainder);
         std::string extra;
         if (!(name_iss >> name)) {
-            error = "missing profile name at line " + std::to_string(line_number);
+            error = tr("missing profile name at line ") + std::to_string(line_number);
             return false;
         }
         if (name_iss >> extra) {
-            error = "unexpected token '" + extra + "' in profile name (use quotes for names with spaces) at line " +
+            error = std::string(tr("unexpected token '")) + extra + tr("' in profile name (use quotes for names with spaces) at line ") +
                     std::to_string(line_number);
             return false;
         }
     }
 
     if (seen_names.contains(name)) {
-        error = "duplicate profile '" + name + "' at line " + std::to_string(line_number);
+        error = std::string(tr("duplicate profile '")) + name + tr("' at line ") + std::to_string(line_number);
         return false;
     }
     seen_names.insert(name);
@@ -423,70 +433,77 @@ bool apply_profile_entry(ProfileDefinition& def,
     } else if (lower_key == "max_width" || lower_key == "default_max_width") {
         int parsed_width = 0;
         if (!parse_positive_int(value, parsed_width)) {
-            error = "invalid max_width '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid max_width '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.max_width = parsed_width;
     } else if (lower_key == "max_height" || lower_key == "default_max_height") {
         int parsed_height = 0;
         if (!parse_positive_int(value, parsed_height)) {
-            error = "invalid max_height '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid max_height '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.max_height = parsed_height;
     } else if (lower_key == "padding") {
         int parsed_padding = 0;
         if (!parse_non_negative_int(value, parsed_padding)) {
-            error = "invalid padding '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid padding '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.padding = parsed_padding;
     } else if (lower_key == "extrude") {
         int parsed_extrude = 0;
         if (!parse_non_negative_int(value, parsed_extrude)) {
-            error = "invalid extrude '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid extrude '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.extrude = parsed_extrude;
     } else if (lower_key == "scale") {
         double parsed_scale = 0.0;
         if (!parse_scale_factor(value, parsed_scale)) {
-            error = "invalid scale '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid scale '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.scale = parsed_scale;
     } else if (lower_key == "trim_transparent") {
         bool parsed_trim = false;
         if (!parse_bool_value(value, parsed_trim)) {
-            error = "invalid trim_transparent '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid trim_transparent '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.trim_transparent = parsed_trim;
     } else if (lower_key == "rotate") {
         bool parsed_rotate = false;
         if (!parse_bool_value(value, parsed_rotate)) {
-            error = "invalid rotate '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid rotate '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.rotate = parsed_rotate;
+    } else if (lower_key == "rotate_direction") {
+        bool parsed_ccw = false;
+        if (!parse_rotate_direction(value, parsed_ccw)) {
+            error = std::string(tr("invalid rotate_direction '")) + value + tr("' at line ") + std::to_string(line_number);
+            return false;
+        }
+        def.rotate_ccw = parsed_ccw;
     } else if (lower_key == "threads") {
         unsigned int parsed_threads = 0;
         if (!parse_positive_uint(value, parsed_threads)) {
-            error = "invalid threads '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid threads '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.threads = parsed_threads;
     } else if (lower_key == "multipack") {
         bool parsed_multipack = false;
         if (!parse_bool_value(value, parsed_multipack)) {
-            error = "invalid multipack '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid multipack '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.multipack = parsed_multipack;
     } else if (lower_key == "incremental") {
         bool parsed_incremental = false;
         if (!parse_bool_value(value, parsed_incremental)) {
-            error = "invalid incremental '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid incremental '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.incremental = parsed_incremental;
@@ -494,7 +511,7 @@ bool apply_profile_entry(ProfileDefinition& def,
         int w = 0;
         int h = 0;
         if (!parse_resolution(value, w, h)) {
-            error = "invalid source_resolution '" + value + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid source_resolution '")) + value + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         def.source_resolution = std::make_pair(w, h);
@@ -505,7 +522,7 @@ bool apply_profile_entry(ProfileDefinition& def,
             int w = 0;
             int h = 0;
             if (!parse_resolution(value, w, h)) {
-                error = "invalid target_resolution '" + value + "' at line " + std::to_string(line_number);
+                error = std::string(tr("invalid target_resolution '")) + value + tr("' at line ") + std::to_string(line_number);
                 return false;
             }
             def.target_resolution = std::make_pair(w, h);
@@ -520,7 +537,7 @@ bool apply_profile_entry(ProfileDefinition& def,
     } else if (lower_key == "label") {
         def.label = value;
     } else {
-        error = "unknown key '" + key + "' at line " + std::to_string(line_number);
+        error = std::string(tr("unknown key '")) + key + tr("' at line ") + std::to_string(line_number);
         return false;
     }
     return true;
@@ -557,23 +574,23 @@ bool parse_profiles_config(std::istream& input,
         }
 
         if (!current) {
-            error = "entry outside of profile section at line " + std::to_string(line_number);
+            error = tr("entry outside of profile section at line ") + std::to_string(line_number);
             return false;
         }
 
         const size_t equals = trimmed.find('=');
         if (equals == std::string::npos) {
-            error = "invalid line '" + trimmed + "' at line " + std::to_string(line_number);
+            error = std::string(tr("invalid line '")) + trimmed + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         const std::string key = trim_copy(trimmed.substr(0, equals));
         const std::string value = trim_copy(trimmed.substr(equals + 1));
         if (key.empty()) {
-            error = "empty key at line " + std::to_string(line_number);
+            error = tr("empty key at line ") + std::to_string(line_number);
             return false;
         }
         if (value.empty()) {
-            error = "empty value for key '" + key + "' at line " + std::to_string(line_number);
+            error = std::string(tr("empty value for key '")) + key + tr("' at line ") + std::to_string(line_number);
             return false;
         }
         if (!apply_profile_entry(*current, key, value, line_number, error)) {
@@ -585,7 +602,7 @@ bool parse_profiles_config(std::istream& input,
         out.push_back(*current);
     }
     if (out.empty()) {
-        error = "no profiles defined";
+        error = tr("no profiles defined");
         return false;
     }
     return true;
@@ -596,7 +613,7 @@ bool load_profiles_config_from_file(const fs::path& path,
                                     std::string& error) {
     std::ifstream input(path);
     if (!input) {
-        error = "failed to open '" + path.string() + "'";
+        error = std::string(tr("failed to open '")) + path.string() + "'";
         return false;
     }
     return parse_profiles_config(input, out, error);
@@ -1317,6 +1334,24 @@ void prune_stale_cache_entries(std::unordered_map<std::string, ImageCacheEntry>&
     }
 }
 
+// A cache file path is usable only when it lives inside a cache directory.
+bool is_cache_path_usable(const fs::path& cache_path) {
+    return !cache_path.empty() && !cache_path.parent_path().empty();
+}
+
+// Unique per writer so concurrent runs never write into the same temporary file.
+fs::path make_cache_tmp_path(const fs::path& cache_path) {
+    const auto stamp = static_cast<unsigned long long>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const size_t thread_hash = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    std::array<char, 24> suffix{};
+    std::snprintf(suffix.data(), suffix.size(), ".%016llx.tmp",
+                  static_cast<unsigned long long>(thread_hash) ^ stamp);
+    fs::path tmp = cache_path;
+    tmp += suffix.data();
+    return tmp;
+}
+
 bool load_image_cache(const fs::path& cache_path,
                       std::unordered_map<std::string, ImageCacheEntry>& out) {
     out.clear();
@@ -1394,8 +1429,10 @@ bool load_image_cache(const fs::path& cache_path,
 
 bool save_image_cache(const fs::path& cache_path,
                       const std::unordered_map<std::string, ImageCacheEntry>& entries) {
-    fs::path tmp = cache_path;
-    tmp += ".tmp";
+    if (!is_cache_path_usable(cache_path)) {
+        return false;
+    }
+    const fs::path tmp = make_cache_tmp_path(cache_path);
 
     std::ofstream out(tmp, std::ios::trunc);
     if (!out) {
@@ -1494,15 +1531,35 @@ fs::path default_temp_dir() {
 #endif
 }
 
+// The temp directory is shared between users on POSIX systems, so the cache lives in a
+// per-user directory that must be private: otherwise another user could plant cache
+// entries (wrong layouts) or symlinks that redirect our writes.
+#ifndef _WIN32
+bool is_private_cache_dir(const fs::path& dir) {
+    struct stat st {};
+    if (lstat(dir.c_str(), &st) != 0) {
+        return false;
+    }
+    return S_ISDIR(st.st_mode) && st.st_uid == geteuid() && (st.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+}
+#endif
+
+// Returns an empty path when no safe cache directory is available; caching is then skipped.
 fs::path cache_root_dir() {
+#ifdef _WIN32
     fs::path root = default_temp_dir() / "sprat";
     std::error_code ec;
     fs::create_directories(root, ec);
-    if (!ec) {
-        return root;
+    return ec ? fs::path() : root;
+#else
+    fs::path root = default_temp_dir() / ("sprat-" + std::to_string(geteuid()));
+    if (mkdir(root.c_str(), S_IRWXU) != 0 && errno != EEXIST) {
+        return {};
     }
-    return default_temp_dir();
+    return is_private_cache_dir(root) ? root : fs::path();
+#endif
 }
+
 
 fs::path build_cache_path(const fs::path& folder) {
     std::error_code ec;
@@ -1514,7 +1571,11 @@ fs::path build_cache_path(const fs::path& folder) {
     std::array<char, 40> buf{};
     std::snprintf(buf.data(), buf.size(), "spratlayout_%016llx.cache",
                   static_cast<unsigned long long>(hash));
-    return cache_root_dir() / buf.data();
+    const fs::path root = cache_root_dir();
+    if (root.empty()) {
+        return {};
+    }
+    return root / buf.data();
 }
 
 fs::path build_output_cache_path(const fs::path& base_cache_path,
@@ -1570,6 +1631,8 @@ void print_usage() {
               << tr("  --scale F                  Pre-scale factor (0 < F <= 1)\n")
               << tr("  --trim-transparent         Enable transparent-border trimming\n")
               << tr("  --rotate                   Allow 90-degree sprite rotation during packing\n")
+              << tr("  --rotate-direction DIR     Rotation direction of rotated sprites: cw (default) or ccw\n")
+              << tr("                             (libGDX needs ccw; TexturePacker-style formats need cw)\n")
               << tr("  --multipack                Split into multiple atlases if they don't fit\n")
               << tr("  --incremental              Reuse positions for unchanged sprites (layout stability)\n")
               << tr("  --deduplicate <mode>       Deduplication mode: none, exact, perceptual\n")
@@ -1626,6 +1689,15 @@ std::vector<std::string> build_source_sig_parts(bool preserve_source_order,
     return parts;
 }
 
+// Identifies the requested sprite order so layouts sorted differently never
+// share a cache entry.
+std::string build_order_key(bool has_frame_sort_override, int frame_sort, int stable_metric) {
+    if (!has_frame_sort_override) {
+        return "default";
+    }
+    return std::to_string(frame_sort) + ':' + std::to_string(stable_metric);
+}
+
 std::string build_layout_signature(const std::string& profile_name,
                                    Mode mode,
                                    OptimizeTarget optimize_target,
@@ -1637,6 +1709,9 @@ std::string build_layout_signature(const std::string& profile_name,
                                    bool trim_transparent,
                                    bool allow_rotate,
                                    bool preserve_source_order,
+                                   bool multipack,
+                                   bool rotate_ccw,
+                                   const std::string& order_key,
                                    const std::string& deduplicateMode,
                                    int dedup_threshold,
                                    int dedup_tolerance,
@@ -1669,6 +1744,12 @@ std::string build_layout_signature(const std::string& profile_name,
     sig += '|';
     sig += (preserve_source_order ? '1' : '0');
     sig += '|';
+    sig += (multipack ? '1' : '0');
+    sig += '|';
+    sig += (rotate_ccw ? "ccw" : "cw");
+    sig += '|';
+    sig += order_key;
+    sig += '|';
     sig += deduplicateMode;
     sig += '|';
     sig += std::to_string(dedup_threshold);
@@ -1691,6 +1772,8 @@ std::string build_layout_seed_signature(const std::string& profile_name,
                                         bool trim_transparent,
                                         bool allow_rotate,
                                         bool preserve_source_order,
+                                        bool multipack,
+                                        const std::string& order_key,
                                         const std::vector<ImageSource>& sources) {
     const std::vector<std::string> parts = build_source_sig_parts(preserve_source_order, sources);
 
@@ -1717,6 +1800,10 @@ std::string build_layout_seed_signature(const std::string& profile_name,
     sig += (allow_rotate ? '1' : '0');
     sig += '|';
     sig += (preserve_source_order ? '1' : '0');
+    sig += '|';
+    sig += (multipack ? '1' : '0');
+    sig += '|';
+    sig += order_key;
     for (const std::string& part : parts) {
         sig += '\n';
         sig += part;
@@ -1730,6 +1817,7 @@ std::string build_incremental_seed_signature(
     int max_width_limit, int max_height_limit,
     int extrude, double scale,
     bool trim_transparent, bool allow_rotate,
+    const std::string& order_key,
     const fs::path& working_dir) {
 
     std::array<char, 32> scale_buf{};
@@ -1756,6 +1844,8 @@ std::string build_incremental_seed_signature(
     sig += (trim_transparent ? '1' : '0');
     sig += '|';
     sig += (allow_rotate ? '1' : '0');
+    sig += '|';
+    sig += order_key;
     sig += '|';
     sig += normalized_dir;
     return to_hex_size_t(std::hash<std::string>{}(sig));
@@ -1792,8 +1882,10 @@ bool load_output_cache(const fs::path& cache_path,
 bool save_output_cache(const fs::path& cache_path,
                        const std::string& signature,
                        const std::string& output) {
-    fs::path tmp = cache_path;
-    tmp += ".tmp";
+    if (!is_cache_path_usable(cache_path)) {
+        return false;
+    }
+    const fs::path tmp = make_cache_tmp_path(cache_path);
 
     std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
     if (!out) {
@@ -1882,8 +1974,10 @@ bool save_layout_seed_cache(const fs::path& cache_path,
         return false;
     }
 
-    fs::path tmp = cache_path;
-    tmp += ".tmp";
+    if (!is_cache_path_usable(cache_path)) {
+        return false;
+    }
+    const fs::path tmp = make_cache_tmp_path(cache_path);
 
     std::ofstream out(tmp, std::ios::trunc);
     if (!out) {
@@ -2210,6 +2304,7 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
                                      int extrude,
                                      bool trim_transparent,
                                      bool multipack,
+                                     bool rotate_ccw,
                                      const std::vector<Sprite>& sprites,
                                      const std::vector<sprat::core::Alias>& aliases,
                                      bool debug,
@@ -2230,6 +2325,9 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
     }
     if (multipack) {
         output << "multipack true\n";
+    }
+    if (rotate_ccw) {
+        output << "rotation ccw\n";
     }
     // Pre-group sprite indices by atlas_index to avoid O(sprites * atlases) scan.
     std::vector<std::vector<size_t>> sprites_by_atlas(atlases.size());
@@ -3663,6 +3761,8 @@ struct LayoutArgs {
     bool has_trim_override = false;
     bool allow_rotate = false;
     bool has_rotate_override = false;
+    bool rotate_ccw = false;
+    bool has_rotate_direction_override = false;
     bool multipack = false;
     bool has_multipack_override = false;
     std::string deduplicateMode = "none";
@@ -3826,6 +3926,13 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
                 std::cerr << tr("Invalid dedup tolerance: ") << value << tr(" (must be 0-255)\n");
                 return 1;
             }
+        } else if (arg == "--rotate-direction" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (!parse_rotate_direction(value, args.rotate_ccw)) {
+                std::cerr << tr("Invalid rotate direction: ") << value << tr(" (must be cw or ccw)\n");
+                return 1;
+            }
+            args.has_rotate_direction_override = true;
         } else if (arg == "--sort" && i + 1 < argc) {
             const std::string value = argv[++i];
             if (!parse_frame_sort_from_string(value, args.frame_sort, args.stable_metric)) {
@@ -3973,6 +4080,8 @@ int run_spratlayout(int argc, char** argv) {
     bool has_trim_override = args.has_trim_override;
     bool allow_rotate = args.has_rotate_override ? args.allow_rotate : false;
     bool has_rotate_override = args.has_rotate_override;
+    bool rotate_ccw = args.has_rotate_direction_override ? args.rotate_ccw : false;
+    const bool has_rotate_direction_override = args.has_rotate_direction_override;
     bool multipack = args.has_multipack_override ? args.multipack : false;
     bool has_multipack_override = args.has_multipack_override;
     const std::string deduplicateMode = std::move(args.deduplicateMode);
@@ -4106,6 +4215,9 @@ int run_spratlayout(int argc, char** argv) {
         }
         if (!has_rotate_override && selected_profile.rotate) {
             allow_rotate = *selected_profile.rotate;
+        }
+        if (!has_rotate_direction_override && selected_profile.rotate_ccw) {
+            rotate_ccw = *selected_profile.rotate_ccw;
         }
         if (!has_multipack_override && selected_profile.multipack) {
             multipack = *selected_profile.multipack;
@@ -4458,12 +4570,15 @@ int run_spratlayout(int argc, char** argv) {
     }
 
     const bool is_file = !do_sort && !enforce_stable_order;
+    const std::string order_key = build_order_key(
+        has_frame_sort_override, static_cast<int>(frame_sort), static_cast<int>(stable_metric));
     const std::string layout_signature = build_layout_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        padding, extrude, scale, trim_transparent, allow_rotate, is_file, deduplicateMode, dedup_threshold, dedup_tolerance, sources);
+        padding, extrude, scale, trim_transparent, allow_rotate, is_file, multipack, rotate_ccw, order_key,
+        deduplicateMode, dedup_threshold, dedup_tolerance, sources);
     const std::string layout_seed_signature = build_layout_seed_signature(
         selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        extrude, scale, trim_transparent, allow_rotate, is_file, sources);
+        extrude, scale, trim_transparent, allow_rotate, is_file, multipack, order_key, sources);
     const fs::path output_cache_path = build_output_cache_path(cache_path, layout_signature);
     const fs::path seed_cache_path = build_seed_cache_path(cache_path, layout_seed_signature);
 
@@ -4473,7 +4588,7 @@ int run_spratlayout(int argc, char** argv) {
         incremental_seed_signature = build_incremental_seed_signature(
             selected_profile_name, mode, optimize_target,
             max_width_limit, max_height_limit, extrude, scale,
-            trim_transparent, allow_rotate,
+            trim_transparent, allow_rotate, order_key,
             input_context.working_folder);
         incremental_seed_cache_path = build_incremental_seed_cache_path(
             cache_path, incremental_seed_signature);
@@ -5682,6 +5797,24 @@ int run_spratlayout(int argc, char** argv) {
                         has_trim_override
                             ? trim_transparent
                             : (compact_profile.trim_transparent ? *compact_profile.trim_transparent : false);
+                    const int prewarm_extrude =
+                        has_extrude_override ? extrude : compact_profile.extrude.value_or(k_default_extrude);
+                    const bool prewarm_rotate =
+                        has_rotate_override ? allow_rotate : compact_profile.rotate.value_or(false);
+                    const bool prewarm_rotate_ccw =
+                        has_rotate_direction_override ? rotate_ccw : compact_profile.rotate_ccw.value_or(false);
+                    const bool prewarm_uses_resolution =
+                        (!args.has_source_resolution && compact_profile.source_resolution)
+                        || (!args.has_target_resolution && compact_profile.target_resolution);
+                    // The candidates were packed with this run's inputs; they are only valid
+                    // for a profile that differs in nothing but the optimize target.
+                    if (prewarm_max_width != max_width_limit || prewarm_max_height != max_height_limit
+                        || prewarm_padding != padding || prewarm_scale != scale
+                        || prewarm_trim_transparent != trim_transparent || prewarm_extrude != extrude
+                        || prewarm_rotate != allow_rotate || prewarm_rotate_ccw != rotate_ccw
+                        || prewarm_uses_resolution) {
+                        continue;
+                    }
                     const std::string prewarm_signature = build_layout_signature(
                         compact_profile.name,
                         prewarm_mode,
@@ -5694,6 +5827,9 @@ int run_spratlayout(int argc, char** argv) {
                         prewarm_trim_transparent,
                         allow_rotate,
                         is_file,
+                        false,
+                        rotate_ccw,
+                        order_key,
                         deduplicateMode,
                         dedup_threshold,
                         dedup_tolerance,
@@ -5719,6 +5855,7 @@ int run_spratlayout(int argc, char** argv) {
                         extrude,
                         prewarm_trim_transparent,
                         false,
+                        rotate_ccw,
                         prewarm_candidate.sprites,
                         empty_prewarm_aliases,
                         false,
@@ -5903,6 +6040,7 @@ int run_spratlayout(int argc, char** argv) {
         extrude,
         trim_transparent,
         multipack,
+        rotate_ccw,
         sprites,
         layout_aliases,
         debug,

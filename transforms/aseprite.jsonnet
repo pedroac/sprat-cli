@@ -53,6 +53,7 @@ local result = {
 };
 
 {
+  assert lib.rotation_matches(sprat, "cw") : lib.rotation_error("Aseprite", "cw"),
   name: "Aseprite",
   description: "Aseprite JSON Array sprite sheet format (frameTags populated when animations are present)",
   extension: ".json",

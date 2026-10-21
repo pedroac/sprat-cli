@@ -1,3 +1,5 @@
+// These tests rely on assert(); keep it active in Release builds (CI builds Release).
+#undef NDEBUG
 #include "../src/core/layout_parser.h"
 #include <iostream>
 #include <string>
@@ -171,6 +173,58 @@ void test_parse_sprite_line_rejects_negative_position() {
     std::cout << "test_parse_sprite_line_rejects_negative_position passed" << std::endl;
 }
 
+void test_parse_sprite_line_rejects_negative_trim() {
+    sprat::core::Sprite s;
+    std::string error;
+
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 10,10 1,2 3,4", s, error));
+    assert(s.has_trim && s.src_x == 1 && s.src_y == 2 && s.trim_right == 3 && s.trim_bottom == 4);
+
+    // Modern format: any negative trim offset
+    for (const char* line : {"sprite \"a.png\" 0,0 10,10 -1,0 0,0",
+                             "sprite \"a.png\" 0,0 10,10 0,-1 0,0",
+                             "sprite \"a.png\" 0,0 10,10 0,0 -1,0",
+                             "sprite \"a.png\" 0,0 10,10 0,0 0,-2147483648"}) {
+        error.clear();
+        assert(!sprat::core::parse_sprite_line(line, s, error));
+        assert(error.find("trim offsets must not be negative") != std::string::npos);
+    }
+
+    // Legacy format: negative crop offset
+    error.clear();
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0 0 10 10 -1 0", s, error));
+    assert(error.find("trim offsets must not be negative") != std::string::npos);
+
+    std::cout << "test_parse_sprite_line_rejects_negative_trim passed" << std::endl;
+}
+
+void test_parse_layout_rotation_direction() {
+    sprat::core::Layout layout;
+    std::string error;
+
+    std::istringstream cw_default("atlas 10,10\nsprite \"a.png\" 0,0 10,10 rotated\n");
+    assert(sprat::core::parse_layout(cw_default, layout, error));
+    assert(!layout.rotate_ccw && !layout.has_rotation);
+
+    std::istringstream ccw("rotation ccw\natlas 10,10\nsprite \"a.png\" 0,0 10,10 rotated\n");
+    assert(sprat::core::parse_layout(ccw, layout, error));
+    assert(layout.rotate_ccw && layout.has_rotation);
+
+    std::istringstream cw("rotation cw\natlas 10,10\n");
+    assert(sprat::core::parse_layout(cw, layout, error));
+    assert(!layout.rotate_ccw && layout.has_rotation);
+
+    std::istringstream invalid("rotation left\natlas 10,10\n");
+    assert(!sprat::core::parse_layout(invalid, layout, error));
+    assert(error.find("Invalid rotation line") != std::string::npos);
+
+    std::istringstream duplicate("rotation ccw\nrotation cw\natlas 10,10\n");
+    assert(!sprat::core::parse_layout(duplicate, layout, error));
+    assert(error.find("Duplicate rotation line") != std::string::npos);
+
+    std::cout << "test_parse_layout_rotation_direction passed" << std::endl;
+}
+
 void test_parse_sprite_line_slice() {
     sprat::core::Sprite s;
     std::string error;
@@ -325,6 +379,8 @@ int main() {
     test_parse_layout_rejects_negative_sprite_dimensions();
     test_parse_layout_rejects_sprite_out_of_bounds();
     test_parse_sprite_line_rejects_negative_position();
+    test_parse_sprite_line_rejects_negative_trim();
+    test_parse_layout_rotation_direction();
     test_parse_sprite_line_slice();
     test_parse_sprite_line_slice_fill_modes();
     test_parse_alias_line();

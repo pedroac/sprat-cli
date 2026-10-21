@@ -1,11 +1,13 @@
 // libgdx.jsonnet – LibGDX TextureAtlas format (.atlas).
 local sprat = std.extVar("sprat");
+local lib = import "sprat.libsonnet";
 
 local sprite_entry(s) =
   s.name + "\n" +
   "  rotate: " + s.rotated + "\n" +
   "  xy: " + s.x + ", " + s.y + "\n" +
-  "  size: " + s.w + ", " + s.h + "\n" +
+  // libGDX expects the unrotated region size and swaps it itself when rotate is true.
+  "  size: " + (if s.rotated then s.h + ", " + s.w else s.w + ", " + s.h) + "\n" +
   "  orig: " + s.source_w + ", " + s.source_h + "\n" +
   "  offset: " + s.trim_left + ", " + s.trim_bottom + "\n" +
   "  index: -1\n" +
@@ -22,9 +24,11 @@ local atlas_block(at) =
   std.join("", [sprite_entry(s) for s in at.sprites]);
 
 {
+  assert lib.rotation_matches(sprat, "ccw") : lib.rotation_error("libGDX", "ccw"),
   name: "LibGDX",
-  description: "LibGDX TextureAtlas format (.atlas); animation data is not part of this format",
+  description: "LibGDX TextureAtlas format (.atlas); rotated sprites need spratlayout --rotate-direction ccw; animation data is not part of this format",
   extension: ".atlas",
   icon: "icons/libgdx.svg",
-  content: std.join("", [atlas_block(at) for at in sprat.atlases]),
+  // libGDX starts a new page only after a blank line.
+  content: std.join("\n", [atlas_block(at) for at in sprat.atlases]),
 }
