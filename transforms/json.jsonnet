@@ -11,7 +11,8 @@ local sprite_obj(s) = {
   markers: s.markers,
   rotation: if s.rotated then 90 else 0,
   has_slice: s.has_slice,
-} + (if s.has_slice then {
+} + (if s.alias_of != "" then { alias_of: s.alias_of } else {})
+  + (if s.has_slice then {
   slice: {
     left: s.slice_left,
     top: s.slice_top,

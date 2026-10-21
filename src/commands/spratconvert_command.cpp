@@ -747,6 +747,7 @@ std::string build_sprat_json(
         o += ",\"trim_bottom\":" + std::to_string(s.trim_bottom);
         o += ",\"has_trim\":" + std::string(has_trim ? "true" : "false");
         o += ",\"rotated\":" + std::string(s.rotated ? "true" : "false");
+        o += ",\"alias_of\":\"" + escape_json(s.alias_of) + "\"";
         o += ",\"has_slice\":" + std::string(s.has_slice ? "true" : "false");
         if (s.has_slice) {
             o += ",\"slice_left\":" + std::to_string(s.slice_left);
@@ -1456,7 +1457,8 @@ int run_spratconvert(int argc, char** argv) {
     std::istringstream layout_iss(input_text);
     Layout layout;
     std::string layout_error;
-    if (!parse_layout(layout_iss, layout, layout_error)) {
+    if (!parse_layout(layout_iss, layout, layout_error)
+        || !sprat::core::expand_layout_aliases(layout, layout_error)) {
         std::cerr << layout_error << "\n";
         return 1;
     }
@@ -1530,8 +1532,14 @@ int run_spratconvert(int argc, char** argv) {
             if (anim_name.empty()) continue;
             grouped[anim_name].push_back(static_cast<int>(i));
         }
-        for (auto const& [name, frames] : grouped) {
+        for (auto& [name, frames] : grouped) {
             if (frames.size() > 1) {
+                // Layout order is packing order (and aliases come last), so order
+                // frames by name: run_2 before run_10.
+                std::sort(frames.begin(), frames.end(), [&](int a, int b) {
+                    return sprat::core::compare_natural(sprite_names[static_cast<size_t>(a)],
+                                                        sprite_names[static_cast<size_t>(b)]) < 0;
+                });
                 AnimationItem anim;
                 anim.index = animation_items.size();
                 anim.name = name;

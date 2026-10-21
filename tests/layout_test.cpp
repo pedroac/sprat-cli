@@ -264,6 +264,58 @@ void test_parse_sprite_line_slice_fill_modes() {
     std::cout << "test_parse_sprite_line_slice_fill_modes passed" << std::endl;
 }
 
+void test_parse_alias_line() {
+    sprat::core::Alias alias;
+    std::string error;
+
+    assert(sprat::core::parse_alias_line("alias \"b.png\" \"a.png\"", alias, error));
+    assert(alias.path == "b.png" && alias.canonical_path == "a.png");
+    assert(!alias.has_trim);
+
+    assert(sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 3,4", alias, error));
+    assert(alias.has_trim);
+    assert(alias.trim_left == 1 && alias.trim_top == 2);
+    assert(alias.trim_right == 3 && alias.trim_bottom == 4);
+
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2", alias, error));
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 x,4", alias, error));
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" -1,2 3,4", alias, error));
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 3,4 5,6", alias, error));
+    std::cout << "test_parse_alias_line passed" << std::endl;
+}
+
+void test_expand_layout_aliases() {
+    std::istringstream iss("atlas 16,16\n"
+                           "atlas 16,16\n"
+                           "sprite \"a.png\" 2,3 4,5 1,6 2,0 rotated\n"
+                           "alias \"b.png\" \"a.png\"\n"
+                           "alias \"c.png\" \"a.png\" 1,0 2,6\n");
+    sprat::core::Layout layout;
+    std::string error;
+    assert(sprat::core::parse_layout(iss, layout, error));
+    assert(sprat::core::expand_layout_aliases(layout, error));
+    assert(layout.aliases.empty());
+    assert(layout.sprites.size() == 3);
+
+    // Without its own trim, an alias is a copy of the canonical sprite.
+    const sprat::core::Sprite& b = layout.sprites[1];
+    assert(b.path == "b.png" && b.alias_of == "a.png");
+    assert(b.x == 2 && b.y == 3 && b.w == 4 && b.h == 5 && b.rotated && b.atlas_index == 1);
+    assert(b.src_x == 1 && b.src_y == 6 && b.trim_right == 2 && b.trim_bottom == 0);
+
+    // With its own trim, only the placement within the source image changes.
+    const sprat::core::Sprite& c = layout.sprites[2];
+    assert(c.path == "c.png" && c.alias_of == "a.png");
+    assert(c.x == 2 && c.y == 3 && c.w == 4 && c.h == 5 && c.rotated);
+    assert(c.src_x == 1 && c.src_y == 0 && c.trim_right == 2 && c.trim_bottom == 6);
+
+    std::istringstream missing("atlas 4,4\nsprite \"a.png\" 0,0 4,4\nalias \"b.png\" \"x.png\"\n");
+    assert(sprat::core::parse_layout(missing, layout, error));
+    assert(!sprat::core::expand_layout_aliases(layout, error));
+    assert(error.find("x.png") != std::string::npos);
+    std::cout << "test_expand_layout_aliases passed" << std::endl;
+}
+
 int main() {
     test_parse_atlas_line();
     test_parse_sprite_line();
@@ -275,6 +327,8 @@ int main() {
     test_parse_sprite_line_rejects_negative_position();
     test_parse_sprite_line_slice();
     test_parse_sprite_line_slice_fill_modes();
+    test_parse_alias_line();
+    test_expand_layout_aliases();
     std::cout << "All layout tests passed!" << std::endl;
     return 0;
 }

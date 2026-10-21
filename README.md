@@ -243,6 +243,8 @@ Detect and alias duplicate sprites to save atlas space. `spratlayout` packs only
 - `--deduplicate exact`: content hash; only pixel-identical sprites are merged.
 - `--deduplicate perceptual`: near-identical sprites are merged, such as re-exports with slight compression noise or dithering. A perceptual hash (dHash) picks candidate pairs (`--dedup-threshold N`, default `5`). The candidates are then compared pixel by pixel and merged only if every RGBA channel is within `--dedup-tolerance N` (default `8`). Pixels that are fully transparent in both sprites are ignored. Each duplicate is compared against its group's canonical sprite, so differences can't add up along a chain of similar sprites. Palette swaps and animation frames with small changes (such as a blink) stay separate.
 
+Both modes compare the trimmed pixels, so a frame that only moves within its canvas (such as a bobbing idle frame) still counts as a duplicate. Sprites with different nine-slice insets are never merged.
+
 ```sh
 # Generate layout with duplicate detection
 ./build/spratlayout ./frames --deduplicate exact > layout.txt
@@ -250,16 +252,19 @@ Detect and alias duplicate sprites to save atlas space. `spratlayout` packs only
 
 The layout file will contain `alias` lines for duplicates:
 ```
-sprite "original.png" 0,0 32,32
+sprite "original.png" 0,0 32,32 4,10 4,6
 alias "duplicate.png" "original.png"
+alias "moved.png" "original.png" 4,4 4,12
 ```
 
-When converting to JSON/metadata, aliases are expanded:
+An alias whose trim offsets differ from its canonical sprite's carries its own `left,top right,bottom` trim, so engines put it back at its original place in the canvas.
+
+When converting to JSON/metadata, every alias becomes its own frame that points to the canonical atlas region:
 ```sh
 ./build/spratlayout ./frames --deduplicate exact | ./build/spratconvert --transform json > layout.json
 ```
 
-The output JSON will reference the canonical sprite path in the `alias_of` field for duplicate entries. This feature is especially useful for large asset collections with repeated sprites, reducing both atlas size and build time.
+In the built-in `json` transform, alias entries have an `alias_of` field with the canonical sprite path. Every format, such as Phaser, Godot or Unity, lists alias frames under their own names. This feature is especially useful for large asset collections with repeated sprites, reducing both atlas size and build time.
 
 ---
 
@@ -646,6 +651,7 @@ local sprat = std.extVar("sprat");
 | `name_hash_hex` | 16-char FNV-1a hex string |
 | `name_hash_decimal` | FNV-1a as a decimal string (serialized as JSON string to avoid float precision loss) |
 | `name_css` | CSS-safe identifier |
+| `alias_of` | Canonical sprite path for a deduplicated alias; empty for regular sprites |
 | `markers` | Array of marker objects attached to this sprite |
 
 **Per animation (`animations[]`):**
