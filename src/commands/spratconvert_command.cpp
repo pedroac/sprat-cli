@@ -140,9 +140,25 @@ std::string format_double(double value) {
     return std::string(buf.data(), n > 0 ? static_cast<size_t>(n) : 0);
 }
 
+// Sprite lookups match path suffixes split on either separator, so metadata
+// files written on one platform (or joined with a root on Windows, where
+// fs::path uses '\\') still resolve against layout paths that use '/'.
+constexpr const char* kPathSeparators = "/\\";
+
+// The file name of a layout sprite path, split on '/' and '\\' by hand: fs::path on Windows
+// would read "a: b.png" as drive "a:" plus " b.png", and the name must not depend on the OS.
+std::string layout_path_filename(const std::string& path) {
+    const size_t sep = path.find_last_of(kPathSeparators);
+    return sep == std::string::npos ? path : path.substr(sep + 1);
+}
+
 std::string sprite_name_from_path(const std::string& path) {
-    fs::path p(path);
-    std::string name = p.stem().string();
+    const std::string filename = layout_path_filename(path);
+    // Like fs::path::stem(): drop the last extension, but keep a leading dot (".hidden").
+    const size_t dot = filename.rfind('.');
+    std::string name = (dot == std::string::npos || dot == 0 || filename == "..")
+                           ? filename
+                           : filename.substr(0, dot);
     // Strip the ".9" from Android nine-patch stems ("button.9" → "button").
     if (name.size() >= 2 && name.compare(name.size() - 2, 2, ".9") == 0 &&
         sprat::core::is_nine_patch_path(path)) {
@@ -151,17 +167,11 @@ std::string sprite_name_from_path(const std::string& path) {
     if (!name.empty()) {
         return name;
     }
-    name = p.filename().string();
-    if (!name.empty()) {
-        return name;
+    if (!filename.empty()) {
+        return filename;
     }
     return path;
 }
-
-// Sprite lookups match path suffixes split on either separator, so metadata
-// files written on one platform (or joined with a root on Windows, where
-// fs::path uses '\\') still resolve against layout paths that use '/'.
-constexpr const char* kPathSeparators = "/\\";
 
 // Joins a metadata-file `root` with a relative path using '/' on every
 // platform, matching how layout sprite paths are written.
@@ -183,8 +193,7 @@ void collect_sprite_name_indexes(const Layout& layout,
     int idx = 0;
     for (const auto& s : layout.sprites) {
         by_path[s.path] = idx;
-        fs::path p(s.path);
-        by_path[p.filename().string()] = idx;
+        by_path[layout_path_filename(s.path)] = idx;
         size_t sep = s.path.find_first_of(kPathSeparators);
         while (sep != std::string::npos) {
             ++sep;

@@ -35,9 +35,6 @@ export XDG_CONFIG_HOME="$tmp_dir/.config"
 # string order differs from their natural order.
 frames_dir="$tmp_dir/frames"
 mkdir -p "$frames_dir"
-# The physical path: --stdin-list takes its root from the working directory, which the OS
-# reports resolved (macOS: /var/folders/... is /private/var/folders/...).
-frames_dir="$(cd "$frames_dir" && pwd -P)"
 names=(walk1 walk2 walk3 walk10 walk11 walk20 idle)
 sources=("$croc_dir"/*/*.png)
 for ((i = ${#names[@]} - 1; i >= 0; i--)); do
@@ -55,7 +52,11 @@ for mode in fast compact; do
     "$spratlayout_bin" "$(fix_path "$frames_dir")" --mode "$mode" > "$tmp_dir/folder_$mode.txt"
     (cd "$frames_dir" && printf '%s\n' "$natural_order" \
         | "$spratlayout_bin" --stdin-list --mode "$mode") > "$tmp_dir/list_$mode.txt"
-    if ! diff -u "$tmp_dir/list_$mode.txt" "$tmp_dir/folder_$mode.txt" >&2; then
+    # Only the sprite order matters here: the root line names the same folder, but Windows
+    # spells the working directory of --stdin-list with '\' and the folder argument with '/'.
+    grep -v '^root ' "$tmp_dir/list_$mode.txt" > "$tmp_dir/list_$mode.body"
+    grep -v '^root ' "$tmp_dir/folder_$mode.txt" > "$tmp_dir/folder_$mode.body"
+    if ! diff -u "$tmp_dir/list_$mode.body" "$tmp_dir/folder_$mode.body" >&2; then
         echo "FAIL: --mode $mode folder layout differs from the naturally ordered list" >&2
         exit 1
     fi
