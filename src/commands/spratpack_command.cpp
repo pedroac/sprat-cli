@@ -423,6 +423,18 @@ void fill_invisible_block_colours(std::vector<unsigned char>& rgba, int width, i
     }
 }
 
+// libsquish 1.15 computes storage sizes and pixel/block offsets in int, so it writes past its
+// buffers once the padded RGBA image exceeds INT_MAX bytes (about 23170x23170; Direct3D
+// itself stops at 16384x16384). Such atlases are refused before anything is allocated.
+bool dds_size_supported(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    const long long padded_w = (static_cast<long long>(width) + 3) / 4 * 4;
+    const long long padded_h = (static_cast<long long>(height) + 3) / 4 * 4;
+    return padded_w * padded_h * NUM_CHANNELS <= std::numeric_limits<int>::max();
+}
+
 // Encodes the atlas as a single-level DXT1/DXT5 DDS texture. The image is padded with
 // transparent pixels to a multiple of 4 (Direct3D 10+ require it for block-compressed
 // textures; sprite coordinates are unchanged because the padding is at the right and bottom).
@@ -436,6 +448,9 @@ std::vector<unsigned char> compress_to_dds(
     bool best,
     unsigned int threads
 ) {
+    if (!dds_size_supported(width, height)) {
+        return {};
+    }
     const int padded_w = (width + 3) / 4 * 4;
     const int padded_h = (height + 3) / 4 * 4;
     std::vector<unsigned char> padded(static_cast<size_t>(padded_w) * padded_h * NUM_CHANNELS, 0);
@@ -455,7 +470,8 @@ std::vector<unsigned char> compress_to_dds(
     const size_t block_bytes = dxt1 ? 8 : 16;
     const int blocks_x = padded_w / 4;
     const int block_rows = padded_h / 4;
-    const size_t data_bytes = static_cast<size_t>(squish::GetStorageRequirements(padded_w, padded_h, squish_flags));
+    // Not squish::GetStorageRequirements, whose int result could wrap.
+    const size_t data_bytes = static_cast<size_t>(blocks_x) * static_cast<size_t>(block_rows) * block_bytes;
     std::vector<unsigned char> dds(128 + data_bytes, 0);
 
     // DDS_HEADER, little-endian (Microsoft's DDS reference).
@@ -953,6 +969,14 @@ int run_spratpack(int argc, char** argv) {
             std::cerr << tr("Error: Scaled output atlas ") << atlas_idx << tr(" dimensions are too large for memory allocation\n");
             return 1;
         }
+#ifdef SPRAT_HAS_SQUISH
+        if (has_gpu_compress && !dds_size_supported(output_width, output_height)) {
+            std::cerr << tr("Error: Atlas ") << atlas_idx << " (" << output_width << "x" << output_height
+                      << tr(") is too large for --gpu-compress (at most about 23170x23170; ")
+                      << tr("Direct3D supports up to 16384x16384)\n");
+            return 1;
+        }
+#endif
         std::vector<unsigned char> atlas_data(output_byte_count, 0);
 
         // Map a layout-space span [start, start+len) to output space. Both edges are
@@ -1217,6 +1241,10 @@ int run_spratpack(int argc, char** argv) {
 #endif
             output_data = compress_to_dds(atlas_data, output_width, output_height,
                                           gpu_compress_format == "dxt1", gpu_quality_best, dds_threads);
+            if (output_data.empty()) {
+                std::cerr << tr("Error: Failed to encode DDS for atlas ") << atlas_idx << "\n";
+                return 1;
+            }
             output_extension = ".dds";
         } else
 #endif

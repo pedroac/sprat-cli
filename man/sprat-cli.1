@@ -401,7 +401,7 @@ Output image format. Default: \fBpng\fR. WebP and AVIF need libwebp/libavif at b
 WebP/AVIF quality 0\(en100. Default and \fB100\fR: lossless, keeping every pixel exactly, including the colour of transparent pixels.
 .TP
 \fB\-\-gpu\-compress\fR \fBdxt1\fR|\fBdxt5\fR
-Write a DXT1 or DXT5 DDS texture instead of an image (libsquish). The atlas is padded with transparent pixels to a multiple of 4.
+Write a DXT1 or DXT5 DDS texture instead of an image (libsquish). The atlas is padded with transparent pixels to a multiple of 4. Atlases larger than about 23170x23170 are refused (libsquish's size limit; Direct3D supports up to 16384x16384).
 .TP
 \fB\-\-gpu\-quality\fR \fBfast\fR|\fBbest\fR
 DDS compression quality. Default: \fBfast\fR (range fit). \fBbest\fR (cluster fit) is slightly better and much slower.

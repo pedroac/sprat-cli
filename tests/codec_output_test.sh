@@ -118,6 +118,18 @@ EOF
     "$pack_bin" --gpu-compress dxt5 --threads 1 < "$tmp_dir/layout.txt" > "$tmp_dir/t1.dds"
     "$pack_bin" --gpu-compress dxt5 --threads 8 < "$tmp_dir/layout.txt" > "$tmp_dir/t8.dds"
     cmp -s "$tmp_dir/t1.dds" "$tmp_dir/t8.dds" || { echo "FAILED: DDS output depends on --threads" >&2; exit 1; }
+    # libsquish computes sizes and offsets in int: an atlas whose RGBA data exceeds INT_MAX
+    # bytes (here a 65540x65536 layout, which once wrapped the DDS size to 256 KB and made the
+    # encoder write gigabytes past it) is refused before any memory is allocated.
+    for size in 65540,65536 65536,65536 23172,23172; do
+        status=0
+        printf 'atlas %s\n' "$size" | "$pack_bin" --gpu-compress dxt5 > /dev/null 2> "$tmp_dir/dds_big.err" || status=$?
+        if [ "$status" -ne 1 ] || ! grep -q 'too large for --gpu-compress' "$tmp_dir/dds_big.err"; then
+            cat "$tmp_dir/dds_big.err" >&2
+            echo "FAILED: a ${size/,/x} atlas must be refused for DDS (exit $status)" >&2
+            exit 1
+        fi
+    done
 else
     echo "Test: DDS skipped (libsquish not compiled in)"
 fi
