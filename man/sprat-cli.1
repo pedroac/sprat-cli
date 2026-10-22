@@ -329,7 +329,7 @@ Direction rotated sprites are turned in the atlas (default \fBcw\fR). libGDX nee
 Split into multiple atlases if they don't fit in the specified max dimensions.
 .TP
 \fB\-\-incremental\fR
-Reuse positions of unchanged sprites from the previous run and pack only new or changed sprites into the remaining space, keeping coordinates stable across iterations. Single atlas only; falls back to a full repack if the incremental fit fails. Also available as profile key \fBincremental=true\fR.
+Reuse positions of unchanged sprites from the previous run and pack only new or changed sprites into the remaining space, keeping coordinates stable across iterations. Single atlas only; falls back to a full repack if the incremental fit fails. In \fBpot\fR mode the atlas keeps power-of-two sides (a full repack runs when the reused positions cannot fit them within the limits); \fBgrid\fR mode ignores this option. Also available as profile key \fBincremental=true\fR.
 .TP
 \fB\-\-deduplicate\fR none|exact|perceptual
 Pack one copy of duplicate sprites and emit \fBalias\fR lines for the rest. \fBexact\fR merges pixel-identical sprites (content hash). \fBperceptual\fR merges near-identical sprites: a dHash selects candidate pairs, which are merged only if every RGBA channel of every pixel is within \fB\-\-dedup\-tolerance\fR (pixels fully transparent in both are ignored). Each duplicate is compared against its group's canonical sprite, so differences do not accumulate across chains. Sprites with different nine-slice insets are never merged. An alias whose trim offsets differ from its canonical sprite's keeps its own: \fBalias "b.png" "a.png" \fIleft\fB,\fItop right\fB,\fIbottom\fR. Default: \fBnone\fR.

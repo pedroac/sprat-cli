@@ -1,7 +1,6 @@
 #include "commands/entrypoints.h"
-#include "core/i18n.h"
+#include "core/run_main.h"
 
 int main(int argc, char** argv) {
-    sprat::core::init_i18n("sprat-cli");
-    return run_spratlayout(argc, argv);
+    return sprat::core::run_main(run_spratlayout, argc, argv);
 }

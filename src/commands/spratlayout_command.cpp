@@ -116,7 +116,8 @@ void print_usage() {
               << tr("  --rotate-direction DIR     Rotation direction of rotated sprites: cw (default) or ccw\n")
               << tr("                             (libGDX needs ccw; TexturePacker-style formats need cw)\n")
               << tr("  --multipack                Split into multiple atlases if they don't fit\n")
-              << tr("  --incremental              Reuse positions for unchanged sprites (layout stability)\n")
+              << tr("  --incremental              Reuse positions for unchanged sprites (layout stability;\n")
+              << tr("                             single atlas only, ignored in grid mode)\n")
               << tr("  --deduplicate <mode>       Deduplication mode: none, exact, perceptual\n")
               << tr("  --dedup-threshold N        Max Hamming distance for perceptual dedup (0-64, default: 5)\n")
               << tr("  --dedup-tolerance N        Max per-channel pixel difference for perceptual dedup (0-255, default: 8)\n")
@@ -919,6 +920,25 @@ bool pack_single_atlas(const LayoutArgs& args, const LayoutSettings& settings,
     return true;
 }
 
+// Reused positions (layout seed or --incremental) only give the extent of the sprites. A pot
+// atlas still needs power-of-two sides within the limits, as search_pot_layout picks them;
+// returns false when the reused positions can't give one, so the layout is searched again.
+bool fit_reused_atlas(const LayoutSettings& settings, int& width, int& height) {
+    if (settings.mode != Mode::POT) {
+        return true;
+    }
+    const int pot_width = next_power_of_two(width);
+    const int pot_height = next_power_of_two(height);
+    if (pot_width <= 0 || pot_height <= 0 ||
+        (settings.max_width_limit > 0 && pot_width > settings.max_width_limit) ||
+        (settings.max_height_limit > 0 && pot_height > settings.max_height_limit)) {
+        return false;
+    }
+    width = pot_width;
+    height = pot_height;
+    return true;
+}
+
 // Packing reserves padding after the last sprite of each row and column; drop it.
 bool tighten_atlas_bounds(const std::vector<Sprite>& sprites, bool multipack,
                           std::vector<Atlas>& atlases, int& atlas_width, int& atlas_height) {
@@ -1068,7 +1088,13 @@ int run_spratlayout(int argc, char** argv) {
         cache.layout = build_output_cache_path(cache.base, cache.layout_signature);
     }
     cache.seed = build_seed_cache_path(cache.base, cache.seed_signature);
-    const bool use_incremental = settings.incremental && !settings.multipack;
+    // Grid cells come from the sprite order and size alone, so grid layouts are never pieced
+    // together from earlier positions (that would also skip the same-size check).
+    const bool reuse_positions = settings.mode != Mode::GRID;
+    if (settings.incremental && !reuse_positions) {
+        std::cerr << tr("Warning: --incremental is ignored in grid mode\n");
+    }
+    const bool use_incremental = settings.incremental && !settings.multipack && reuse_positions;
     if (use_incremental) {
         cache.incremental_signature = build_incremental_seed_signature(key, input_context.working_folder);
         cache.incremental = build_incremental_seed_cache_path(cache.base, cache.incremental_signature);
@@ -1136,19 +1162,21 @@ int run_spratlayout(int argc, char** argv) {
             pack_incremental_maxrects(incremental_seed, settings.padding,
                                       request.width_upper_bound, request.height_upper_bound,
                                       sprites, settings.allow_rotate,
-                                      seeded_sprites, atlas_width, atlas_height)) {
+                                      seeded_sprites, atlas_width, atlas_height) &&
+            fit_reused_atlas(settings, atlas_width, atlas_height)) {
             sprites = std::move(seeded_sprites);
             reused_layout_seed = true;
         }
     }
-    if (!reused_layout_seed &&
+    if (!reused_layout_seed && reuse_positions &&
         is_cache_file_fresh(cache.seed) &&
         load_layout_seed_cache(cache.seed, cache.seed_signature, seed_cache) &&
         seed_cache.padding == settings.padding) {
         have_layout_seed = true;
         if (try_apply_layout_seed(seed_cache, settings.padding,
                                   request.width_upper_bound, request.height_upper_bound,
-                                  sprites, seeded_sprites, atlas_width, atlas_height)) {
+                                  sprites, seeded_sprites, atlas_width, atlas_height) &&
+            fit_reused_atlas(settings, atlas_width, atlas_height)) {
             sprites = std::move(seeded_sprites);
             reused_layout_seed = true;
         }

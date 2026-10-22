@@ -224,3 +224,26 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/spratlayout_exclude_test.sh")
 else()
     message(WARNING "Skipping spratlayout_exclude test: script not found")
 endif()
+
+add_test(
+    NAME reused_layout_bounds
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/reused_layout_bounds_test.sh
+            $<TARGET_FILE:spratlayout>
+)
+
+add_test(
+    NAME locale_numeric
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/locale_numeric_test.sh
+            $<TARGET_FILE:spratlayout>
+            $<TARGET_FILE:spratpack>
+            $<TARGET_FILE:spratconvert>
+)
+
+add_test(
+    NAME spratlayout_unreadable_dir
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/spratlayout_unreadable_dir_test.sh
+            $<TARGET_FILE:spratlayout>
+)
+
+# These scripts exit 77 where the platform can't set up their scenario.
+set_tests_properties(locale_numeric spratlayout_unreadable_dir PROPERTIES SKIP_RETURN_CODE 77)

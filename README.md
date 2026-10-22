@@ -228,7 +228,7 @@ Profile definitions are searched in:
 - `--deduplicate none|exact|perceptual`: Detect duplicate sprites and create aliases (saves atlas space).
 - `--dedup-threshold N`: Max perceptual-hash distance (0-64, default `5`) for a pair to be compared in `perceptual` mode.
 - `--dedup-tolerance N`: Max per-channel pixel difference (0-255, default `8`) for `perceptual` mode to merge two sprites.
-- `--incremental`: Reuse positions of unchanged sprites from the previous run, packing only new/changed ones (single atlas only; falls back to a full repack if they don't fit). Also available as profile key `incremental=true`.
+- `--incremental`: Reuse positions of unchanged sprites from the previous run, packing only new/changed ones (single atlas only; falls back to a full repack if they don't fit). `pot` atlases keep power-of-two sides; `grid` mode ignores this option. Also available as profile key `incremental=true`.
 - `--sort name|none|stable[:metric]`: Order of sprites in layout (default: `none`).
 - `--scale F`: Pre-scale images (0.0 to 1.0). A trimmed sprite's packed size is chosen so that its original size scales to exactly `round(width × F)` × `round(height × F)`, so animation frames of one size keep one size at any scale.
 - `--threads N`: Parallelize the packing search.

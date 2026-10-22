@@ -367,11 +367,7 @@ public:
             if (input_.type == InputType::Directory) {
                 load_ignore_file(input_.working_folder / ".spratlayoutignore", input_.working_folder);
             }
-            for (const auto& entry : fs::recursive_directory_iterator(input_.working_folder)) {
-                if (entry.is_regular_file()) {
-                    add_source(entry.path(), false);
-                }
-            }
+            add_folder(input_.working_folder);
             return true;
         }
 
@@ -498,6 +494,27 @@ private:
     }
 
     // Strict sources (named in a list) must be valid images; others are skipped silently.
+    // Adds the images of a folder and its subfolders, in the order recursive_directory_iterator
+    // visits them. A folder that can't be read (e.g. no permission) is reported and skipped
+    // instead of aborting the scan; symlinked folders are not followed.
+    void add_folder(const fs::path& folder) {
+        std::error_code ec;
+        fs::directory_iterator it(folder, ec);
+        for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+            const fs::directory_entry& entry = *it;
+            std::error_code type_ec;
+            if (entry.is_directory(type_ec) && !entry.is_symlink(type_ec)) {
+                add_folder(entry.path());
+            } else if (entry.is_regular_file(type_ec)) {
+                add_source(entry.path(), false);
+            }
+        }
+        if (ec) {
+            std::cerr << tr("Warning: Skipping unreadable folder ") << to_quoted(folder)
+                      << " (" << ec.message() << ")\n";
+        }
+    }
+
     bool add_source(const fs::path& image_path, bool strict) {
         if (!is_supported_image_extension(image_path)) {
             if (strict) {
