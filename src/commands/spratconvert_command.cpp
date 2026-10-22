@@ -1675,7 +1675,9 @@ int run_spratconvert(int argc, char** argv) {
             if (frames.size() > 1) {
                 // Layout order is packing order (and aliases come last), so order
                 // frames by name: run_2 before run_10.
-                std::sort(frames.begin(), frames.end(), [&](int a, int b) {
+                // Stable, so names natural order can't tell apart ("run_02", "run_2") keep
+                // layout order on every platform.
+                std::stable_sort(frames.begin(), frames.end(), [&](int a, int b) {
                     return sprat::core::compare_natural(sprite_names[static_cast<size_t>(a)],
                                                         sprite_names[static_cast<size_t>(b)]) < 0;
                 });

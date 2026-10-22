@@ -1048,7 +1048,7 @@ int run_spratlayout(int argc, char** argv) {
     const bool enforce_name_order   = (args.has_frame_sort_override && args.frame_sort == FrameSort::Name);
     const bool enforce_stable_order = (args.has_frame_sort_override && args.frame_sort == FrameSort::Stable);
     if (enforce_name_order || enforce_stable_order) {
-        std::ranges::sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
+        std::ranges::stable_sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
             int cmp = sprat::core::compare_natural(lhs.path, rhs.path);
             if (cmp != 0) {
                 return cmp < 0;
