@@ -510,6 +510,10 @@ fs::path build_cache_path(const fs::path& folder) {
     std::error_code ec;
     fs::path normalized = fs::absolute(folder, ec);
     std::string folder_key = (!ec ? normalized.lexically_normal().string() : folder.string());
+    // Every cache of a folder hangs off this path. Keying it by the program version too keeps a
+    // new release from serving image measurements and layouts computed by an older one.
+    folder_key += '|';
+    folder_key += SPRAT_VERSION;
     uint64_t hash = sprat::core::fnv1a_hash(
         reinterpret_cast<const unsigned char*>(folder_key.data()), folder_key.size());
 

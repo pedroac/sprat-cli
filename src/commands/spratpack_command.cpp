@@ -22,6 +22,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -221,6 +222,29 @@ bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
 }
 
 
+// Sprites other than sprites[self] whose rectangles reach into [x0, x1) x [y0, y1). Extrude
+// and dilate write around a sprite but must never touch another sprite's pixels.
+std::vector<const Sprite*> other_sprites_in(const std::vector<Sprite>& sprites, size_t self,
+                                            int x0, int y0, int x1, int y1) {
+    std::vector<const Sprite*> others;
+    for (size_t i = 0; i < sprites.size(); ++i) {
+        const Sprite& o = sprites[i];
+        if (i != self && o.x < x1 && o.x + o.w > x0 && o.y < y1 && o.y + o.h > y0) {
+            others.push_back(&o);
+        }
+    }
+    return others;
+}
+
+bool inside_any(const std::vector<const Sprite*>& rects, int x, int y) {
+    return std::ranges::any_of(rects, [&](const Sprite* o) {
+        return x >= o->x && x < o->x + o->w && y >= o->y && y < o->y + o->h;
+    });
+}
+
+// Repeats each sprite's edge pixels `extrude` times outward. Pixels inside another sprite's
+// rectangle are left alone, so a layout with less padding than 2 * extrude is never corrupted;
+// the extrusion is just cut short there.
 void extrude_atlas(
     std::vector<unsigned char>& atlas,
     int atlas_width,
@@ -232,20 +256,28 @@ void extrude_atlas(
         return;
     }
 
-    auto set_pixel = [&](int dx, int dy, int sx, int sy) {
-        if (dx < 0 || dy < 0 || dx >= atlas_width || dy >= atlas_height ||
-            sx < 0 || sy < 0 || sx >= atlas_width || sy >= atlas_height) {
-            return;
-        }
-        size_t dest_offset = (static_cast<size_t>(dy) * atlas_width + dx) * NUM_CHANNELS;
-        size_t src_offset = (static_cast<size_t>(sy) * atlas_width + sx) * NUM_CHANNELS;
-        std::memcpy(&atlas[dest_offset], &atlas[src_offset], NUM_CHANNELS);
-    };
-
-    for (const auto& s : sprites) {
+    for (size_t si = 0; si < sprites.size(); ++si) {
+        const Sprite& s = sprites[si];
         if (s.w <= 0 || s.h <= 0) {
             continue;
         }
+        const long long grow = extrude;
+        const std::vector<const Sprite*> others = other_sprites_in(
+            sprites, si,
+            static_cast<int>(std::max<long long>(0, s.x - grow)), static_cast<int>(std::max<long long>(0, s.y - grow)),
+            static_cast<int>(std::min<long long>(atlas_width, static_cast<long long>(s.x) + s.w + grow)),
+            static_cast<int>(std::min<long long>(atlas_height, static_cast<long long>(s.y) + s.h + grow)));
+
+        auto set_pixel = [&](int dx, int dy, int sx, int sy) {
+            if (dx < 0 || dy < 0 || dx >= atlas_width || dy >= atlas_height ||
+                sx < 0 || sy < 0 || sx >= atlas_width || sy >= atlas_height || inside_any(others, dx, dy)) {
+                return;
+            }
+            size_t dest_offset = (static_cast<size_t>(dy) * atlas_width + dx) * NUM_CHANNELS;
+            size_t src_offset = (static_cast<size_t>(sy) * atlas_width + sx) * NUM_CHANNELS;
+            std::memcpy(&atlas[dest_offset], &atlas[src_offset], NUM_CHANNELS);
+        };
+
         // Extrude sides
         for (int e = 1; e <= extrude; ++e) {
             // Left & Right sides
@@ -263,19 +295,20 @@ void extrude_atlas(
         // Extrude corners
         for (int ey = 1; ey <= extrude; ++ey) {
             for (int ex = 1; ex <= extrude; ++ex) {
-                // Top-Left
                 set_pixel(s.x - ex, s.y - ey, s.x, s.y);
-                // Top-Right
                 set_pixel(s.x + s.w - 1 + ex, s.y - ey, s.x + s.w - 1, s.y);
-                // Bottom-Left
                 set_pixel(s.x - ex, s.y + s.h - 1 + ey, s.x, s.y + s.h - 1);
-                // Bottom-Right
                 set_pixel(s.x + s.w - 1 + ex, s.y + s.h - 1 + ey, s.x + s.w - 1, s.y + s.h - 1);
             }
         }
     }
 }
 
+// Fills the RGB of transparent pixels around and inside each sprite with the color of the
+// nearest visible pixel, `radius` pixels deep, keeping alpha at 0, so GPU filtering at sprite
+// edges does not pull in black. Each pass spreads from pixels colored by the previous one.
+// The fill stays within the sprite's rectangle grown by `radius` and never enters another
+// sprite's rectangle.
 void dilate_sprite_colors(
     std::vector<unsigned char>& atlas,
     int atlas_width,
@@ -287,74 +320,65 @@ void dilate_sprite_colors(
         return;
     }
 
-    // Two-buffer approach: read_buf holds the previous pass state, atlas is the write target.
-    // After each pass we copy only the affected sprite region back instead of the full atlas.
-    std::vector<unsigned char> read_buf = atlas;
-
-    auto get_pixel = [&](const std::vector<unsigned char>& buf, int px, int py, size_t channel) -> unsigned char {
-        if (px < 0 || py < 0 || px >= atlas_width || py >= atlas_height) {
-            return 0;
-        }
-        size_t offset = (static_cast<size_t>(py) * atlas_width + px) * NUM_CHANNELS + channel;
-        return buf[offset];
-    };
-
-    auto set_pixel_rgb = [&](int px, int py, unsigned char r, unsigned char g, unsigned char b) {
-        if (px < 0 || py < 0 || px >= atlas_width || py >= atlas_height) {
-            return;
-        }
-        size_t offset = (static_cast<size_t>(py) * atlas_width + px) * NUM_CHANNELS;
-        atlas[offset + CHANNEL_R] = r;
-        atlas[offset + CHANNEL_G] = g;
-        atlas[offset + CHANNEL_B] = b;
-    };
-
-    for (const auto& s : sprites) {
+    for (size_t si = 0; si < sprites.size(); ++si) {
+        const Sprite& s = sprites[si];
         if (s.w <= 0 || s.h <= 0) {
             continue;
         }
+        const long long grow = radius;
+        const int x0 = static_cast<int>(std::max<long long>(0, s.x - grow));
+        const int y0 = static_cast<int>(std::max<long long>(0, s.y - grow));
+        const int x1 = static_cast<int>(std::min<long long>(atlas_width, static_cast<long long>(s.x) + s.w + grow));
+        const int y1 = static_cast<int>(std::min<long long>(atlas_height, static_cast<long long>(s.y) + s.h + grow));
+        if (x0 >= x1 || y0 >= y1) {
+            continue;
+        }
+        const int rw = x1 - x0;
+        const int rh = y1 - y0;
 
-        // Clamp the dilate region to atlas bounds (sprite bbox expanded by 1 pixel)
-        const int region_y0 = std::max(0, s.y - 1);
-        const int region_y1 = std::min(atlas_height - 1, s.y + s.h);
-        const int region_x0 = std::max(0, s.x - 1);
-        const int region_x1 = std::min(atlas_width - 1, s.x + s.w);
-        const size_t region_row_bytes = static_cast<size_t>(region_x1 - region_x0 + 1) * NUM_CHANNELS;
+        const std::vector<const Sprite*> others = other_sprites_in(sprites, si, x0, y0, x1, y1);
 
-        // For each pass, dilate colors from opaque pixels to transparent neighbors
-        for (int pass = 0; pass < radius; ++pass) {
-            // Copy only the affected region from atlas to read_buf
-            for (int y = region_y0; y <= region_y1; ++y) {
-                size_t row_offset = (static_cast<size_t>(y) * atlas_width + region_x0) * NUM_CHANNELS;
-                std::memcpy(&read_buf[row_offset], &atlas[row_offset], region_row_bytes);
+        // 1 = visible or already filled: a source for the next pass.
+        std::vector<std::uint8_t> source(static_cast<size_t>(rw) * rh, 0);
+        for (int y = y0; y < y1; ++y) {
+            for (int x = x0; x < x1; ++x) {
+                const size_t offset = (static_cast<size_t>(y) * atlas_width + x) * NUM_CHANNELS;
+                source[static_cast<size_t>(y - y0) * rw + (x - x0)] = atlas[offset + CHANNEL_A] != 0 ? 1 : 0;
             }
-
-            // Check pixels around (and outside) each sprite
-            for (int y = region_y0; y <= region_y1; ++y) {
-                for (int x = region_x0; x <= region_x1; ++x) {
-                    // Only process transparent pixels
-                    if (get_pixel(read_buf, x, y, CHANNEL_A) != 0) {
+        }
+        std::vector<std::uint8_t> next = source;
+        constexpr int dx[] = {-1, 1, 0, 0};
+        constexpr int dy[] = {0, 0, -1, 1};
+        for (int pass = 0; pass < radius; ++pass) {
+            bool changed = false;
+            for (int y = y0; y < y1; ++y) {
+                for (int x = x0; x < x1; ++x) {
+                    const size_t local = static_cast<size_t>(y - y0) * rw + (x - x0);
+                    if (source[local] != 0 || inside_any(others, x, y)) {
                         continue;
                     }
-
-                    // Check 4 cardinal directions for opaque neighbors
-                    constexpr int dx[] = {-1, 1, 0, 0};
-                    constexpr int dy[] = {0, 0, -1, 1};
                     for (int dir = 0; dir < 4; ++dir) {
-                        int nx = x + dx[dir];
-                        int ny = y + dy[dir];
-                        unsigned char alpha = get_pixel(read_buf, nx, ny, CHANNEL_A);
-                        if (alpha != 0) {
-                            // Found opaque neighbor, copy its RGB
-                            unsigned char r = get_pixel(read_buf, nx, ny, CHANNEL_R);
-                            unsigned char g = get_pixel(read_buf, nx, ny, CHANNEL_G);
-                            unsigned char b = get_pixel(read_buf, nx, ny, CHANNEL_B);
-                            set_pixel_rgb(x, y, r, g, b);
-                            break;  // Only copy from first opaque neighbor
+                        const int nx = x + dx[dir];
+                        const int ny = y + dy[dir];
+                        if (nx < x0 || ny < y0 || nx >= x1 || ny >= y1 ||
+                            source[static_cast<size_t>(ny - y0) * rw + (nx - x0)] == 0) {
+                            continue;
                         }
+                        const size_t from = (static_cast<size_t>(ny) * atlas_width + nx) * NUM_CHANNELS;
+                        const size_t to = (static_cast<size_t>(y) * atlas_width + x) * NUM_CHANNELS;
+                        atlas[to + CHANNEL_R] = atlas[from + CHANNEL_R];
+                        atlas[to + CHANNEL_G] = atlas[from + CHANNEL_G];
+                        atlas[to + CHANNEL_B] = atlas[from + CHANNEL_B];
+                        next[local] = 1;
+                        changed = true;
+                        break;  // first visible or filled neighbour wins
                     }
                 }
             }
+            if (!changed) {
+                break;
+            }
+            source = next;
         }
     }
 }

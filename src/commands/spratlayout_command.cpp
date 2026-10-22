@@ -668,6 +668,11 @@ bool open_input(const LayoutArgs& args, const fs::path& cwd, InputContext& input
     return open_path_input(args.folder, input);
 }
 
+// Scales the packed (trimmed) size of each sprite. Trims stay in original-image pixels, and
+// exporters scale them separately (sprat::core::metadata_trim). Rounding the content and the
+// margins separately lets their sum drift from the scaled original size, so frames of one
+// animation would get different canvas sizes. The content size is therefore whatever is left
+// of the rounded canvas once the rounded margins are taken off.
 bool scale_sprites(std::vector<Sprite>& sprites, double scale) {
     if (scale == 1.0) {
         return true;
@@ -678,6 +683,21 @@ bool scale_sprites(std::vector<Sprite>& sprites, double scale) {
         if (!scale_dimension(s.w, scale, scaled_w) || !scale_dimension(s.h, scale, scaled_h)) {
             std::cerr << tr("Error: scaled sprite dimensions are invalid\n");
             return false;
+        }
+        sprat::core::Sprite trimmed;  // the layout's view of this sprite, for the shared trim rule
+        trimmed.path = s.path;
+        trimmed.src_x = s.trim_left;
+        trimmed.src_y = s.trim_top;
+        trimmed.trim_right = s.trim_right;
+        trimmed.trim_bottom = s.trim_bottom;
+        const sprat::core::MetadataTrim margins = sprat::core::metadata_trim(trimmed, 1.0);
+        const sprat::core::MetadataTrim scaled_margins = sprat::core::metadata_trim(trimmed, scale);
+        int canvas_w = 0;
+        int canvas_h = 0;
+        if (scale_dimension(s.w + margins.left + margins.right, scale, canvas_w) &&
+            scale_dimension(s.h + margins.top + margins.bottom, scale, canvas_h)) {
+            scaled_w = std::max(1, canvas_w - scaled_margins.left - scaled_margins.right);
+            scaled_h = std::max(1, canvas_h - scaled_margins.top - scaled_margins.bottom);
         }
         s.w = scaled_w;
         s.h = scaled_h;
@@ -727,8 +747,25 @@ bool measure_sprites(const std::vector<Sprite>& sprites, const LayoutSettings& s
     if (settings.max_height_limit > 0) {
         height_upper_bound = std::min(height_upper_bound, settings.max_height_limit);
     }
-    if (max_width > width_upper_bound || max_height > height_upper_bound) {
-        std::cerr << tr("Error: sprite dimensions exceed provided atlas limits\n");
+    // POT atlases can only be as large as the largest power of two within each limit.
+    const auto effective_limit = [&](int limit) {
+        return settings.mode == Mode::POT ? previous_power_of_two(limit) : limit;
+    };
+    const int width_limit = settings.max_width_limit > 0 ? effective_limit(settings.max_width_limit) : 0;
+    const int height_limit = settings.max_height_limit > 0 ? effective_limit(settings.max_height_limit) : 0;
+    if ((width_limit > 0 && max_width > width_limit) || (height_limit > 0 && max_height > height_limit) ||
+        max_width > width_upper_bound || max_height > height_upper_bound) {
+        std::cerr << tr("Error: sprites (up to ") << max_width << tr(" wide and ") << max_height
+                  << tr(" high, with padding) exceed the atlas limit");
+        if (width_limit > 0 || height_limit > 0) {
+            std::cerr << " (" << (width_limit > 0 ? std::to_string(width_limit) : std::string("-")) << "x"
+                      << (height_limit > 0 ? std::to_string(height_limit) : std::string("-"));
+            if (settings.mode == Mode::POT) {
+                std::cerr << tr(", the largest power of two within --max-width/--max-height");
+            }
+            std::cerr << ")";
+        }
+        std::cerr << "\n";
         return false;
     }
 
@@ -1123,7 +1160,21 @@ int run_spratlayout(int argc, char** argv) {
         atlases.push_back({atlas_width, atlas_height});
         for (auto& s : sprites) { s.atlas_index = 0; }
     } else if (settings.multipack) {
-        if (!pack_atlases(sprites, request.width_upper_bound, request.height_upper_bound, settings.padding,
+        // The upper bounds are min(limit, sum of sprite sizes). For pot atlases only the limit is
+        // a hard cap (rounded down to a power of two); the sum is just a search bound, so it is
+        // rounded up, or a small sheet could not fit the power of two its sprites need.
+        int multipack_w = request.width_upper_bound;
+        int multipack_h = request.height_upper_bound;
+        if (settings.mode == Mode::POT) {
+            const auto pot_bound = [](int sum, int limit) {
+                const int up = next_power_of_two(sum);
+                const int cap = limit > 0 ? previous_power_of_two(limit) : up;
+                return up > 0 ? std::min(up, cap) : cap;
+            };
+            multipack_w = pot_bound(request.sum_width, settings.max_width_limit);
+            multipack_h = pot_bound(request.sum_height, settings.max_height_limit);
+        }
+        if (!pack_atlases(sprites, multipack_w, multipack_h, settings.padding,
                           settings.mode, settings.optimize_target, settings.allow_rotate,
                           request.enforce_sort_order, atlases)) {
             std::cerr << tr("Error: failed to compute multipack layout\n");
@@ -1138,7 +1189,8 @@ int run_spratlayout(int argc, char** argv) {
         for (auto& s : sprites) { s.atlas_index = 0; }
     }
 
-    if (settings.padding > 0 && settings.mode != Mode::GRID &&
+    // Grid cells and power-of-two sizes are the point of those modes; keep them.
+    if (settings.padding > 0 && settings.mode != Mode::GRID && settings.mode != Mode::POT &&
         !tighten_atlas_bounds(sprites, settings.multipack, atlases, atlas_width, atlas_height)) {
         return 1;
     }

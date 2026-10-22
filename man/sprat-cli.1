@@ -281,6 +281,7 @@ Use an explicit profile configuration file.
 \fB\-\-mode\fR compact|pot|fast|grid
 Override packing mode from selected profile.
 \fBgrid\fR places every sprite in a uniform cell (sized to the largest frame) arranged left-to-right, top-to-bottom, so any frame can be addressed by column and row index.
+\fBpot\fR atlases are always powers of two, with or without padding; \fB\-\-max\-width\fR/\fB\-\-max\-height\fR allow the largest power of two within them.
 .TP
 \fB\-\-optimize\fR gpu|space
 Override optimization target from selected profile.
@@ -313,7 +314,7 @@ Target output resolution (for example \fB800x600\fR). Must be used together with
 Choose which axis ratio drives source/target resolution scaling. Default: \fBlargest\fR.
 .TP
 \fB\-\-scale\fR \fIF\fR
-Pre-scale factor applied before source/target resolution mapping. Valid range: \fB0 < F <= 1\fR. Overrides profile value.
+Pre-scale factor applied before source/target resolution mapping. Valid range: \fB0 < F <= 1\fR. Overrides profile value. Trimmed sprites keep an original size of exactly round(width \(mu F) \(mu round(height \(mu F).
 .TP
 \fB\-\-trim\-transparent\fR
 Enable transparent-border trimming (overrides profile value).
@@ -373,7 +374,10 @@ Output filename pattern (e.g. \fBatlas_%d.png\fR). Required for multipack layout
 Process only the specified atlas index from the layout.
 .TP
 \fB\-\-extrude\fR \fIN\fR
-Repeat edge pixels N times (overrides layout value).
+Repeat edge pixels N times (overrides layout value). Never writes inside another sprite's rectangle, so it is cut short where sprites are closer than 2 \(mu N.
+.TP
+\fB\-\-dilate\fR \fIN\fR
+Fill transparent pixels up to N pixels away from visible ones with their color, keeping alpha at 0, so GPU filtering does not pull in black at sprite edges. Never writes inside another sprite's rectangle.
 .TP
 \fB\-\-protect\fR
 Protect output PNG with basic XOR-based obfuscation.

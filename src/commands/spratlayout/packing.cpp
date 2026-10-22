@@ -1004,6 +1004,17 @@ bool compute_tight_atlas_bounds(const std::vector<Sprite>& sprites, int& out_wid
     return out_width > 0 && out_height > 0;
 }
 
+int previous_power_of_two(int v) {
+    if (v < 1) {
+        return 0;
+    }
+    int p = 1;
+    while (p <= v / 2) {
+        p <<= 1;
+    }
+    return p;
+}
+
 int next_power_of_two(int v) {
     if (v <= 1) {
         return 1;

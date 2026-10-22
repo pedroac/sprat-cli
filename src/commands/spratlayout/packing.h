@@ -139,6 +139,8 @@ bool compute_tight_atlas_bounds(const std::vector<Sprite>& sprites, int& out_wid
 
 // Returns -1 on overflow.
 int next_power_of_two(int v);
+// Largest power of two that is <= v (0 when v < 1).
+int previous_power_of_two(int v);
 
 // True if the candidate atlas is better than the best one for the optimize target:
 // GPU prefers the smaller longest side, SPACE the smaller area.

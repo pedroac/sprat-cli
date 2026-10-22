@@ -168,6 +168,14 @@ bool pack_atlases(
         return true;
     }
 
+    // POT atlases are rounded up to a power of two after packing, so pack within the largest
+    // power of two each limit allows; otherwise a sheet packed up to a limit such as 96 rounds
+    // up past it (to 128) and every candidate is rejected.
+    if (mode == Mode::POT) {
+        max_w = previous_power_of_two(max_w);
+        max_h = previous_power_of_two(max_h);
+    }
+
     // Grid mode: uniform-cell layout, split into equal-capacity atlases when needed.
     if (mode == Mode::GRID) {
         int cell_w = 0;

@@ -113,6 +113,14 @@ add_test(
 )
 
 add_test(
+    NAME layout_pack_regression
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/layout_pack_regression_test.sh
+            $<TARGET_FILE:spratlayout>
+            $<TARGET_FILE:spratpack>
+            $<TARGET_FILE:spratconvert>
+)
+
+add_test(
     NAME spratframes
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/spratframes_test.sh
             $<TARGET_FILE:spratframes>
