@@ -476,12 +476,11 @@ Compress atlases to GPU-native DXT formats (requires libsquish library).
 # Compress to DXT5 (RGBA with alpha channel)
 ./build/spratpack --gpu-compress dxt5 < layout.txt > atlas.dds
 ```
-DXT/BC compression provides 4:1 or 6:1 compression ratios and loads directly into GPU memory without decompression. Atlas dimensions must be multiples of 4 for DXT compatibility. Requires libsquish:
-- **Ubuntu/Debian**: `apt install libsquish-dev`
-- **macOS**: `brew install squish`
-- **Windows** (vcpkg): `squish` package in `vcpkg.json`
+DXT/BC compression provides 4:1 or 6:1 compression ratios and loads directly into GPU memory without decompression. Atlases are padded with transparent pixels to a multiple of 4 (Direct3D 10+ require it); sprite coordinates are unchanged, since the padding is at the right and bottom. Fully transparent pixels take the colour of the visible pixels in their 4x4 block before compression, so they don't darken sprite edges.
 
-When libsquish is not available, `--gpu-compress` will error with a helpful message.
+`--gpu-quality fast` (default) uses libsquish's range fit; `--gpu-quality best` uses cluster fit, about 1–2 dB better and roughly 25x slower (a 2048x2048 atlas: about 0.5 s versus 12 s on 12 threads). Compression runs on `--threads` threads and gives the same file with any count.
+
+libsquish is used when installed (`apt install libsquish-dev`, `brew install squish`, vcpkg `squish`); otherwise CMake downloads and builds the pinned 1.15 release into `_deps`. Pass `-DSPRAT_DOWNLOAD_SQUISH=OFF` to build without it, in which case `--gpu-compress` reports that it is not compiled in.
 
 ### Output Scale
 Scale the whole output atlas (dimensions and sprite positions) by a factor. `--scale-filter` selects the resampling filter.

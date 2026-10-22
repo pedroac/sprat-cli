@@ -384,117 +384,162 @@ void dilate_sprite_colors(
 }
 
 #ifdef SPRAT_HAS_SQUISH
+// A block's two colour endpoints are fitted to all 16 of its pixels, so the (invisible) RGB of
+// fully transparent pixels next to a sprite edge or in the padding would pull visible colours
+// towards it; libsquish's range fit ignores alpha weighting. Give every fully transparent pixel
+// the mean colour of the visible pixels of its 4x4 block instead.
+void fill_invisible_block_colours(std::vector<unsigned char>& rgba, int width, int height) {
+    for (int by = 0; by < height; by += 4) {
+        for (int bx = 0; bx < width; bx += 4) {
+            unsigned sum[3] = {0, 0, 0};
+            unsigned visible = 0;
+            for (int y = by; y < by + 4; ++y) {
+                for (int x = bx; x < bx + 4; ++x) {
+                    const unsigned char* p = &rgba[(static_cast<size_t>(y) * width + x) * NUM_CHANNELS];
+                    if (p[CHANNEL_A] != 0) {
+                        sum[0] += p[CHANNEL_R];
+                        sum[1] += p[CHANNEL_G];
+                        sum[2] += p[CHANNEL_B];
+                        ++visible;
+                    }
+                }
+            }
+            if (visible == 0 || visible == 16) {
+                continue;
+            }
+            for (int y = by; y < by + 4; ++y) {
+                for (int x = bx; x < bx + 4; ++x) {
+                    unsigned char* p = &rgba[(static_cast<size_t>(y) * width + x) * NUM_CHANNELS];
+                    if (p[CHANNEL_A] == 0) {
+                        p[CHANNEL_R] = static_cast<unsigned char>(sum[0] / visible);
+                        p[CHANNEL_G] = static_cast<unsigned char>(sum[1] / visible);
+                        p[CHANNEL_B] = static_cast<unsigned char>(sum[2] / visible);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Encodes the atlas as a single-level DXT1/DXT5 DDS texture. The image is padded with
+// transparent pixels to a multiple of 4 (Direct3D 10+ require it for block-compressed
+// textures; sprite coordinates are unchanged because the padding is at the right and bottom).
+// Rows of 4x4 blocks are independent, so strips of them are compressed on `threads` workers.
+// `best` selects libsquish's cluster fit, about 30x slower than the default range fit.
 std::vector<unsigned char> compress_to_dds(
     const std::vector<unsigned char>& rgba_data,
     int width,
     int height,
-    const std::string& format
+    bool dxt1,
+    bool best,
+    unsigned int threads
 ) {
-    std::vector<unsigned char> dds_output;
-
-    // Validate dimensions are multiple of 4 (DXT requirement)
-    if (width % 4 != 0 || height % 4 != 0) {
-        return dds_output;  // Return empty on error
+    const int padded_w = (width + 3) / 4 * 4;
+    const int padded_h = (height + 3) / 4 * 4;
+    std::vector<unsigned char> padded(static_cast<size_t>(padded_w) * padded_h * NUM_CHANNELS, 0);
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(&padded[static_cast<size_t>(y) * padded_w * NUM_CHANNELS],
+                    &rgba_data[static_cast<size_t>(y) * width * NUM_CHANNELS],
+                    static_cast<size_t>(width) * NUM_CHANNELS);
     }
+    fill_invisible_block_colours(padded, padded_w, padded_h);
+    const unsigned char* pixels = padded.data();
 
-    // Determine compression flags
-    int squish_flags = 0;
-    if (format == "dxt1" || format == "DXT1") {
-        squish_flags = squish::kDxt1 | squish::kColourClusterFit;
-    } else {
-        squish_flags = squish::kDxt5 | squish::kColourClusterFit;
-    }
+    // Weighting colour by alpha keeps transparent pixels (sprite margins, padding) from
+    // dragging the colours of visible pixels that share a 4x4 block towards their RGB.
+    const int squish_flags = (dxt1 ? squish::kDxt1 : squish::kDxt5) |
+                             (best ? squish::kColourClusterFit : squish::kColourRangeFit) |
+                             squish::kWeightColourByAlpha;
+    const size_t block_bytes = dxt1 ? 8 : 16;
+    const int blocks_x = padded_w / 4;
+    const int block_rows = padded_h / 4;
+    const size_t data_bytes = static_cast<size_t>(squish::GetStorageRequirements(padded_w, padded_h, squish_flags));
+    std::vector<unsigned char> dds(128 + data_bytes, 0);
 
-    // Compute compressed size (DXT1: width*height/2, DXT5: width*height)
-    size_t compressed_bytes = (format == "dxt1" || format == "DXT1")
-                              ? (static_cast<size_t>(width) * static_cast<size_t>(height)) / 2
-                              : static_cast<size_t>(width) * static_cast<size_t>(height);
-
-    // Build minimal DDS header (128 bytes)
-    struct DdsHeader {
-        uint32_t magic;               // 0x20534444 = "DDS "
-        uint32_t size;                // Header size (124 bytes)
-        uint32_t flags;               // Surface descriptor flags
-        uint32_t height;              // Texture height
-        uint32_t width;               // Texture width
-        uint32_t pitch_or_linear;     // Pitch or linear size
-        uint32_t depth;               // Texture depth (0 for 2D)
-        uint32_t mipmap_count;        // Number of mipmaps
-        uint32_t reserved[11];        // Reserved/unused
-        // PixelFormat (32 bytes)
-        struct {
-            uint32_t size;            // PixelFormat size (32 bytes)
-            uint32_t flags;           // Flags
-            uint32_t fourcc;          // FourCC code
-            uint32_t rgb_bit_count;   // RGB bits
-            uint32_t r_mask;          // Red mask
-            uint32_t g_mask;          // Green mask
-            uint32_t b_mask;          // Blue mask
-            uint32_t a_mask;          // Alpha mask
-        } pixel_format;
-        // Caps (16 bytes)
-        uint32_t caps1;
-        uint32_t caps2;
-        uint32_t caps3;
-        uint32_t caps4;
-        uint32_t reserved2;
+    // DDS_HEADER, little-endian (Microsoft's DDS reference).
+    size_t at = 0;
+    const auto put = [&](uint32_t v) {
+        for (int b = 0; b < 4; ++b) {
+            dds[at++] = static_cast<unsigned char>((v >> (8 * b)) & 0xFFU);
+        }
     };
-    static_assert(sizeof(DdsHeader) == 128, "DDS header must be 128 bytes");
+    constexpr uint32_t k_caps = 0x1, k_height = 0x2, k_width = 0x4, k_pixelformat = 0x1000;
+    constexpr uint32_t k_linearsize = 0x80000, k_fourcc = 0x4, k_texture = 0x1000;
+    put(0x20534444);  // "DDS "
+    put(124);         // header size
+    put(k_caps | k_height | k_width | k_pixelformat | k_linearsize);
+    put(static_cast<uint32_t>(padded_h));
+    put(static_cast<uint32_t>(padded_w));
+    put(static_cast<uint32_t>(data_bytes));  // linear size of the top level
+    put(0);                                  // depth
+    put(1);                                  // mipmap count
+    at += 11 * 4;                            // reserved
+    put(32);                                 // pixel format size
+    put(k_fourcc);
+    put(dxt1 ? 0x31545844 : 0x35545844);     // "DXT1" / "DXT5"
+    at += 5 * 4;                             // RGB bit count and masks (unused with FOURCC)
+    put(k_texture);                          // caps; caps2-4 and reserved stay 0
 
-    DdsHeader header = {};
-    header.magic = 0x20534444;  // "DDS "
-    header.size = 124;
-    header.flags = 0x0001 | 0x0002 | 0x0004 | 0x1000;  // CAPS | HEIGHT | WIDTH | LINEARSIZE
-    header.height = static_cast<uint32_t>(height);
-    header.width = static_cast<uint32_t>(width);
-    header.pitch_or_linear = static_cast<uint32_t>(compressed_bytes);
-    header.depth = 0;
-    header.mipmap_count = 1;
-
-    header.pixel_format.size = 32;
-    header.pixel_format.flags = 0x0004;  // FOURCC
-    header.pixel_format.fourcc = (format == "dxt1" || format == "DXT1") ? 0x31545844 : 0x35545844;  // "DXT1" or "DXT5"
-
-    header.caps1 = 0x1000;  // TEXTURE
-
-    // Write header
-    const unsigned char* header_bytes = reinterpret_cast<const unsigned char*>(&header);
-    dds_output.insert(dds_output.end(), header_bytes, header_bytes + sizeof(header));
-
-    // Compress and append data
-    std::vector<unsigned char> compressed(compressed_bytes);
-    squish::CompressImage(rgba_data.data(), static_cast<int>(width), static_cast<int>(height),
-                         compressed.data(), squish_flags);
-    dds_output.insert(dds_output.end(), compressed.begin(), compressed.end());
-
-    return dds_output;
+    unsigned char* blocks = dds.data() + 128;
+    const int workers = static_cast<int>(std::clamp<unsigned int>(threads, 1, static_cast<unsigned int>(block_rows)));
+    const int rows_per_worker = (block_rows + workers - 1) / workers;
+    const auto compress_rows = [&](int first_row, int row_count) {
+        squish::CompressImage(pixels + static_cast<size_t>(first_row) * 4 * padded_w * NUM_CHANNELS,
+                              padded_w, row_count * 4,
+                              blocks + static_cast<size_t>(first_row) * blocks_x * block_bytes,
+                              squish_flags);
+    };
+    std::vector<std::thread> pool;
+    for (int first = rows_per_worker; first < block_rows; first += rows_per_worker) {
+        pool.emplace_back(compress_rows, first, std::min(rows_per_worker, block_rows - first));
+    }
+    compress_rows(0, std::min(rows_per_worker, block_rows));
+    for (auto& t : pool) {
+        t.join();
+    }
+    return dds;
 }
 #endif
 
 #ifdef SPRAT_HAS_WEBP
+// Lossless (quality 100) keeps every pixel exactly. libwebp's simple lossless API rewrites the
+// colour of fully transparent pixels, which would undo --dilate and change the atlas, so the
+// advanced API is used with `exact` set.
 std::vector<unsigned char> encode_webp(
     const unsigned char* rgba_data,
     int width,
     int height,
     int quality
 ) {
-    uint8_t* output = nullptr;
-    size_t output_size = 0;
-
-    if (quality >= 100) {
-        output_size = WebPEncodeLosslessRGBA(rgba_data, width, height,
-                                              width * 4, &output);
-    } else {
-        float q = (quality < 0) ? 100.0f : static_cast<float>(quality);
-        output_size = WebPEncodeRGBA(rgba_data, width, height,
-                                      width * 4, q, &output);
-    }
-
     std::vector<unsigned char> result;
-    if (output_size > 0 && output) {
-        result.assign(output, output + output_size);
+    WebPConfig config;
+    WebPPicture picture;
+    if (!WebPConfigInit(&config) || !WebPPictureInit(&picture)) {
+        return result;
     }
-    WebPFree(output);
+    const bool lossless = quality >= 100 || quality < 0;
+    config.lossless = lossless ? 1 : 0;
+    config.quality = lossless ? 75.0f : static_cast<float>(quality);  // lossless: effort, not fidelity
+    config.exact = lossless ? 1 : 0;
+    if (!WebPValidateConfig(&config)) {
+        return result;
+    }
+    picture.use_argb = 1;
+    picture.width = width;
+    picture.height = height;
+    if (!WebPPictureImportRGBA(&picture, rgba_data, width * 4)) {
+        WebPPictureFree(&picture);
+        return result;
+    }
+    WebPMemoryWriter writer;
+    WebPMemoryWriterInit(&writer);
+    picture.writer = WebPMemoryWrite;
+    picture.custom_ptr = &writer;
+    if (WebPEncode(&config, &picture) && writer.size > 0) {
+        result.assign(writer.mem, writer.mem + writer.size);
+    }
+    WebPMemoryWriterClear(&writer);
+    WebPPictureFree(&picture);
     return result;
 }
 #endif
@@ -571,6 +616,7 @@ void print_usage() {
               << tr("  --extrude N            Repeat edge pixels N times (overrides layout)\n")
               << tr("  --dilate N             Bleed opaque pixels into transparent neighbors (N passes)\n")
               << tr("  --gpu-compress FORMAT  Compress to DDS: dxt1 or dxt5 (requires libsquish)\n")
+              << tr("  --gpu-quality fast|best  DDS compression quality (default: fast; best is much slower)\n")
               << tr("  --frame-lines          Draw rectangle outlines for each sprite\n")
               << tr("  --line-width N         Outline thickness in pixels (default: 1)\n")
               << tr("  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n")
@@ -605,7 +651,8 @@ int run_spratpack(int argc, char** argv) {
     bool has_extrude_override = false;
     int dilate = 0;
     bool has_dilate_override = false;
-    std::string gpu_compress_format;
+    std::string gpu_compress_format;  // lowercase: dxt1 or dxt5
+    bool gpu_quality_best = false;
     bool has_gpu_compress = false;
     std::string output_format = "png";
     int quality = -1;  // -1 = default (lossless for webp/avif)
@@ -613,7 +660,7 @@ int run_spratpack(int argc, char** argv) {
     double output_scale = 1.0;
     static const std::unordered_set<std::string> k_value_options = {
         "--atlas", "-a", "--output", "-o", "--atlas-index", "--extrude", "--dilate",
-        "--gpu-compress", "--line-width", "--line-color", "--scale-filter", "--threads",
+        "--gpu-compress", "--gpu-quality", "--line-width", "--line-color", "--scale-filter", "--threads",
         "--format", "--quality", "--path-suffix", "--output-scale"
     };
     for (int i = 1; i < argc; ++i) {
@@ -661,12 +708,12 @@ int run_spratpack(int argc, char** argv) {
             }
             has_dilate_override = true;
         } else if (arg == "--gpu-compress" && i + 1 < argc) {
-            gpu_compress_format = argv[++i];
-            std::string lower_format = gpu_compress_format;
-            std::transform(lower_format.begin(), lower_format.end(), lower_format.begin(),
-                          [](unsigned char c) { return std::tolower(c); });
-            if (lower_format != "dxt1" && lower_format != "dxt5") {
-                std::cerr << tr("Invalid gpu-compress format: ") << gpu_compress_format << tr(" (must be dxt1 or dxt5)\n");
+            const std::string value = argv[++i];
+            gpu_compress_format = value;
+            std::transform(gpu_compress_format.begin(), gpu_compress_format.end(), gpu_compress_format.begin(),
+                          [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (gpu_compress_format != "dxt1" && gpu_compress_format != "dxt5") {
+                std::cerr << tr("Invalid gpu-compress format: ") << value << tr(" (must be dxt1 or dxt5)\n");
                 return 1;
             }
 #ifndef SPRAT_HAS_SQUISH
@@ -674,6 +721,13 @@ int run_spratpack(int argc, char** argv) {
             return 1;
 #endif
             has_gpu_compress = true;
+        } else if (arg == "--gpu-quality" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (value != "fast" && value != "best") {
+                std::cerr << tr("Invalid gpu-quality: ") << value << tr(" (must be fast or best)\n");
+                return 1;
+            }
+            gpu_quality_best = value == "best";
         } else if (arg == "--frame-lines") {
             draw_frame_lines = true;
         } else if (arg == "--line-width" && i + 1 < argc) {
@@ -1162,11 +1216,12 @@ int run_spratpack(int argc, char** argv) {
 
 #ifdef SPRAT_HAS_SQUISH
         if (has_gpu_compress) {
-            output_data = compress_to_dds(atlas_data, output_width, output_height, gpu_compress_format);
-            if (output_data.empty()) {
-                std::cerr << tr("Error: Failed to compress to DDS for atlas ") << atlas_idx << tr(" (atlas dimensions must be multiple of 4)\n");
-                return 1;
-            }
+            unsigned int dds_threads = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
+#ifdef __EMSCRIPTEN__
+            dds_threads = 1;
+#endif
+            output_data = compress_to_dds(atlas_data, output_width, output_height,
+                                          gpu_compress_format == "dxt1", gpu_quality_best, dds_threads);
             output_extension = ".dds";
         } else
 #endif

@@ -385,6 +385,18 @@ Protect output PNG with basic XOR-based obfuscation.
 \fB\-\-zopfli\fR
 Optimize output PNG using Zopfli (very slow). Only valid for PNG output; fails if zopflipng support was not compiled in.
 .TP
+\fB\-\-format\fR \fBpng\fR|\fBwebp\fR|\fBavif\fR
+Output image format. Default: \fBpng\fR. WebP and AVIF need libwebp/libavif at build time.
+.TP
+\fB\-\-quality\fR \fIN\fR
+WebP/AVIF quality 0\(en100. Default and \fB100\fR: lossless, keeping every pixel exactly, including the colour of transparent pixels.
+.TP
+\fB\-\-gpu\-compress\fR \fBdxt1\fR|\fBdxt5\fR
+Write a DXT1 or DXT5 DDS texture instead of an image (libsquish). The atlas is padded with transparent pixels to a multiple of 4.
+.TP
+\fB\-\-gpu\-quality\fR \fBfast\fR|\fBbest\fR
+DDS compression quality. Default: \fBfast\fR (range fit). \fBbest\fR (cluster fit) is slightly better and much slower.
+.TP
 \fB\-\-output\-scale\fR \fIFACTOR\fR
 Scale the output atlas dimensions and sprite positions by \fIFACTOR\fR (for example \fB0.5\fR for half size). Uses the filter selected by \fB\-\-scale\-filter\fR.
 .TP

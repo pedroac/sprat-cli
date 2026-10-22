@@ -221,9 +221,16 @@ if(NOT ZOPFLIPNG_FOUND)
     endif()
 endif()
 
-# Squish (libsquish) detection for GPU compression
+# Squish (libsquish) for GPU compression (spratpack --gpu-compress): a system library when
+# one is installed, otherwise the pinned upstream release is downloaded into _deps.
+option(SPRAT_DOWNLOAD_SQUISH "Download and build libsquish when it is not installed" ON)
 if(PkgConfig_FOUND)
     pkg_check_modules(SQUISH squish)
+endif()
+# A cached path to a library that was uninstalled since would break the link; look again.
+if(SQUISH_LIBRARY AND NOT EXISTS "${SQUISH_LIBRARY}")
+    unset(SQUISH_LIBRARY CACHE)
+    unset(SQUISH_INCLUDE_DIR CACHE)
 endif()
 
 if(NOT SQUISH_FOUND)
@@ -242,6 +249,42 @@ if(NOT SQUISH_FOUND)
                       DOC "Path to squish DLL")
         endif()
     endif()
+endif()
+
+if(NOT SQUISH_FOUND AND SPRAT_DOWNLOAD_SQUISH AND NOT EMSCRIPTEN)
+    include(FetchContent)
+    if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)  # extracted files get the extraction time
+    endif()
+    FetchContent_Declare(
+        squish
+        URL https://downloads.sourceforge.net/project/libsquish/libsquish-1.15.tgz
+        URL_HASH SHA256=628796eeba608866183a61d080d46967c9dda6723bc0a3ec52324c85d2147269
+    )
+    FetchContent_GetProperties(squish)
+    if(NOT squish_POPULATED)
+        if(POLICY CMP0169)
+            cmake_policy(SET CMP0169 OLD)
+        endif()
+        FetchContent_Populate(squish)
+    endif()
+    # libsquish adds -msse2 on every non-Windows platform, which arm64 compilers reject, and
+    # builds with OpenMP flags that would not reach spratpack's link line; spratpack runs the
+    # compression on its own threads instead.
+    set(_sprat_squish_sse2 OFF)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
+        set(_sprat_squish_sse2 ON)
+    endif()
+    set(BUILD_SQUISH_WITH_SSE2 ${_sprat_squish_sse2} CACHE BOOL "" FORCE)
+    set(BUILD_SQUISH_WITH_OPENMP OFF CACHE BOOL "" FORCE)
+    set(BUILD_SQUISH_EXTRA OFF CACHE BOOL "" FORCE)
+    # libsquish declares cmake_minimum_required(2.8.3), which CMake 4 rejects without this.
+    set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE INTERNAL "")
+    add_subdirectory(${squish_SOURCE_DIR} ${squish_BINARY_DIR} EXCLUDE_FROM_ALL)
+    set(SQUISH_LIBRARIES squish)
+    set(SQUISH_INCLUDE_DIRS ${squish_SOURCE_DIR})
+    set(SQUISH_FOUND TRUE)
+    message(STATUS "libsquish: building the downloaded 1.15 release")
 endif()
 
 # libwebp detection
@@ -468,7 +511,6 @@ add_library(spratcore STATIC
     src/commands/spratlayout/profiles.cpp
     src/commands/spratlayout/search.cpp
     src/commands/spratlayout/sprites.cpp
-    src/commands/spratpack_command.cpp
     src/commands/spratconvert_command.cpp
     src/commands/spratframes_command.cpp
     src/commands/spratunpack_command.cpp
@@ -501,7 +543,9 @@ target_link_libraries(spratlayout PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratlayout PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratlayout SYSTEM PRIVATE ${STB_DIR})
 
-add_executable(spratpack src/spratpack.cpp)
+# spratpack's command is built into the executable, not spratcore, because its optional
+# codecs (Zopfli, libsquish, WebP, AVIF) are configured on this target below.
+add_executable(spratpack src/spratpack.cpp src/commands/spratpack_command.cpp)
 target_link_libraries(spratpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 if(ZOPFLIPNG_FOUND)
     target_link_libraries(spratpack PRIVATE ${ZOPFLIPNG_LIBRARIES})

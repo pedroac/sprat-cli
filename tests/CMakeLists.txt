@@ -113,6 +113,12 @@ add_test(
 )
 
 add_test(
+    NAME codec_output
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/codec_output_test.sh
+            $<TARGET_FILE:spratpack>
+)
+
+add_test(
     NAME layout_pack_regression
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/layout_pack_regression_test.sh
             $<TARGET_FILE:spratlayout>
