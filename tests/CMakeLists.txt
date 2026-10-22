@@ -247,3 +247,38 @@ add_test(
 
 # These scripts exit 77 where the platform can't set up their scenario.
 set_tests_properties(locale_numeric spratlayout_unreadable_dir PROPERTIES SKIP_RETURN_CODE 77)
+
+add_test(
+    NAME write_failure
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/write_failure_test.sh
+            $<TARGET_FILE:spratlayout>
+            $<TARGET_FILE:spratpack>
+            $<TARGET_FILE:spratconvert>
+            $<TARGET_FILE:spratunpack>
+)
+set_tests_properties(write_failure PROPERTIES SKIP_RETURN_CODE 77)
+
+add_test(
+    NAME folder_order
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/folder_order_test.sh
+            $<TARGET_FILE:spratlayout>
+)
+
+# spratlayout caches layouts in the temp directory, keyed by VERSION only, so a test
+# could reuse a layout cached by an earlier build. Every test gets its own temp
+# directory, emptied before each ctest run by the reset_test_cache fixture.
+set(SPRAT_TEST_CACHE_ROOT "${CMAKE_CURRENT_BINARY_DIR}/test-cache")
+get_property(_sprat_tests DIRECTORY PROPERTY TESTS)
+string(REPLACE ";" "|" _sprat_test_names "${_sprat_tests}")
+add_test(
+    NAME reset_test_cache
+    COMMAND ${CMAKE_COMMAND} -DROOT=${SPRAT_TEST_CACHE_ROOT} -DNAMES=${_sprat_test_names}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/reset_test_cache.cmake
+)
+set_tests_properties(reset_test_cache PROPERTIES FIXTURES_SETUP sprat_test_cache)
+foreach(_test IN LISTS _sprat_tests)
+    set(_dir "${SPRAT_TEST_CACHE_ROOT}/${_test}")
+    set_tests_properties(${_test} PROPERTIES
+        FIXTURES_REQUIRED sprat_test_cache
+        ENVIRONMENT "TMPDIR=${_dir};TMP=${_dir};TEMP=${_dir}")
+endforeach()

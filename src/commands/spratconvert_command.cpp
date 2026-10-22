@@ -35,6 +35,7 @@ namespace fs = std::filesystem;
 #include <system_error>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
+#include "core/file_io.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
 #include "core/fnv1a.h"
@@ -1711,13 +1712,12 @@ int run_spratconvert(int argc, char** argv) {
             int exit_code = 0;
             for (const auto& fe : result.files) {
                 const fs::path out_path = fs::path(out_dir) / fe.filename;
-                std::ofstream out_file(out_path, std::ios::binary);
-                if (!out_file) {
-                    std::cerr << tr("Failed to open output file: ") << out_path.string() << "\n";
+                std::string write_error;
+                if (!sprat::core::write_file(out_path, fe.content, write_error)) {
+                    std::cerr << tr("Failed to write output file ") << to_quoted(out_path.string())
+                              << ": " << write_error << "\n";
                     exit_code = 1;
-                    continue;
                 }
-                out_file << fe.content;
             }
             return exit_code;
         }
@@ -1732,12 +1732,12 @@ int run_spratconvert(int argc, char** argv) {
             }
             const std::string out_filename = file_stem + result.extension;
             const fs::path out_path = fs::path(out_dir) / out_filename;
-            std::ofstream out_file(out_path, std::ios::binary);
-            if (!out_file) {
-                std::cerr << tr("Failed to open output file: ") << out_path.string() << "\n";
+            std::string write_error;
+            if (!sprat::core::write_file(out_path, result.content, write_error)) {
+                std::cerr << tr("Failed to write output file ") << to_quoted(out_path.string())
+                          << ": " << write_error << "\n";
                 return 1;
             }
-            out_file << result.content;
             return 0;
         }
 

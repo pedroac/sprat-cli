@@ -3,6 +3,7 @@
 #include <archive.h>
 #include <archive_entry.h>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cerrno>
@@ -368,6 +369,13 @@ public:
                 load_ignore_file(input_.working_folder / ".spratlayoutignore", input_.working_folder);
             }
             add_folder(input_.working_folder);
+            // Directory order depends on the filesystem (ext4 hash order, NTFS, APFS, ...),
+            // so the same folder would give different layouts on different machines.
+            // Lists keep the order they were written in.
+            std::ranges::stable_sort(sources_, [](const ImageSource& a, const ImageSource& b) {
+                const int cmp = sprat::core::compare_natural(a.path, b.path);
+                return cmp != 0 ? cmp < 0 : a.path < b.path;  // "a01" vs "a1": still a fixed order
+            });
             return true;
         }
 

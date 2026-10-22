@@ -72,6 +72,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 - Without `-DBUILD_TESTING=ON`, `ctest` finds no tests.
+- Each test gets its own layout cache (`TMPDIR`), emptied before every `ctest` run by the
+  `reset_test_cache` fixture; cached layouts are keyed by `VERSION` only, so outside the
+  tests point `TMPDIR` at a fresh folder when checking a layout change by hand.
 - Add or update tests for every behavior change or bug fix.
 - If output intentionally changes, regenerate baselines with
   `scripts/update_asset_baselines.sh` and review `git diff tests/baselines`.

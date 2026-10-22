@@ -41,6 +41,7 @@
 #include <archive_entry.h>
 #include "core/layout_parser.h"
 #include "core/checked_math.h"
+#include "core/file_io.h"
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
@@ -1314,12 +1315,14 @@ int run_spratpack(int argc, char** argv) {
                 std::cerr << tr("Invalid output pattern: ") << pattern_error << "\n";
                 return 1;
             }
-            std::ofstream out_file(filename, std::ios::binary);
-            if (!out_file) {
-                std::cerr << tr("Error: Failed to open output file: ") << filename << "\n";
+            std::string write_error;
+            if (!sprat::core::write_file(filename,
+                    std::string_view(reinterpret_cast<const char*>(output_data.data()), output_data.size()),
+                    write_error)) {
+                std::cerr << tr("Error: Failed to write output file ") << to_quoted(filename)
+                          << ": " << write_error << "\n";
                 return 1;
             }
-            out_file.write(reinterpret_cast<const char*>(output_data.data()), static_cast<std::streamsize>(output_data.size()));
         }
     }
 

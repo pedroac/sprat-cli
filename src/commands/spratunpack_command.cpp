@@ -24,6 +24,7 @@ namespace fs = std::filesystem;
 #include <thread>
 #include <iterator>
 #include "core/cli_parse.h"
+#include "core/file_io.h"
 #include "core/layout_parser.h"
 
 #ifdef _WIN32
@@ -841,11 +842,7 @@ private:
         std::cout << tr("Unpacking ") << frames_.size() << tr(" frames to ") << to_quoted(config_.output_dir.string()) << tr("...\n");
 
         return encode_and_write([&](const SpriteFrame& frame, const std::vector<unsigned char>& png) {
-            if (!save_png(frame, png)) {
-                std::cerr << tr("Error: Failed to save sprite ") << to_quoted(frame.name) << "\n";
-                return false;
-            }
-            return true;
+            return save_png(frame, png);  // reports its own error
         });
     }
 
@@ -981,9 +978,14 @@ private:
             return false;
         }
 
-        std::ofstream out(output_path, std::ios::binary);
-        out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
-        return static_cast<bool>(out);
+        std::string write_error;
+        if (!sprat::core::write_file(output_path,
+                std::string_view(reinterpret_cast<const char*>(png.data()), png.size()), write_error)) {
+            std::cerr << tr("Error: Failed to write ") << to_quoted(output_path.string())
+                      << ": " << write_error << "\n";
+            return false;
+        }
+        return true;
     }
 };
 

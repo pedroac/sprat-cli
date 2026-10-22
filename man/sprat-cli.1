@@ -20,7 +20,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-rotate\fR]
 [\fB\-\-rotate\-direction\fR \fIcw|ccw\fR]
 [\fB\-\-multipack\fR]
-[\fB\-\-sort\fR name|none]
+[\fB\-\-sort\fR name|none|stable[:\fImetric\fR]]
 [\fB\-\-threads\fR \fIN\fR]
 [\fB\-\-debug\fR]
 .PP
@@ -340,8 +340,8 @@ Maximum Hamming distance (0-64) between perceptual hashes for a pair to be compa
 \fB\-\-dedup\-tolerance\fR \fIN\fR
 Maximum per-channel difference (0-255) between corresponding pixels for \fB\-\-deduplicate perceptual\fR to merge two sprites. \fB0\fR requires identical visible pixels. Default: \fB8\fR.
 .TP
-\fB\-\-sort\fR name|none
-Order of sprites in layout. \fBname\fR sorts by filename using natural ordering and enforces that order in the output regardless of packing optimizations. \fBnone\fR allows the packer to reorder sprites for better packing efficiency. Default: \fBnone\fR.
+\fB\-\-sort\fR name|none|stable[:\fImetric\fR]
+Order of sprites in layout. \fBname\fR sorts by filename using natural ordering and enforces that order in the output regardless of packing optimizations. \fBnone\fR allows the packer to reorder sprites for better packing efficiency. \fBstable\fR is a deterministic sort by size then path; \fImetric\fR is \fBarea\fR (default), \fBmaxside\fR, \fBheight\fR, \fBwidth\fR or \fBperimeter\fR. Default: \fBnone\fR. Images of a folder or archive are always read in natural filename order, so a folder gives the same layout on every filesystem; list files and \fB\-\-stdin\-list\fR keep their own order.
 .TP
 \fB\-\-threads\fR \fIN\fR
 Number of worker threads used during compact-mode packing (\fB\-\-preset quality\fR or \fB\-\-preset small\fR).
