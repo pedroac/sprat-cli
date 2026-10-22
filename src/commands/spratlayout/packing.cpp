@@ -196,6 +196,10 @@ bool pack_binary_tree(std::vector<Sprite>& sprites, int width, int height, int p
     return try_pack(root, sprites, padding, allow_rotate);
 }
 
+// The sorts below compare sizes only, so sprites of equal size keep their input order (the
+// natural file-name order of a folder, or a list's own order). std::sort leaves ties in an
+// order of its own, which differs between standard libraries: the same sprites packed into
+// different places on Linux, macOS and Windows.
 bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
     auto cmp_height = [](const Sprite& a, const Sprite& b) {
         if (a.h != b.h) { return a.h > b.h;
@@ -237,19 +241,19 @@ bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
 
     switch (mode) {
         case SortMode::Height:
-            std::ranges::sort(sprites, cmp_height);
+            std::ranges::stable_sort(sprites, cmp_height);
             return true;
         case SortMode::Width:
-            std::ranges::sort(sprites, cmp_width);
+            std::ranges::stable_sort(sprites, cmp_width);
             return true;
         case SortMode::Area:
-            std::ranges::sort(sprites, cmp_area);
+            std::ranges::stable_sort(sprites, cmp_area);
             return true;
         case SortMode::MaxSide:
-            std::ranges::sort(sprites, cmp_max_side);
+            std::ranges::stable_sort(sprites, cmp_max_side);
             return true;
         case SortMode::Perimeter:
-            std::ranges::sort(sprites, cmp_perimeter);
+            std::ranges::stable_sort(sprites, cmp_perimeter);
             return true;
         case SortMode::None:
             return true;
@@ -263,7 +267,7 @@ void sort_sprites_stable(std::vector<Sprite>& sprites, StableMetric metric) {
     };
     switch (metric) {
         case StableMetric::Area:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+            std::ranges::stable_sort(sprites, [&](const Sprite& a, const Sprite& b) {
                 const long long area_a = static_cast<long long>(a.w) * a.h;
                 const long long area_b = static_cast<long long>(b.w) * b.h;
                 if (area_a != area_b) { return area_a > area_b; }
@@ -273,7 +277,7 @@ void sort_sprites_stable(std::vector<Sprite>& sprites, StableMetric metric) {
             });
             break;
         case StableMetric::MaxSide:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+            std::ranges::stable_sort(sprites, [&](const Sprite& a, const Sprite& b) {
                 const int max_a = std::max(a.w, a.h);
                 const int max_b = std::max(b.w, b.h);
                 if (max_a != max_b) { return max_a > max_b; }
@@ -284,21 +288,21 @@ void sort_sprites_stable(std::vector<Sprite>& sprites, StableMetric metric) {
             });
             break;
         case StableMetric::Height:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+            std::ranges::stable_sort(sprites, [&](const Sprite& a, const Sprite& b) {
                 if (a.h != b.h) { return a.h > b.h; }
                 if (a.w != b.w) { return a.w > b.w; }
                 return path_cmp(a, b);
             });
             break;
         case StableMetric::Width:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+            std::ranges::stable_sort(sprites, [&](const Sprite& a, const Sprite& b) {
                 if (a.w != b.w) { return a.w > b.w; }
                 if (a.h != b.h) { return a.h > b.h; }
                 return path_cmp(a, b);
             });
             break;
         case StableMetric::Perimeter:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
+            std::ranges::stable_sort(sprites, [&](const Sprite& a, const Sprite& b) {
                 const int p_a = a.w + a.h;
                 const int p_b = b.w + b.h;
                 if (p_a != p_b) { return p_a > p_b; }
@@ -561,8 +565,8 @@ bool pack_incremental_maxrects(
         std::swap(free_rects, next_free);
     }
 
-    // Sort new sprites by area descending
-    std::ranges::sort(new_sprites, [](const Sprite& a, const Sprite& b) {
+    // Sort new sprites by area descending (stable: see sort_sprites_by_mode)
+    std::ranges::stable_sort(new_sprites, [](const Sprite& a, const Sprite& b) {
         return (a.w * a.h) > (b.w * b.h);
     });
 

@@ -35,6 +35,9 @@ export XDG_CONFIG_HOME="$tmp_dir/.config"
 # string order differs from their natural order.
 frames_dir="$tmp_dir/frames"
 mkdir -p "$frames_dir"
+# The physical path: --stdin-list takes its root from the working directory, which the OS
+# reports resolved (macOS: /var/folders/... is /private/var/folders/...).
+frames_dir="$(cd "$frames_dir" && pwd -P)"
 names=(walk1 walk2 walk3 walk10 walk11 walk20 idle)
 sources=("$croc_dir"/*/*.png)
 for ((i = ${#names[@]} - 1; i >= 0; i--)); do

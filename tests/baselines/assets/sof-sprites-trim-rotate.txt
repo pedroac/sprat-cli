@@ -6,32 +6,32 @@ root "<assets>"
 scale 1
 atlas 294,306
 sprite "Streets of Fight files/Sprites/Enemy-Punk/Hurt/hurt4.png" 0,0 62,16 12,47 22,0
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Walk/walk4.png" 64,0 52,24 31,11 41,0 rotated
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Walk/walk3.png" 118,0 52,24 31,11 41,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Walk/walk3.png" 64,0 52,24 31,11 41,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Walk/walk4.png" 118,0 52,24 31,11 41,0 rotated
 sprite "Streets of Fight files/Sprites/Enemy-Punk/Walk/walk2.png" 172,0 51,24 31,12 41,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Jab/jab2.png" 225,0 50,45 32,18 14,0
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Punch/punch1.png" 0,18 50,28 31,13 37,0 rotated
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Walk/walk1.png" 64,26 50,28 31,13 37,0 rotated
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle1.png" 118,26 50,28 31,13 37,0 rotated
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Hurt/hurt1.png" 172,26 50,28 31,13 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Hurt/hurt1.png" 0,18 50,28 31,13 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle1.png" 64,26 50,28 31,13 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Punch/punch1.png" 118,26 50,28 31,13 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Walk/walk1.png" 172,26 50,28 31,13 37,0 rotated
 sprite "Streets of Fight files/Sprites/Enemy-Punk/Punch/punch3.png" 225,47 49,45 11,18 36,0
 sprite "Streets of Fight files/Sprites/Enemy-Punk/Hurt/hurt3.png" 0,48 49,40 23,22 24,1
 sprite "Streets of Fight files/Sprites/Enemy-Punk/Hurt/hurt2.png" 64,56 49,32 32,14 32,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Dive_kick/dive_kick4.png" 118,56 49,32 36,18 11,13
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle4.png" 172,56 49,28 31,14 37,0 rotated
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle2.png" 172,86 49,28 31,14 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle2.png" 172,56 49,28 31,14 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle4.png" 172,86 49,28 31,14 37,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Kick/kick4.png" 0,90 48,38 30,25 18,0
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Jump_kick/jump_kick2.png" 64,90 48,36 33,10 27,5 rotated
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Punch/punch2.png" 118,90 48,28 34,15 34,0 rotated
-sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle3.png" 225,94 48,28 31,15 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Idle/idle3.png" 118,90 48,28 31,15 37,0 rotated
+sprite "Streets of Fight files/Sprites/Enemy-Punk/Punch/punch2.png" 225,94 48,28 34,15 34,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk5.png" 172,116 47,18 39,16 39,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk10.png" 277,0 17,47 39,16 40,0
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk4.png" 277,49 17,47 39,16 40,0
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk9.png" 277,98 14,47 40,16 42,0
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Punch/punch2.png" 118,120 46,43 38,20 12,0
-sprite "Streets of Fight files/Sprites/Brawler-Girl/Kick/kick1.png" 225,124 46,24 33,17 39,0 rotated
-sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk6.png" 64,128 46,24 37,17 35,0 rotated
-sprite "Streets of Fight files/Sprites/Brawler-Girl/Idle/idle1.png" 0,130 46,24 33,17 39,0 rotated
+sprite "Streets of Fight files/Sprites/Brawler-Girl/Idle/idle1.png" 225,124 46,24 33,17 39,0 rotated
+sprite "Streets of Fight files/Sprites/Brawler-Girl/Kick/kick1.png" 64,128 46,24 33,17 39,0 rotated
+sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk6.png" 0,130 46,24 37,17 35,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk1.png" 172,136 46,22 37,17 37,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk2.png" 225,150 46,19 38,17 39,0 rotated
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Walk/walk7.png" 64,154 46,17 39,17 40,0 rotated
@@ -61,6 +61,6 @@ sprite "Streets of Fight files/Sprites/Brawler-Girl/Jump/jump4.png" 64,273 33,26
 sprite "Streets of Fight files/Sprites/Brawler-Girl/Jump_kick/jump_kick1.png" 225,280 33,26 29,20 41,10 rotated
 sprite "Streets of Fight files/Sprites/shadow.png" 52,18 4,17 2,3 1,1 rotated
 [pack]
-atlas 0 294x306 rgba-sha256 4c82461593f25ba384187673bd94f9117d406c52ced29070c11a8ad4d1adf47f
+atlas 0 294x306 rgba-sha256 3f52bb0bd47023720490ad5c3fc9ff9e83e9e3b201a328baef0e682fd4a91a8e
 [metrics]
 atlas 0 294x306 efficiency 0.7301
