@@ -1015,6 +1015,16 @@ int previous_power_of_two(int v) {
     return p;
 }
 
+int pot_limit(int limit) {
+    return limit > 0 ? previous_power_of_two(limit) : 0;
+}
+
+int pot_search_bound(int sum, int limit) {
+    const int up = next_power_of_two(sum);
+    const int cap = limit > 0 ? pot_limit(limit) : up;
+    return up > 0 ? std::min(up, cap) : cap;
+}
+
 int next_power_of_two(int v) {
     if (v <= 1) {
         return 1;

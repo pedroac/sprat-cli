@@ -25,6 +25,8 @@ namespace fs = std::filesystem;
 #include <iterator>
 #include "core/cli_parse.h"
 #include "core/file_io.h"
+#include "core/image_limits.h"
+#include "core/parallel.h"
 #include "core/layout_parser.h"
 
 #ifdef _WIN32
@@ -759,6 +761,15 @@ private:
                 std::cerr << tr("Error: Frame ") << to_quoted(frame.name) << tr(" does not fit its original size\n");
                 return false;
             }
+            // The original size comes from the frames file (sourceSize, layout trims), not from
+            // the atlas, so a corrupt value must not size a huge output image.
+            if (!sprat::core::image_size_within_limits(output_w(frame), output_h(frame))) {
+                std::cerr << tr("Error: Frame ") << to_quoted(frame.name) << tr(" has an original size of ")
+                          << frame.canvas_w << "x" << frame.canvas_h << tr(", larger than the supported ")
+                          << sprat::core::k_max_image_dimension << "x" << sprat::core::k_max_image_dimension
+                          << tr(" (") << sprat::core::k_max_total_pixels << tr(" pixels at most)\n");
+                return false;
+            }
             if (!check_frame_name(frame.name)) {
                 return false;
             }
@@ -791,16 +802,8 @@ private:
                     pngs[i - begin] = encode_png(frames_[i]);
                 }
             };
-            std::vector<std::thread> threads;
-            const size_t spawn = std::min(workers, end - begin) - 1;
-            threads.reserve(spawn);
-            for (size_t t = 0; t < spawn; ++t) {
-                threads.emplace_back(encode);
-            }
-            encode();
-            for (auto& thread : threads) {
-                thread.join();
-            }
+            sprat::core::run_workers(static_cast<unsigned int>(std::min(workers, end - begin)),
+                                     [&](unsigned int) { encode(); });
             for (size_t i = begin; i < end; ++i) {
                 if (pngs[i - begin].empty()) {
                     std::cerr << tr("Error: Failed to encode sprite ") << to_quoted(frames_[i].name) << "\n";
@@ -1116,6 +1119,9 @@ int run_spratunpack(int argc, char** argv) {
     if (!unpacker.run()) {
         return 1;
     }
-
+    // Only the TAR is data; with -o, stdout just carries a progress line.
+    if (config.stdout_mode && !sprat::core::finish_stdout()) {
+        return 1;
+    }
     return 0;
 }

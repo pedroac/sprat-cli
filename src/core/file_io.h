@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -27,6 +28,19 @@ inline bool write_file(const std::filesystem::path& path, std::string_view data,
         if (std::filesystem::is_regular_file(path, ec)) {  // never a device such as /dev/full
             std::filesystem::remove(path, ec);
         }
+        return false;
+    }
+    return true;
+}
+
+// Flushes standard output when it carries a command's result (layout text, an atlas, a TAR,
+// metadata). Returns false, after reporting it, when the data did not all get through (closed
+// pipe, full disk), so the run fails instead of looking successful. Commands call it only for
+// that output: a lost progress message on stdout does not make a run fail.
+inline bool finish_stdout() {
+    std::cout.flush();
+    if (!std::cout) {
+        std::cerr << tr("Error: failed to write to standard output\n");
         return false;
     }
     return true;

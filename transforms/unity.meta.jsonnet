@@ -145,5 +145,9 @@ local render(guid, sprites) =
     ],
   } else {
     content: render(lib.unity_guid(sprat, 0), sprat.sprites),
-  }
+  } + (
+    // Unity reads the .meta beside its texture, so --output-dir names it after the atlas
+    // when --atlas gives one ("atlas.png" -> "atlas.png.meta").
+    if sprat.atlases[0].filename != "" then { filename: sprat.atlases[0].filename + ".meta" } else {}
+  )
 )

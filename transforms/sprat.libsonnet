@@ -31,10 +31,12 @@
   is_multi_atlas(sprat)::
     sprat.atlas_count > 1,
 
-  // Unity asset GUID of an atlas texture. Single-atlas layouts keep the output-stem hash so
-  // their .meta GUID stays stable; multipack atlases each hash their own path.
+  // Unity asset GUID of an atlas texture, the same in every output of a run so .anim clips
+  // find the texture their .meta describes. A single atlas hashes the --atlas pattern
+  // (constant without one; pass --atlas to keep atlases of one project apart); multipack
+  // atlases each hash their own path.
   unity_guid(sprat, atlas_index)::
-    (if sprat.atlas_count > 1 then sprat.atlases[atlas_index].hash_hex else sprat.output_stem_hash_hex)
+    (if sprat.atlas_count > 1 then sprat.atlases[atlas_index].hash_hex else sprat.output_pattern_hash_hex)
     + "0000000000000000",
 
   // Phaser 3 frame (TexturePacker JSON style); the frame size is unrotated, readers swap it.
@@ -73,16 +75,23 @@
   },
 
   // Turn a name (e.g. an animation name) into a plain file name: path separators, characters
-  // invalid on Windows and a leading dot (hidden files, which Unity skips) become "_".
-  // spratconvert refuses unsafe names anyway.
+  // invalid on Windows and a leading dot (hidden files, which Unity skips) become "_", a
+  // trailing dot or space (dropped by Windows) too, and Windows device names such as "con"
+  // or "com1" get a "_" prefix. spratconvert refuses unsafe names anyway.
   safe_filename(s)::
     local chars = std.stringChars(s);
+    local n = std.length(chars);
     local cleaned = std.join("", [
       local c = chars[i];
-      if std.codepoint(c) < 32 || std.member('/\\:*?"<>|', c) || (i == 0 && c == ".") then "_" else c
-      for i in std.range(0, std.length(chars) - 1)
+      if std.codepoint(c) < 32 || std.member('/\\:*?"<>|', c) || (i == 0 && c == ".")
+         || (i == n - 1 && (c == "." || c == " ")) then "_" else c
+      for i in std.range(0, n - 1)
     ]);
-    if cleaned == "" then "_" else cleaned,
+    local stem = std.asciiUpper(std.split(cleaned, ".")[0]);
+    local reserved = std.member(["CON", "PRN", "AUX", "NUL"], stem)
+      || (std.length(stem) == 4 && std.member(["COM", "LPT"], std.substr(stem, 0, 3))
+          && std.member("123456789", std.substr(stem, 3, 1)));
+    if cleaned == "" then "_" else if reserved then "_" + cleaned else cleaned,
 
   // Escape text for XML attribute values and element content.
   xml_escape(s)::

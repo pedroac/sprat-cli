@@ -42,6 +42,7 @@
 #include "core/layout_parser.h"
 #include "core/checked_math.h"
 #include "core/file_io.h"
+#include "core/parallel.h"
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
@@ -490,14 +491,11 @@ std::vector<unsigned char> compress_to_dds(
                               blocks + static_cast<size_t>(first_row) * blocks_x * block_bytes,
                               squish_flags);
     };
-    std::vector<std::thread> pool;
-    for (int first = rows_per_worker; first < block_rows; first += rows_per_worker) {
-        pool.emplace_back(compress_rows, first, std::min(rows_per_worker, block_rows - first));
-    }
-    compress_rows(0, std::min(rows_per_worker, block_rows));
-    for (auto& t : pool) {
-        t.join();
-    }
+    const int strips = (block_rows + rows_per_worker - 1) / rows_per_worker;
+    sprat::core::run_workers(static_cast<unsigned int>(strips), [&](unsigned int strip) {
+        const int first = static_cast<int>(strip) * rows_per_worker;
+        compress_rows(first, std::min(rows_per_worker, block_rows - first));
+    });
     return dds;
 }
 #endif
@@ -1144,23 +1142,19 @@ int run_spratpack(int argc, char** argv) {
             std::atomic<bool> failed{false};
             std::mutex err_mtx;
             std::string first_err;
-            std::vector<std::thread> workers;
-            for (unsigned int i = 0; i < atlas_worker_count; ++i) {
-                workers.emplace_back([&]() {
-                    while (!failed.load(std::memory_order_relaxed)) {
-                        size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
-                        if (idx >= atlas_sprites.size()) break;
-                        std::string error;
-                        if (!blit_sprite(atlas_sprites[idx], error)) {
-                            std::scoped_lock lock(err_mtx);
-                            if (first_err.empty()) first_err = std::move(error);
-                            failed.store(true, std::memory_order_relaxed);
-                            break;
-                        }
+            sprat::core::run_workers(atlas_worker_count, [&](unsigned int) {
+                while (!failed.load(std::memory_order_relaxed)) {
+                    size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
+                    if (idx >= atlas_sprites.size()) break;
+                    std::string error;
+                    if (!blit_sprite(atlas_sprites[idx], error)) {
+                        std::scoped_lock lock(err_mtx);
+                        if (first_err.empty()) first_err = std::move(error);
+                        failed.store(true, std::memory_order_relaxed);
+                        break;
                     }
-                });
-            }
-            for (auto& w : workers) w.join();
+                }
+            });
             if (failed.load(std::memory_order_relaxed)) { std::cerr << first_err << "\n"; return 1; }
         }
 
@@ -1326,5 +1320,15 @@ int run_spratpack(int argc, char** argv) {
         }
     }
 
+    if (a) {
+        // Closing writes the TAR trailer, which must reach stdout too.
+        if (archive_write_close(a.get()) != ARCHIVE_OK) {
+            std::cerr << tr("Error: Failed to write TAR data: ") << archive_error_string(a.get()) << "\n";
+            return 1;
+        }
+    }
+    if (output_to_stdout && !sprat::core::finish_stdout()) {
+        return 1;
+    }
     return 0;
 }

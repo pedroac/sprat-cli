@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # spratframes must number frames in reading order, only treat a color as the background
-# when all four corners share it, and only remove background pixels connected to the edge.
+# when it makes up most of the image edge, and only remove background pixels connected to
+# the edge.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -110,6 +111,14 @@ for i in (0, 2):
 im.save(root + "/whiteboxes.png")
 
 Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(root + "/empty.png")
+
+# Solid magenta background whose last frame covers the bottom-right corner, as in tightly
+# packed strips and grids.
+im = Image.new("RGBA", (40, 20), (255, 0, 255, 255))
+d = ImageDraw.Draw(im)
+d.rectangle([2, 2, 12, 12], fill=(0, 0, 255, 255))
+d.rectangle([30, 10, 39, 19], fill=(0, 200, 0, 255))
+im.save(root + "/corner_sprite.png")
 EOF
 
 echo "Test 1: frames are numbered in reading order"
@@ -138,6 +147,12 @@ echo "Test 3: background-colored pixels inside a sprite are kept"
 grep -qx 'background ff00ff' "$tmp_dir/magenta.txt"
 [ "$(grep -c '^sprite' "$tmp_dir/magenta.txt")" -eq 1 ]
 grep -qx 'sprite 4,4 16,16' "$tmp_dir/magenta.txt"
+
+echo "Test 3b: a frame covering a corner does not hide a solid background"
+"$frames_bin" "$(fix_path "$tmp_dir/corner_sprite.png")" > "$tmp_dir/corner_sprite.txt"
+grep -qx 'background ff00ff' "$tmp_dir/corner_sprite.txt"
+grep '^sprite' "$tmp_dir/corner_sprite.txt" > "$tmp_dir/corner_sprite.sprites"
+printf 'sprite 2,2 11,11\nsprite 30,10 10,10\n' | diff - "$tmp_dir/corner_sprite.sprites"
 
 echo "Test 4: --has-rectangles finds grid cells that share border lines"
 "$frames_bin" --has-rectangles "$(fix_path "$tmp_dir/grid.png")" | grep '^sprite' > "$tmp_dir/grid.txt"

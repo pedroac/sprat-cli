@@ -69,6 +69,24 @@ fi
 printf 'atlas 100,50\nsprite "a.png" 0,0 30,50\n' | "$convert_bin" --transform unity --output-dir "$tmp_dir/unity_ok" > /dev/null
 [ -f "$tmp_dir/unity_ok/meta.meta" ] && [ -f "$tmp_dir/unity_ok/json.json" ]
 
+# The .anim clips must reference the GUID that the group's .meta gives the texture, with or
+# without --atlas; with --atlas the .meta is named after the texture, as Unity requires.
+printf 'atlas 16,8\nsprite "walk_1.png" 0,0 8,8\nsprite "walk_2.png" 8,0 8,8\n' > "$tmp_dir/walk.txt"
+check_unity_guids() {
+  local dir="$1" meta="$2" meta_guid anim_guids
+  meta_guid="$(sed -n 's/^guid: //p' "$dir/$meta")"
+  anim_guids="$(grep -ho 'guid: [0-9a-f]*' "$dir/"*.anim | sort -u | sed 's/^guid: //')"
+  if [ -z "$meta_guid" ] || [ "$anim_guids" != "$meta_guid" ]; then
+    echo "unity .anim GUIDs ($anim_guids) do not match the .meta GUID ($meta_guid) in $dir" >&2
+    exit 1
+  fi
+}
+"$convert_bin" --transform unity --auto-animations --output-dir "$tmp_dir/unity_guid" < "$tmp_dir/walk.txt" > /dev/null
+check_unity_guids "$tmp_dir/unity_guid" meta.meta
+"$convert_bin" --transform unity --auto-animations -a atlas.png --output-dir "$tmp_dir/unity_guid_atlas" \
+  < "$tmp_dir/walk.txt" > /dev/null
+check_unity_guids "$tmp_dir/unity_guid_atlas" atlas.png.meta
+
 # unity.meta: the sprite rect is the trimmed content, so pivot and border are relative to it;
 # IDs are signed 64-bit and spriteID a 32-hex GUID; names that YAML would misread are quoted.
 printf 'atlas 64,64\nsprite "c.png" 0,0 10,10 10,10 10,10\n' > "$tmp_dir/trimmed.txt"
@@ -132,3 +150,17 @@ grep -qF 'pivot: {x: 0, y: 0}' "$tmp_dir/nopivot.meta"
 # unity.meta nine-patch: border is relative to the trimmed rect inside the content, not the file
 printf 'atlas 16,16\nsprite "padded.9.png" 0,0 8,8 4,3 4,3 slice=4,4,2,2\n' \
   | "$convert_bin" --transform unity.meta | grep -qF 'border: {x: 1, y: 0, z: 0, w: 2}'
+
+# Animation names that Windows treats as devices ("con", "lpt1") or trims ("aux.") still get
+# a clip file each, with a name every platform can write.
+printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/reserved.txt"
+printf 'animation "con"\n- frame 0\nanimation "lpt1"\n- frame 0\nanimation "aux."\n- frame 0\n' \
+  > "$tmp_dir/reserved.anims"
+"$convert_bin" --transform unity.anim --animations "$tmp_dir/reserved.anims" \
+  --output-dir "$tmp_dir/reserved_out" < "$tmp_dir/reserved.txt" > /dev/null
+for clip in _con.anim _lpt1.anim aux_.anim; do
+  if [ ! -f "$tmp_dir/reserved_out/$clip" ]; then
+    echo "unity.anim did not write $clip; got: $(ls "$tmp_dir/reserved_out")" >&2
+    exit 1
+  fi
+done

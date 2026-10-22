@@ -1,6 +1,7 @@
 // These tests rely on assert(); keep it active in Release builds (CI builds Release).
 #undef NDEBUG
 #include "../src/core/layout_parser.h"
+#include "../src/commands/spratlayout/packing.h"
 #include <iostream>
 #include <string>
 #include <cassert>
@@ -370,6 +371,19 @@ void test_expand_layout_aliases() {
     std::cout << "test_expand_layout_aliases passed" << std::endl;
 }
 
+void test_pot_limits() {
+    using sprat::layout::pot_limit;
+    using sprat::layout::pot_search_bound;
+    assert(pot_limit(0) == 0);       // no limit
+    assert(pot_limit(1000) == 512);  // largest power of two within the limit
+    assert(pot_limit(1024) == 1024);
+    assert(pot_search_bound(300, 0) == 512);      // sum rounded up when there is no limit
+    assert(pot_search_bound(300, 1000) == 512);
+    assert(pot_search_bound(3000, 1000) == 512);  // capped by the limit's power of two
+    assert(pot_search_bound(64, 96) == 64);
+    std::cout << "test_pot_limits passed" << std::endl;
+}
+
 int main() {
     test_parse_atlas_line();
     test_parse_sprite_line();
@@ -385,6 +399,7 @@ int main() {
     test_parse_sprite_line_slice_fill_modes();
     test_parse_alias_line();
     test_expand_layout_aliases();
+    test_pot_limits();
     std::cout << "All layout tests passed!" << std::endl;
     return 0;
 }

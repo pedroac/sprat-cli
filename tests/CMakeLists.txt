@@ -255,6 +255,7 @@ add_test(
             $<TARGET_FILE:spratpack>
             $<TARGET_FILE:spratconvert>
             $<TARGET_FILE:spratunpack>
+            $<TARGET_FILE:spratframes>
 )
 set_tests_properties(write_failure PROPERTIES SKIP_RETURN_CODE 77)
 

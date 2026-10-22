@@ -36,8 +36,11 @@ namespace fs = std::filesystem;
 #include <cstddef>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include "core/cli_parse.h"
+#include "core/file_io.h"
 #include "core/i18n.h"
+#include "core/image_limits.h"
 
 #include <stb_image.h>
 
@@ -50,8 +53,8 @@ constexpr int k_default_min_sprite_size = 4;
 constexpr int k_default_max_sprites = 10000;
 constexpr unsigned char k_max_alpha = 255;
 constexpr unsigned char k_min_alpha = 0;
-constexpr int k_max_image_dimension = 32768;
-constexpr size_t k_max_total_pixels = 100000000;
+using sprat::core::k_max_image_dimension;
+using sprat::core::k_max_total_pixels;
 constexpr int k_default_color_distance_threshold = 30;
 constexpr int k_strict_color_distance_threshold = 15;
 constexpr int k_hex_short_len = 3;
@@ -588,10 +591,61 @@ private:
         return {.r = image_data_[idx], .g = image_data_[idx + 1], .b = image_data_[idx + 2], .a = image_data_[idx + 3]};
     }
 
-    // A solid background exists when all four corners share one opaque color. Only pixels of
-    // that color connected to the image edge are made transparent, so sprite pixels that
-    // happen to match it (an eye, an outline inside the sprite) are kept. A sprite touching
-    // a corner, as in tightly packed atlases, is therefore never taken for the background.
+    // The solid background of a sheet, if any: the most common non-transparent color of the
+    // image edge, when pixels close to it make up at least half of the edge. Sprites may
+    // touch the edge or the corners (tightly packed strips and grids), so no single pixel
+    // decides.
+    [[nodiscard]] bool find_edge_background(Color& out) const {
+        const size_t w = static_cast<size_t>(width_);
+        const size_t h = static_cast<size_t>(height_);
+        std::vector<size_t> edge;
+        edge.reserve((2 * w) + (2 * h));
+        for (size_t x = 0; x < w; ++x) {
+            edge.push_back(x);
+            if (h > 1) edge.push_back(((h - 1) * w) + x);
+        }
+        for (size_t y = 1; y + 1 < h; ++y) {
+            edge.push_back(y * w);
+            if (w > 1) edge.push_back((y * w) + w - 1);
+        }
+        std::unordered_map<std::uint32_t, size_t> counts;
+        std::uint32_t best_key = 0;
+        size_t best_count = 0;
+        for (const size_t i : edge) {
+            const Color c = pixel_at(i);
+            if (c.is_transparent()) {
+                continue;
+            }
+            const std::uint32_t key = (std::uint32_t{c.r} << 24U) | (std::uint32_t{c.g} << 16U) |
+                                      (std::uint32_t{c.b} << 8U) | std::uint32_t{c.a};
+            const size_t count = ++counts[key];
+            if (count > best_count) {
+                best_count = count;
+                best_key = key;
+            }
+        }
+        if (best_count == 0) {
+            return false;
+        }
+        const Color candidate{static_cast<unsigned char>(best_key >> 24U),
+                              static_cast<unsigned char>(best_key >> 16U),
+                              static_cast<unsigned char>(best_key >> 8U),
+                              static_cast<unsigned char>(best_key)};
+        const size_t close = static_cast<size_t>(std::ranges::count_if(edge, [&](size_t i) {
+            const Color c = pixel_at(i);
+            return !c.is_transparent() && color_distance(c, candidate) <= k_strict_color_distance_threshold;
+        }));
+        if (close * 2 < edge.size()) {
+            return false;
+        }
+        out = candidate;
+        return true;
+    }
+
+    // Removes a solid background (see find_edge_background). Only pixels of that color
+    // connected to the image edge are made transparent, so sprite pixels that happen to match
+    // it (an eye, an outline inside the sprite) are kept, and a sprite touching the edge is
+    // never taken for the background.
     bool preprocess_image() {
         if (width_ <= 0 || height_ <= 0) {
             return false;
@@ -599,21 +653,16 @@ private:
 
         const size_t w = static_cast<size_t>(width_);
         const size_t h = static_cast<size_t>(height_);
-        const Color corner = pixel_at(0);
-        const std::array<size_t, 3> other_corners = {w - 1, (h - 1) * w, (h * w) - 1};
-        if (corner.is_transparent() ||
-            std::ranges::any_of(other_corners, [&](size_t i) {
-                const Color c = pixel_at(i);
-                return c.is_transparent() || color_distance(c, corner) > k_strict_color_distance_threshold;
-            })) {
+        Color background{};
+        if (!find_edge_background(background)) {
             return true;
         }
         has_detected_background_ = true;
-        detected_background_color_ = corner;
+        detected_background_color_ = background;
 
         const auto is_background = [&](size_t i) {
             const Color c = pixel_at(i);
-            return !c.is_transparent() && color_distance(c, corner) <= k_strict_color_distance_threshold;
+            return !c.is_transparent() && color_distance(c, background) <= k_strict_color_distance_threshold;
         };
         std::vector<std::uint8_t> visited(w * h, 0);
         std::vector<size_t> stack;
@@ -875,6 +924,5 @@ int run_spratframes(int argc, char** argv) {
     if (!detector.detect_frames()) {
         return 1;  // the detector has reported why
     }
-    
-    return 0;
+    return sprat::core::finish_stdout() ? 0 : 1;
 }

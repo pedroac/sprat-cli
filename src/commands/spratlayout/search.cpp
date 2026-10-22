@@ -11,6 +11,7 @@
 
 #include "core/checked_math.h"
 #include "core/i18n.h"
+#include "core/parallel.h"
 
 namespace sprat::layout {
 
@@ -168,13 +169,8 @@ bool pack_atlases(
         return true;
     }
 
-    // POT atlases are rounded up to a power of two after packing, so pack within the largest
-    // power of two each limit allows; otherwise a sheet packed up to a limit such as 96 rounds
-    // up past it (to 128) and every candidate is rejected.
-    if (mode == Mode::POT) {
-        max_w = previous_power_of_two(max_w);
-        max_h = previous_power_of_two(max_h);
-    }
+    // In pot mode max_w/max_h are pot_search_bound values: POT atlases are rounded up to a
+    // power of two after packing, so they must already be powers of two within the limits.
 
     // Grid mode: uniform-cell layout, split into equal-capacity atlases when needed.
     if (mode == Mode::GRID) {
@@ -749,16 +745,9 @@ bool search_compact_layout(const SearchRequest& request, const std::vector<Sprit
             run_guided_worker(nullptr, 0, width_candidates.size(), worker_best[0]);
         } else {
             std::atomic<size_t> next_width_index{0};
-            std::vector<std::thread> workers;
-            workers.reserve(worker_count);
-            for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
-                workers.emplace_back([&, worker_index]() {
-                    run_guided_worker(&next_width_index, 0, width_candidates.size(), worker_best[worker_index]);
-                });
-            }
-            for (auto& worker : workers) {
-                worker.join();
-            }
+            sprat::core::run_workers(worker_count, [&](unsigned int worker_index) {
+                run_guided_worker(&next_width_index, 0, width_candidates.size(), worker_best[worker_index]);
+            });
         }
         for (BestCandidates& worker : worker_best) {
             if (worker.gpu.valid) {

@@ -89,4 +89,23 @@ if tar -tf "$tmp_dir/evil.tar" 2> /dev/null | grep -q '\.\./evil'; then
     exit 1
 fi
 
+echo "Test 4: a huge original size from the frames file is refused, not allocated"
+# 100000x100000 RGBA would be a 40 GB buffer; the 1x1 frame itself is fine.
+cat > "$tmp_dir/huge.json" <<'EOF'
+{"frames": {"big": {"frame": {"x": 0, "y": 0, "w": 1, "h": 1}, "trimmed": true,
+  "spriteSourceSize": {"x": 0, "y": 0, "w": 1, "h": 1}, "sourceSize": {"w": 100000, "h": 100000}}}}
+EOF
+status=0
+"$unpack_bin" "$(fix_path "$tmp_dir/atlas.png")" -f "$(fix_path "$tmp_dir/huge.json")" \
+    -o "$(fix_path "$tmp_dir/out_huge")" > /dev/null 2> "$tmp_dir/err_huge.txt" || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'larger than the supported' "$tmp_dir/err_huge.txt"; then
+    cat "$tmp_dir/err_huge.txt" >&2
+    echo "FAILED: a 100000x100000 original size must be refused with an error (exit $status)" >&2
+    exit 1
+fi
+# --keep-trim writes only the packed pixels, so the same frame is fine there.
+"$unpack_bin" "$(fix_path "$tmp_dir/atlas.png")" -f "$(fix_path "$tmp_dir/huge.json")" --keep-trim \
+    -o "$(fix_path "$tmp_dir/out_huge_trim")" > /dev/null
+[ -f "$tmp_dir/out_huge_trim/big.png" ]
+
 echo "spratunpack_json_test.sh: ok"

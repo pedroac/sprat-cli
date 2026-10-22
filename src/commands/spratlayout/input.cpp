@@ -501,7 +501,6 @@ private:
         return true;
     }
 
-    // Strict sources (named in a list) must be valid images; others are skipped silently.
     // Adds the images of a folder and its subfolders, in the order recursive_directory_iterator
     // visits them. A folder that can't be read (e.g. no permission) is reported and skipped
     // instead of aborting the scan; symlinked folders are not followed.
@@ -523,6 +522,7 @@ private:
         }
     }
 
+    // Strict sources (named in a list) must be valid images; others are skipped silently.
     bool add_source(const fs::path& image_path, bool strict) {
         if (!is_supported_image_extension(image_path)) {
             if (strict) {

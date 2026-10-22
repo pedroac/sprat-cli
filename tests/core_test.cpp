@@ -2,13 +2,17 @@
 #undef NDEBUG
 #include "../src/core/checked_math.h"
 #include "../src/core/cli_parse.h"
+#include "../src/core/image_limits.h"
 #include "../src/core/output_pattern.h"
+#include "../src/core/parallel.h"
 #include "../src/core/perceptual_dedup.h"
 #include <iostream>
 #include <string>
 #include <cassert>
 #include <cstdlib>
+#include <atomic>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 void test_parse_positive_int() {
@@ -223,6 +227,54 @@ void test_group_near_duplicates() {
     std::cout << "test_group_near_duplicates passed" << std::endl;
 }
 
+void test_run_workers() {
+    // Every index runs exactly once.
+    std::vector<std::atomic<int>> runs(8);
+    sprat::core::run_workers(8, [&](unsigned int i) { runs[i].fetch_add(1); });
+    for (const auto& r : runs) {
+        assert(r.load() == 1);
+    }
+    // A worker's exception reaches the caller after the other workers finished, instead of
+    // terminating the process.
+    std::atomic<int> finished{0};
+    bool caught = false;
+    try {
+        sprat::core::run_workers(4, [&](unsigned int i) {
+            if (i == 2) {
+                throw std::runtime_error("worker failed");
+            }
+            finished.fetch_add(1);
+        });
+    } catch (const std::runtime_error& e) {
+        caught = std::string(e.what()) == "worker failed";
+    }
+    assert(caught);
+    assert(finished.load() == 3);
+    // An exception on the calling thread's own worker (index 0) is reported the same way.
+    caught = false;
+    try {
+        sprat::core::run_workers(3, [&](unsigned int i) {
+            if (i == 0) {
+                throw std::runtime_error("caller failed");
+            }
+        });
+    } catch (const std::runtime_error&) {
+        caught = true;
+    }
+    assert(caught);
+    sprat::core::run_workers(0, [](unsigned int) { assert(false); });
+    std::cout << "test_run_workers passed" << std::endl;
+}
+
+void test_image_size_within_limits() {
+    assert(sprat::core::image_size_within_limits(1, 1));
+    assert(sprat::core::image_size_within_limits(10000, 10000));
+    assert(!sprat::core::image_size_within_limits(0, 10));
+    assert(!sprat::core::image_size_within_limits(100000, 1));
+    assert(!sprat::core::image_size_within_limits(20000, 20000));  // 400 megapixels
+    std::cout << "test_image_size_within_limits passed" << std::endl;
+}
+
 int main() {
     test_parse_positive_int();
     test_parse_non_negative_int();
@@ -238,6 +290,8 @@ int main() {
     test_checked_mul_size_t();
     test_rgba_within_tolerance();
     test_group_near_duplicates();
+    test_run_workers();
+    test_image_size_within_limits();
     std::cout << "All core tests passed!" << std::endl;
     return 0;
 }

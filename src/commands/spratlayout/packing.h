@@ -142,6 +142,14 @@ int next_power_of_two(int v);
 // Largest power of two that is <= v (0 when v < 1).
 int previous_power_of_two(int v);
 
+// The single rule for pot atlas sides and --max-width/--max-height: a side can be at most the
+// largest power of two within the limit (a limit of 1000 allows 512). 0 means no limit.
+int pot_limit(int limit);
+// Bound for searching pot atlases: the sum of the sprite sizes rounded up to a power of two
+// (the sum is only a search bound, so a small sheet can still reach the power of two its
+// sprites need), capped by pot_limit(limit).
+int pot_search_bound(int sum, int limit);
+
 // True if the candidate atlas is better than the best one for the optimize target:
 // GPU prefers the smaller longest side, SPACE the smaller area.
 bool pick_better_layout_candidate(

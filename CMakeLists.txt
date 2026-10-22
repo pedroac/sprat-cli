@@ -252,22 +252,48 @@ if(NOT SQUISH_FOUND)
 endif()
 
 if(NOT SQUISH_FOUND AND SPRAT_DOWNLOAD_SQUISH AND NOT EMSCRIPTEN)
-    include(FetchContent)
-    if(POLICY CMP0135)
-        cmake_policy(SET CMP0135 NEW)  # extracted files get the extraction time
-    endif()
-    FetchContent_Declare(
-        squish
-        URL https://downloads.sourceforge.net/project/libsquish/libsquish-1.15.tgz
-        URL_HASH SHA256=628796eeba608866183a61d080d46967c9dda6723bc0a3ec52324c85d2147269
-    )
-    FetchContent_GetProperties(squish)
-    if(NOT squish_POPULATED)
-        if(POLICY CMP0169)
-            cmake_policy(SET CMP0169 OLD)
+    # Downloaded by hand rather than with FetchContent, whose failure would stop the whole
+    # configure: without network access (distro or Nix builds, air-gapped CI) spratpack is
+    # then built without --gpu-compress, as when SPRAT_DOWNLOAD_SQUISH is OFF.
+    set(_squish_url https://downloads.sourceforge.net/project/libsquish/libsquish-1.15.tgz)
+    set(_squish_sha256 628796eeba608866183a61d080d46967c9dda6723bc0a3ec52324c85d2147269)
+    set(_squish_archive ${CMAKE_BINARY_DIR}/_deps/libsquish-1.15.tgz)
+    set(squish_SOURCE_DIR ${CMAKE_BINARY_DIR}/_deps/squish-src)
+    set(squish_BINARY_DIR ${CMAKE_BINARY_DIR}/_deps/squish-build)
+    if(NOT EXISTS ${squish_SOURCE_DIR}/CMakeLists.txt)
+        file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/_deps)
+        message(STATUS "Downloading libsquish 1.15 from ${_squish_url}")
+        file(DOWNLOAD ${_squish_url} ${_squish_archive} STATUS _squish_status TLS_VERIFY ON)
+        list(GET _squish_status 0 _squish_code)
+        if(_squish_code EQUAL 0)
+            file(SHA256 ${_squish_archive} _squish_actual)
+            if(NOT _squish_actual STREQUAL _squish_sha256)
+                file(REMOVE ${_squish_archive})
+                message(FATAL_ERROR "libsquish download has SHA256 ${_squish_actual}, expected ${_squish_sha256}")
+            endif()
+            # The archive has no top-level folder; extract into a fresh directory.
+            file(REMOVE_RECURSE ${squish_SOURCE_DIR}.tmp)
+            file(MAKE_DIRECTORY ${squish_SOURCE_DIR}.tmp)
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E tar xzf ${_squish_archive}
+                WORKING_DIRECTORY ${squish_SOURCE_DIR}.tmp
+                RESULT_VARIABLE _squish_extract)
+            if(_squish_extract EQUAL 0 AND EXISTS ${squish_SOURCE_DIR}.tmp/CMakeLists.txt)
+                file(RENAME ${squish_SOURCE_DIR}.tmp ${squish_SOURCE_DIR})
+            else()
+                file(REMOVE_RECURSE ${squish_SOURCE_DIR}.tmp)
+                message(WARNING "Could not extract ${_squish_archive}; building without --gpu-compress")
+            endif()
+        else()
+            list(GET _squish_status 1 _squish_error)
+            file(REMOVE ${_squish_archive})
+            message(WARNING "Could not download libsquish (${_squish_error}); building spratpack "
+                            "without --gpu-compress. Install libsquish, or configure with "
+                            "-DSPRAT_DOWNLOAD_SQUISH=OFF to skip the download.")
         endif()
-        FetchContent_Populate(squish)
     endif()
+endif()
+if(NOT SQUISH_FOUND AND SPRAT_DOWNLOAD_SQUISH AND NOT EMSCRIPTEN AND EXISTS ${squish_SOURCE_DIR}/CMakeLists.txt)
     # libsquish adds -msse2 on every non-Windows platform, which arm64 compilers reject, and
     # builds with OpenMP flags that would not reach spratpack's link line; spratpack runs the
     # compression on its own threads instead.

@@ -623,7 +623,6 @@ std::string extract_variant(const std::string& stem) {
 
 // ─── Jsonnet helpers ──────────────────────────────────────────────────────────
 
-// Build the JSON data string passed as std.extVar("sprat") to all transforms.
 // Name for the whole atlas set, e.g. a Phaser texture key. A single atlas uses its own stem;
 // multipack atlases share one key: the pattern's stem without its %d placeholder
 // ("atlas_%d.png" -> "atlas").
@@ -647,6 +646,7 @@ std::string texture_key(const std::string& pattern, size_t atlas_count, const st
     return key.empty() ? "atlas" : key;
 }
 
+// Build the JSON data string passed as std.extVar("sprat") to all transforms.
 std::string build_sprat_json(
     const Layout& layout,
     const std::vector<std::string>& sprite_names,
@@ -847,6 +847,11 @@ std::string build_sprat_json(
     const uint64_t stem_hash = sprat::core::fnv1a_hash(
         reinterpret_cast<const unsigned char*>(hash_source.c_str()), hash_source.size());
     const std::string stem_hash_hex = to_hex16(stem_hash);
+    // Same for every transform of a run (a group, or separate runs with the same --atlas),
+    // unlike output_stem, which is each transform's own variant name: IDs that one output
+    // refers to in another (Unity texture GUIDs) are built from it.
+    const uint64_t pattern_hash = sprat::core::fnv1a_hash(
+        reinterpret_cast<const unsigned char*>(output_pattern_arg.c_str()), output_pattern_arg.size());
 
     const std::string atlas_path_0 = image_path(0);
     const std::string atlas_stem_0 = fs::path(format_atlas_path(output_pattern_arg, 0)).stem().string();
@@ -876,6 +881,7 @@ std::string build_sprat_json(
     j += ",\"output_pattern\":\"" + escape_json(output_pattern_arg) + "\"";
     j += ",\"output_stem\":\"" + escape_json(output_stem) + "\"";
     j += ",\"output_stem_hash_hex\":\"" + stem_hash_hex + "\"";
+    j += ",\"output_pattern_hash_hex\":\"" + to_hex16(pattern_hash) + "\"";
     j += ",\"has_animations\":" + std::string(normalized_animations.empty() ? "false" : "true");
     j += ",\"has_markers\":" + std::string(marker_items.empty() ? "false" : "true");
     j += ",\"animations_path\":\"" + escape_json(animations_path_arg) + "\"";
@@ -1034,6 +1040,7 @@ struct TransformResult {
     std::string icon;                          // optional relative path to icon
     // Exactly one of content or files is populated:
     std::string content;                        // single-file mode
+    std::string filename;                       // optional --output-dir name for content
     struct FileEntry { std::string filename; std::string content; };
     std::vector<FileEntry> files;              // multi-file mode
 };
@@ -1131,16 +1138,40 @@ static bool find_json_string_value(const std::string& json, const std::string& k
 }
 
 // Parse the JSON object output from a Jsonnet transform evaluation.
+// Windows opens a device instead of a file for these names, with any extension ("con.anim",
+// "nul.json"), so the output would silently go nowhere.
+static bool is_windows_reserved_name(const std::string& name) {
+    std::string stem = name.substr(0, name.find('.'));
+    std::ranges::transform(stem, stem.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") {
+        return true;
+    }
+    return stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) &&
+           stem[3] >= '1' && stem[3] <= '9';
+}
+
 // A transform-provided filename must name a file directly inside --output-dir: no
 // directories, no parent references and nothing Windows treats as a drive or device path.
+// Rules are the same on every platform, so output written on one works on the others.
 static bool is_safe_output_filename(const std::string& name) {
     if (name.empty() || name == "." || name == "..") {
         return false;
     }
+    // Windows drops a trailing dot or space, so "a." would overwrite "a".
+    if (name.back() == '.' || name.back() == ' ' || is_windows_reserved_name(name)) {
+        return false;
+    }
     return std::ranges::none_of(name, [](char c) {
         const auto u = static_cast<unsigned char>(c);
-        return u < 0x20 || c == '/' || c == '\\' || c == ':';
+        return u < 0x20 || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+               c == '"' || c == '<' || c == '>' || c == '|';
     });
+}
+
+static std::string unsafe_output_filename_error(const std::string& name) {
+    return std::string(tr("Transform output filename must be a plain file name that is valid on every "
+                          "platform (no folders, no device names such as CON or NUL, no trailing dot "
+                          "or space): ")) + name;
 }
 
 bool parse_transform_result(const std::string& json, TransformResult& out, std::string& error) {
@@ -1208,7 +1239,7 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
             }
             if (!entry.filename.empty()) {
                 if (!is_safe_output_filename(entry.filename)) {
-                    error = tr("Transform output filename must be a plain file name: ") + entry.filename;
+                    error = unsafe_output_filename_error(entry.filename);
                     return false;
                 }
                 const bool duplicate = std::ranges::any_of(out.files, [&](const auto& fe) {
@@ -1228,6 +1259,14 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
     // No "files" key — check for top-level "content" (single-file mode).
     if (find_json_string_value(json, "content", vs, ve)) {
         out.content = json_unescape_string(json, vs, ve);
+        // Optional name for --output-dir (stdout output ignores it), e.g. "atlas.png.meta".
+        if (find_json_string_value(json, "filename", vs, ve)) {
+            out.filename = json_unescape_string(json, vs, ve);
+            if (!out.filename.empty() && !is_safe_output_filename(out.filename)) {
+                error = unsafe_output_filename_error(out.filename);
+                return false;
+            }
+        }
         return true;
     }
 
@@ -1304,7 +1343,7 @@ void list_transforms() {
         R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
         R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
         R"("sprite_count":0,"animation_count":0,)"
-        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
+        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000","output_pattern_hash_hex":"0000000000000000",)"
         R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
         R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
         R"("has_collision_atlas":false,"collision_atlas_pattern":"","collision_atlas_path":"","collision_atlas_scale":1})";
@@ -1374,7 +1413,7 @@ void list_transforms_json() {
         R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
         R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
         R"("sprite_count":0,"animation_count":0,)"
-        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
+        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000","output_pattern_hash_hex":"0000000000000000",)"
         R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
         R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
         R"("has_collision_atlas":false,"collision_atlas_pattern":"","collision_atlas_path":"","collision_atlas_scale":1})";
@@ -1730,7 +1769,8 @@ int run_spratconvert(int argc, char** argv) {
                 std::cerr << tr("Failed to create output directory: ") << ec.message() << "\n";
                 return 1;
             }
-            const std::string out_filename = file_stem + result.extension;
+            const std::string out_filename =
+                result.filename.empty() ? file_stem + result.extension : result.filename;
             const fs::path out_path = fs::path(out_dir) / out_filename;
             std::string write_error;
             if (!sprat::core::write_file(out_path, result.content, write_error)) {
@@ -1824,5 +1864,9 @@ int run_spratconvert(int argc, char** argv) {
         return 1;
     }
 
-    return write_result(result, output_dir_arg, output_stem, &std::cout);
+    const int status = write_result(result, output_dir_arg, output_stem, &std::cout);
+    if (status == 0 && output_dir_arg.empty() && !sprat::core::finish_stdout()) {
+        return 1;
+    }
+    return status;
 }

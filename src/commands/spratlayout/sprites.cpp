@@ -16,6 +16,7 @@
 #include "core/cli_parse.h"
 #include "core/fnv1a.h"
 #include "core/i18n.h"
+#include "core/parallel.h"
 #include "core/perceptual_dedup.h"
 
 namespace sprat::layout {
@@ -527,16 +528,11 @@ std::vector<Sprite> load_sprites(const std::vector<ImageSource>& sources,
     if (load_worker_count <= 1 || source_count <= 1) {
         for (size_t i = 0; i < source_count; ++i) process_source(i);
     } else {
-        std::vector<std::thread> workers;
-        workers.reserve(load_worker_count);
-        for (unsigned int wi = 0; wi < load_worker_count; ++wi) {
-            workers.emplace_back([&, wi]() {
-                const size_t begin = (source_count * wi) / load_worker_count;
-                const size_t end   = (source_count * (wi + 1)) / load_worker_count;
-                for (size_t i = begin; i < end; ++i) process_source(i);
-            });
-        }
-        for (auto& t : workers) t.join();
+        sprat::core::run_workers(load_worker_count, [&](unsigned int wi) {
+            const size_t begin = (source_count * wi) / load_worker_count;
+            const size_t end   = (source_count * (wi + 1)) / load_worker_count;
+            for (size_t i = begin; i < end; ++i) process_source(i);
+        });
     }
 
     // Serial collection pass: merge results in source order.

@@ -298,7 +298,7 @@ Each `spratconvert` format handles several atlases the way its engine expects:
 | `phaser-hash`, `phaser-array` | One Phaser multi-atlas JSON (`textures: [...]`), loaded with `this.load.multiatlas` |
 | `godot` | One file with an `atlases` list; each frame has an `atlas` index |
 | `plist`, `aseprite`, `unity.json` | One file per atlas, named after it (`atlas_0.plist`, ...); requires `--output-dir` |
-| `unity.meta` | One `<atlas>.meta` per atlas PNG (`atlas_0.png.meta`, ...), each with its own GUID; requires `--output-dir` |
+| `unity.meta` | One `<atlas>.meta` per atlas PNG (`atlas_0.png.meta`, ...), each with its own GUID; requires `--output-dir` (a single atlas is also written as `<atlas>.meta` when `-a` names it) |
 | `unity.anim` | Each frame references the GUID of the atlas its sprite was packed into |
 
 ```sh
@@ -638,7 +638,7 @@ Transform files are searched in:
 | `phaser-array` | JSON | Phaser 3 array-keyed sprite sheet; multi-atlas JSON for multipack |
 | `phaser-anims` | JSON | Phaser 3 animation config; frames use `texture_key` (e.g. `atlas` for a multipack `atlas_%d.png`) |
 | `plist` | plist | Apple / TexturePacker plist; one file per atlas for multipack |
-| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation (file named after it, with path characters and a leading dot replaced by `_`); requires `--output-dir`; multipack writes one `.json` and one `<atlas>.meta` per atlas; rotated sprites are not supported (Unity sprite rects have no rotation); in `unity.meta` the pivot and nine-slice border are relative to the trimmed sprite rect |
+| `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation (file named after it, with path characters and a leading dot replaced by `_`, and a `_` prefix for Windows device names such as `con`); the clips reference the texture GUID of the `.meta`, which comes from the `-a` name, so pass `-a atlas.png` (also naming the file `atlas.png.meta`) to keep the textures of one project apart; requires `--output-dir`; multipack writes one `.json` and one `<atlas>.meta` per atlas; rotated sprites are not supported (Unity sprite rects have no rotation); in `unity.meta` the pivot and nine-slice border are relative to the trimmed sprite rect |
 
 ### Transform format
 
@@ -648,7 +648,8 @@ Each transform is a Jsonnet file that evaluates to a JSON object:
 - `description` — shown by `--list-transforms`
 - `extension` — output file extension (e.g. `".json"`)
 - `content` — string output for a single file
-- `files` — array of `{filename, content}` for multi-file output; mutually exclusive with `content`, requires `--output-dir`. Each `filename` must be a unique plain file name (no `/`, `\`, `:` or `..`); otherwise nothing is written. `lib.safe_filename(name)` in `sprat.libsonnet` turns arbitrary names into valid ones
+- `filename` — optional, with `content`: the file name used with `--output-dir` instead of `{variant}{extension}` (stdout output ignores it); `unity.meta` uses it to write `<atlas>.meta` when `-a` names the atlas
+- `files` — array of `{filename, content}` for multi-file output; mutually exclusive with `content`, requires `--output-dir`. Each `filename` must be a unique plain file name that is valid on every platform: no `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|` or `..`, no trailing dot or space, and no Windows device name such as `CON`, `NUL`, `COM1` or `LPT1` (with or without an extension); otherwise nothing is written. `lib.safe_filename(name)` in `sprat.libsonnet` turns arbitrary names into valid ones
 
 The layout data is available as `std.extVar("sprat")`:
 
@@ -674,7 +675,8 @@ local sprat = std.extVar("sprat");
 | `scale`, `extrude` | number | Layout-level values |
 | `has_animations`, `has_markers` | boolean | Whether extra files were loaded |
 | `animation_count`, `marker_count`, `sprite_count` | number | Counts |
-| `output_stem`, `output_stem_hash_hex` | string | Output stem and its FNV-1a hex hash |
+| `output_stem`, `output_stem_hash_hex` | string | Output stem (the transform's variant name with `--output-dir`) and its FNV-1a hex hash |
+| `output_pattern_hash_hex` | string | FNV-1a hex hash of the `-a` pattern (of `""` without one): the same for every transform of a run, so IDs that one output refers to in another (Unity texture GUIDs) match |
 | `animations_path`, `markers_path` | string | Paths to the extra files |
 
 **Per sprite (`sprites[]`):**
@@ -841,7 +843,7 @@ Example:
 
 `spratframes` scans an image and detects individual sprite boundaries. It can use transparency-based detection (finding connected components of non-transparent pixels) or look for specific rectangle borders.
 
-Pieces of one sprite are folded into a single frame when one piece's box mostly lies inside the other's (at least half of the smaller box); sprites whose boxes merely clip each other, as in tightly packed sheets, stay separate frames, so frames may overlap slightly. Frames are listed in reading order (rows top to bottom, left to right within a row), so animation strips and grids keep their frame order when unpacked as `sprite_0`, `sprite_1`, ... A sheet has a solid background when all four corners share one opaque color; only background pixels connected to the image edge are removed, so sprite pixels of the same color are kept unless they touch the background (for example, an outline drawn in the background color).
+Pieces of one sprite are folded into a single frame when one piece's box mostly lies inside the other's (at least half of the smaller box); sprites whose boxes merely clip each other, as in tightly packed sheets, stay separate frames, so frames may overlap slightly. Frames are listed in reading order (rows top to bottom, left to right within a row), so animation strips and grids keep their frame order when unpacked as `sprite_0`, `sprite_1`, ... A sheet has a solid background when one opaque color (give or take a little) makes up at least half of the image edge, so sprites touching the edge or its corners don't hide it; only background pixels connected to the image edge are removed, so sprite pixels of the same color are kept unless they touch the background (for example, an outline drawn in the background color).
 
 ```sh
 ./build/spratframes sheet.png > frames.spratframes
@@ -895,7 +897,7 @@ Supported formats:
 - Phaser multi-atlas JSON (`textures: [...]`): the texture whose `image` matches the atlas file name is unpacked
 - `spratlayout` layouts (including multipack layouts, one atlas at a time, and the `alias` lines of deduplicated sprites), and the minimalist `.spratframes` format
 
-Rotated sprites are turned back, and trimmed sprites are placed in a transparent canvas of their original size (`sourceSize`/`spriteSourceSize` in JSON, trim offsets in layouts, at the layout's `scale`), so unpacked animation frames stay aligned. Output files are named after the frames, with `.png` added unless the name already ends with it. Every frame is checked before anything is written: frames outside the atlas, frames that don't fit their original size, unsafe names or two frames writing the same file make `spratunpack` fail without writing output.
+Rotated sprites are turned back, and trimmed sprites are placed in a transparent canvas of their original size (`sourceSize`/`spriteSourceSize` in JSON, trim offsets in layouts, at the layout's `scale`), so unpacked animation frames stay aligned. Output files are named after the frames, with `.png` added unless the name already ends with it. Every frame is checked before anything is written: frames outside the atlas, frames that don't fit their original size, original sizes beyond 32768 pixels a side or 100 megapixels (usually a corrupt `sourceSize`; `--keep-trim` doesn't restore them), unsafe names or two frames writing the same file make `spratunpack` fail without writing output.
 
 If no frames file is specified, `spratunpack` will look for `<atlas>.json` or `<atlas>.spratframes` automatically only when atlas input is a file path.
 

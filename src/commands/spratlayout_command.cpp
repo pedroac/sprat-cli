@@ -44,6 +44,7 @@
 #include "commands/spratlayout/sprites.h"
 #include "core/checked_math.h"
 #include "core/cli_parse.h"
+#include "core/file_io.h"
 #include "core/i18n.h"
 #include "core/perceptual_dedup.h"
 
@@ -751,7 +752,7 @@ bool measure_sprites(const std::vector<Sprite>& sprites, const LayoutSettings& s
     }
     // POT atlases can only be as large as the largest power of two within each limit.
     const auto effective_limit = [&](int limit) {
-        return settings.mode == Mode::POT ? previous_power_of_two(limit) : limit;
+        return settings.mode == Mode::POT ? pot_limit(limit) : limit;
     };
     const int width_limit = settings.max_width_limit > 0 ? effective_limit(settings.max_width_limit) : 0;
     const int height_limit = settings.max_height_limit > 0 ? effective_limit(settings.max_height_limit) : 0;
@@ -931,8 +932,8 @@ bool fit_reused_atlas(const LayoutSettings& settings, int& width, int& height) {
     const int pot_width = next_power_of_two(width);
     const int pot_height = next_power_of_two(height);
     if (pot_width <= 0 || pot_height <= 0 ||
-        (settings.max_width_limit > 0 && pot_width > settings.max_width_limit) ||
-        (settings.max_height_limit > 0 && pot_height > settings.max_height_limit)) {
+        (settings.max_width_limit > 0 && pot_width > pot_limit(settings.max_width_limit)) ||
+        (settings.max_height_limit > 0 && pot_height > pot_limit(settings.max_height_limit))) {
         return false;
     }
     width = pot_width;
@@ -1105,7 +1106,7 @@ int run_spratlayout(int argc, char** argv) {
         std::string cached_output;
         if (load_output_cache(cache.layout, cache.layout_signature, cached_output)) {
             std::cout << cached_output;
-            return 0;
+            return sprat::core::finish_stdout() ? 0 : 1;
         }
     }
 
@@ -1189,19 +1190,12 @@ int run_spratlayout(int argc, char** argv) {
         atlases.push_back({atlas_width, atlas_height});
         for (auto& s : sprites) { s.atlas_index = 0; }
     } else if (settings.multipack) {
-        // The upper bounds are min(limit, sum of sprite sizes). For pot atlases only the limit is
-        // a hard cap (rounded down to a power of two); the sum is just a search bound, so it is
-        // rounded up, or a small sheet could not fit the power of two its sprites need.
+        // The upper bounds are min(limit, sum of sprite sizes); pot atlases use pot_search_bound.
         int multipack_w = request.width_upper_bound;
         int multipack_h = request.height_upper_bound;
         if (settings.mode == Mode::POT) {
-            const auto pot_bound = [](int sum, int limit) {
-                const int up = next_power_of_two(sum);
-                const int cap = limit > 0 ? previous_power_of_two(limit) : up;
-                return up > 0 ? std::min(up, cap) : cap;
-            };
-            multipack_w = pot_bound(request.sum_width, settings.max_width_limit);
-            multipack_h = pot_bound(request.sum_height, settings.max_height_limit);
+            multipack_w = pot_search_bound(request.sum_width, settings.max_width_limit);
+            multipack_h = pot_search_bound(request.sum_height, settings.max_height_limit);
         }
         if (!pack_atlases(sprites, multipack_w, multipack_h, settings.padding,
                           settings.mode, settings.optimize_target, settings.allow_rotate,
@@ -1246,5 +1240,5 @@ int run_spratlayout(int argc, char** argv) {
         save_output_cache(cache.layout, cache.layout_signature, output_text);
     }
     prune_cache_family(cache.base);
-    return 0;
+    return sprat::core::finish_stdout() ? 0 : 1;
 }

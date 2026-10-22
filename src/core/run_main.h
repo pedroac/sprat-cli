@@ -13,15 +13,7 @@ namespace sprat::core {
 inline int run_main(int (*command)(int, char**), int argc, char** argv) {
     init_i18n("sprat-cli");
     try {
-        const int status = command(argc, argv);
-        // Layouts, atlases and metadata go to stdout; a pipe or disk that took only part of
-        // them (closed pipe, full disk) must not look like success.
-        std::cout.flush();
-        if (status == 0 && !std::cout) {
-            std::cerr << tr("Error: failed to write to standard output\n");
-            return 1;
-        }
-        return status;
+        return command(argc, argv);
     } catch (const std::exception& e) {
         std::cerr << tr("Error: ") << e.what() << "\n";
     } catch (...) {
