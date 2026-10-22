@@ -1,0 +1,5 @@
+# Asset regression baselines are compared as text; keep them LF on every platform.
+tests/baselines/** text eol=lf
+tests/assets/** binary
+tests/assets/**/*.txt text
+tests/assets/**/*.md text

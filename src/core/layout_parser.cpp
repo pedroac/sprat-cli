@@ -1,12 +1,15 @@
 #include "layout_parser.h"
 #include "cli_parse.h"
+#include "i18n.h"
 
 #include <array>
 #include <cctype>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 static bool parse_slice(const std::string& val, int& left, int& top, int& right, int& bottom,
@@ -72,10 +75,37 @@ static bool is_combined_format_passthrough(const std::string& line) {
 
 namespace sprat::core {
 
+int scale_to_atlas(int value, double scale) {
+    if (scale == 1.0) {
+        return value;
+    }
+    const long double scaled = std::round(static_cast<long double>(value) * scale);
+    if (scaled >= static_cast<long double>(std::numeric_limits<int>::max())) {
+        return std::numeric_limits<int>::max();
+    }
+    if (scaled <= static_cast<long double>(std::numeric_limits<int>::min())) {
+        return std::numeric_limits<int>::min();
+    }
+    return static_cast<int>(scaled);
+}
+
+MetadataTrim metadata_trim(const Sprite& s, double scale) {
+    MetadataTrim t{s.src_x, s.src_y, s.trim_right, s.trim_bottom};
+    if (is_nine_patch_path(s.path) &&
+        t.left >= 1 && t.top >= 1 && t.right >= 1 && t.bottom >= 1) {
+        --t.left;
+        --t.top;
+        --t.right;
+        --t.bottom;
+    }
+    return {scale_to_atlas(t.left, scale), scale_to_atlas(t.top, scale),
+            scale_to_atlas(t.right, scale), scale_to_atlas(t.bottom, scale)};
+}
+
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error) {
     constexpr std::string_view prefix = "sprite";
     if (!line.starts_with(prefix)) {
-        error = "line does not start with sprite";
+        error = tr("line does not start with sprite");
         return false;
     }
 
@@ -86,7 +116,7 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
 
     std::string path;
     if (pos >= line.size() || line[pos] != '"') {
-        error = "sprite path must be quoted";
+        error = tr("sprite path must be quoted");
         return false;
     }
 
@@ -111,7 +141,7 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         } else if (token.starts_with("colors=")) {
             std::string val = token.substr(7);
             if (!parse_int(val, parsed.colors) || (parsed.colors != 0 && (parsed.colors < 2 || parsed.colors > 256))) {
-                error = "invalid colors value (must be 0 or 2-256): " + val;
+                error = std::string(tr("invalid colors value (must be 0 or 2-256): ")) + val;
                 return false;
             }
         } else if (token.starts_with("slice=")) {
@@ -119,7 +149,7 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
             if (!parse_slice(val, parsed.slice_left, parsed.slice_top,
                              parsed.slice_right, parsed.slice_bottom,
                              parsed.slice_h, parsed.slice_v)) {
-                error = "invalid slice value (expected L,T,R,B[,H_MODE,V_MODE] with non-negative integers and optional stretch/repeat/mirror/fixed modes): " + val;
+                error = std::string(tr("invalid slice value (expected L,T,R,B[,H_MODE,V_MODE] with non-negative integers and optional stretch/repeat/mirror/fixed modes): ")) + val;
                 return false;
             }
             parsed.has_slice = true;
@@ -129,7 +159,7 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
     }
 
     if (tokens.empty()) {
-        error = "sprite line is missing numeric fields";
+        error = tr("sprite line is missing numeric fields");
         return false;
     }
 
@@ -137,27 +167,31 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         constexpr size_t MODERN_SPRITE_TOKENS_MIN = 2;
         constexpr size_t MODERN_SPRITE_TOKENS_MAX = 4;
         if (tokens.size() != MODERN_SPRITE_TOKENS_MIN && tokens.size() != MODERN_SPRITE_TOKENS_MAX) {
-            error = "sprite line must contain position/size and optional trim offsets";
+            error = tr("sprite line must contain position/size and optional trim offsets");
             return false;
         }
 
         if (!parse_pair(tokens[0], parsed.x, parsed.y) || !parse_pair(tokens[1], parsed.w, parsed.h)) {
-            error = "invalid position or size pair";
+            error = tr("invalid position or size pair");
             return false;
         }
         if (parsed.x < 0 || parsed.y < 0) {
-            error = "sprite position must not be negative";
+            error = tr("sprite position must not be negative");
             return false;
         }
         if (parsed.w < 0 || parsed.h < 0) {
-            error = "sprite dimensions must not be negative";
+            error = tr("sprite dimensions must not be negative");
             return false;
         }
 
         if (tokens.size() == MODERN_SPRITE_TOKENS_MAX) {
             if (!parse_pair(tokens[2], parsed.src_x, parsed.src_y)
                 || !parse_pair(tokens[3], parsed.trim_right, parsed.trim_bottom)) {
-                error = "invalid trim offset pair";
+                error = tr("invalid trim offset pair");
+                return false;
+            }
+            if (parsed.src_x < 0 || parsed.src_y < 0 || parsed.trim_right < 0 || parsed.trim_bottom < 0) {
+                error = tr("trim offsets must not be negative");
                 return false;
             }
             parsed.has_trim = true;
@@ -166,27 +200,31 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
         constexpr size_t LEGACY_SPRITE_TOKENS_MIN = 4;
         constexpr size_t LEGACY_SPRITE_TOKENS_MAX = 6;
         if (tokens.size() != LEGACY_SPRITE_TOKENS_MIN && tokens.size() != LEGACY_SPRITE_TOKENS_MAX) {
-            error = "legacy sprite line has invalid field count";
+            error = tr("legacy sprite line has invalid field count");
             return false;
         }
         if (!parse_int(tokens[0], parsed.x)
             || !parse_int(tokens[1], parsed.y)
             || !parse_int(tokens[2], parsed.w)
             || !parse_int(tokens[3], parsed.h)) {
-            error = "legacy sprite line has invalid numeric fields";
+            error = tr("legacy sprite line has invalid numeric fields");
             return false;
         }
         if (parsed.x < 0 || parsed.y < 0) {
-            error = "sprite position must not be negative";
+            error = tr("sprite position must not be negative");
             return false;
         }
         if (parsed.w < 0 || parsed.h < 0) {
-            error = "sprite dimensions must not be negative";
+            error = tr("sprite dimensions must not be negative");
             return false;
         }
         if (tokens.size() == LEGACY_SPRITE_TOKENS_MAX) {
             if (!parse_int(tokens[4], parsed.src_x) || !parse_int(tokens[5], parsed.src_y)) {
-                error = "legacy sprite line has invalid crop offsets";
+                error = tr("legacy sprite line has invalid crop offsets");
+                return false;
+            }
+            if (parsed.src_x < 0 || parsed.src_y < 0) {
+                error = tr("trim offsets must not be negative");
                 return false;
             }
             parsed.has_trim = true;
@@ -289,10 +327,35 @@ bool parse_multipack_line(const std::string& line, bool& multipack) {
     return true;
 }
 
-bool parse_alias_line(const std::string& line, std::string& alias_path, std::string& canonical_path, std::string& error) {
+bool parse_rotation_line(const std::string& line, bool& rotate_ccw) {
+    std::istringstream iss(line);
+    std::string tag;
+    std::string value_token;
+    std::string extra;
+
+    if (!(iss >> tag >> value_token)) {
+        return false;
+    }
+    if (tag != "rotation") {
+        return false;
+    }
+    if (value_token == "cw") {
+        rotate_ccw = false;
+    } else if (value_token == "ccw") {
+        rotate_ccw = true;
+    } else {
+        return false;
+    }
+    if (iss >> extra) {
+        return false;
+    }
+    return true;
+}
+
+bool parse_alias_line(const std::string& line, Alias& out, std::string& error) {
     constexpr std::string_view prefix = "alias";
     if (!line.starts_with(prefix)) {
-        error = "line does not start with alias";
+        error = tr("line does not start with alias");
         return false;
     }
 
@@ -302,11 +365,12 @@ bool parse_alias_line(const std::string& line, std::string& alias_path, std::str
     }
 
     if (pos >= line.size() || line[pos] != '"') {
-        error = "alias path must be quoted";
+        error = tr("alias path must be quoted");
         return false;
     }
 
-    if (!parse_quoted(line, pos, alias_path, error)) {
+    Alias parsed;
+    if (!parse_quoted(line, pos, parsed.path, error)) {
         return false;
     }
 
@@ -315,23 +379,39 @@ bool parse_alias_line(const std::string& line, std::string& alias_path, std::str
     }
 
     if (pos >= line.size() || line[pos] != '"') {
-        error = "canonical path must be quoted";
+        error = tr("canonical path must be quoted");
         return false;
     }
 
-    if (!parse_quoted(line, pos, canonical_path, error)) {
+    if (!parse_quoted(line, pos, parsed.canonical_path, error)) {
         return false;
     }
 
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
-        ++pos;
+    // Optional trim offsets, same syntax as on sprite lines: L,T R,B
+    std::istringstream tail(line.substr(pos));
+    std::vector<std::string> tokens;
+    std::string token;
+    while (tail >> token) {
+        tokens.push_back(token);
     }
-
-    if (pos < line.size()) {
-        error = "extra content after canonical path";
+    if (tokens.size() == 2) {
+        if (!parse_pair(tokens[0], parsed.trim_left, parsed.trim_top)
+            || !parse_pair(tokens[1], parsed.trim_right, parsed.trim_bottom)) {
+            error = tr("invalid alias trim offset pair");
+            return false;
+        }
+        if (parsed.trim_left < 0 || parsed.trim_top < 0
+            || parsed.trim_right < 0 || parsed.trim_bottom < 0) {
+            error = tr("alias trim offsets must not be negative");
+            return false;
+        }
+        parsed.has_trim = true;
+    } else if (!tokens.empty()) {
+        error = tr("extra content after canonical path");
         return false;
     }
 
+    out = std::move(parsed);
     return true;
 }
 
@@ -348,17 +428,17 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
         if (line.starts_with("atlas")) {
             int w = 0, h = 0;
             if (!parse_atlas_line(line, w, h)) {
-                error = "Invalid atlas line: " + line;
+                error = std::string(tr("Invalid atlas line: ")) + line;
                 return false;
             }
             if (w <= 0 || h <= 0) {
-                error = "Atlas dimensions must be positive: " + line;
+                error = std::string(tr("Atlas dimensions must be positive: ")) + line;
                 return false;
             }
             parsed.atlases.push_back({w, h});
         } else if (line.starts_with("root")) {
             if (parsed.has_root) {
-                error = "Duplicate root line";
+                error = tr("Duplicate root line");
                 return false;
             }
             size_t pos = 4;
@@ -368,50 +448,60 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             std::string root_path;
             std::string root_error;
             if (!parse_quoted(line, pos, root_path, root_error)) {
-                error = "Invalid root line: " + root_error;
+                error = std::string(tr("Invalid root line: ")) + root_error;
                 return false;
             }
             parsed.root = root_path;
             parsed.has_root = true;
         } else if (line.starts_with("scale")) {
             if (parsed.has_scale) {
-                error = "Duplicate scale line";
+                error = tr("Duplicate scale line");
                 return false;
             }
             if (!parse_scale_line(line, parsed.scale)) {
-                error = "Invalid scale line: " + line;
+                error = std::string(tr("Invalid scale line: ")) + line;
                 return false;
             }
             parsed.has_scale = true;
         } else if (line.starts_with("extrude")) {
             if (parsed.has_extrude) {
-                error = "Duplicate extrude line";
+                error = tr("Duplicate extrude line");
                 return false;
             }
             if (!parse_extrude_line(line, parsed.extrude)) {
-                error = "Invalid extrude line: " + line;
+                error = std::string(tr("Invalid extrude line: ")) + line;
                 return false;
             }
             parsed.has_extrude = true;
         } else if (line.starts_with("multipack")) {
             if (parsed.has_multipack) {
-                error = "Duplicate multipack line";
+                error = tr("Duplicate multipack line");
                 return false;
             }
             if (!parse_multipack_line(line, parsed.multipack)) {
-                error = "Invalid multipack line: " + line;
+                error = std::string(tr("Invalid multipack line: ")) + line;
                 return false;
             }
             parsed.has_multipack = true;
+        } else if (line.starts_with("rotation")) {
+            if (parsed.has_rotation) {
+                error = tr("Duplicate rotation line");
+                return false;
+            }
+            if (!parse_rotation_line(line, parsed.rotate_ccw)) {
+                error = std::string(tr("Invalid rotation line (expected cw or ccw): ")) + line;
+                return false;
+            }
+            parsed.has_rotation = true;
         } else if (line.starts_with("sprite")) {
             Sprite s;
             std::string sprite_error;
             if (!parse_sprite_line(line, s, sprite_error)) {
-                error = "Invalid sprite line: " + sprite_error;
+                error = std::string(tr("Invalid sprite line: ")) + sprite_error;
                 return false;
             }
             if (parsed.atlases.empty()) {
-                error = "Sprite defined before any atlas";
+                error = tr("Sprite defined before any atlas");
                 return false;
             }
             s.atlas_index = static_cast<int>(parsed.atlases.size()) - 1;
@@ -419,7 +509,7 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             // Compare without adding so huge coordinates can't overflow past the check.
             if (s.x > atlas.width || s.w > atlas.width - s.x
                 || s.y > atlas.height || s.h > atlas.height - s.y) {
-                error = "Sprite " + s.path + " extends beyond atlas bounds ("
+                error = std::string(tr("Sprite ")) + s.path + tr(" extends beyond atlas bounds (")
                     + std::to_string(s.x) + "+" + std::to_string(s.w) + "="
                     + std::to_string(static_cast<long long>(s.x) + s.w) + " > " + std::to_string(atlas.width)
                     + " or " + std::to_string(s.y) + "+" + std::to_string(s.h) + "="
@@ -427,16 +517,16 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             if (!parsed.multipack && !seen_sprite_paths.insert(s.path).second) {
-                std::cerr << "Warning: duplicate sprite path: " << s.path << "\n";
+                std::cerr << tr("Warning: duplicate sprite path: ") << s.path << "\n";
             }
             parsed.sprites.push_back(s);
         } else if (line.starts_with("alias")) {
-            std::string alias_path, canonical_path;
-            if (!parse_alias_line(line, alias_path, canonical_path, error)) {
-                error = "Invalid alias line: " + error;
+            Alias alias;
+            if (!parse_alias_line(line, alias, error)) {
+                error = std::string(tr("Invalid alias line: ")) + error;
                 return false;
             }
-            parsed.aliases.push_back({alias_path, canonical_path});
+            parsed.aliases.push_back(std::move(alias));
         } else if (is_combined_format_passthrough(line)) {
             // These lines are valid in the combined raw layout format but carry no
             // meaning for the basic layout parser. See is_combined_format_passthrough.
@@ -449,13 +539,13 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             if (trimmed.empty()) {
                 continue;
             }
-            error = "Unknown line: " + line;
+            error = std::string(tr("Unknown line: ")) + line;
             return false;
         }
     }
 
     if (parsed.atlases.empty()) {
-        error = "No atlas defined in layout";
+        error = tr("No atlas defined in layout");
         return false;
     }
 
@@ -464,6 +554,36 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
     }
 
     out = std::move(parsed);
+    return true;
+}
+
+bool expand_layout_aliases(Layout& layout, std::string& error) {
+    std::unordered_map<std::string, size_t> index_by_path;
+    index_by_path.reserve(layout.sprites.size());
+    for (size_t i = 0; i < layout.sprites.size(); ++i) {
+        index_by_path.emplace(layout.sprites[i].path, i);
+    }
+    layout.sprites.reserve(layout.sprites.size() + layout.aliases.size());
+    for (const Alias& alias : layout.aliases) {
+        const auto it = index_by_path.find(alias.canonical_path);
+        if (it == index_by_path.end()) {
+            error = std::string(tr("Alias ")) + "\"" + alias.path + "\"" + tr(" refers to unknown sprite ")
+                + "\"" + alias.canonical_path + "\"";
+            return false;
+        }
+        Sprite expanded = layout.sprites[it->second];
+        expanded.path = alias.path;
+        expanded.alias_of = alias.canonical_path;
+        if (alias.has_trim) {
+            expanded.src_x = alias.trim_left;
+            expanded.src_y = alias.trim_top;
+            expanded.trim_right = alias.trim_right;
+            expanded.trim_bottom = alias.trim_bottom;
+            expanded.has_trim = true;
+        }
+        layout.sprites.push_back(std::move(expanded));
+    }
+    layout.aliases.clear();
     return true;
 }
 

@@ -1,5 +1,6 @@
 #include "cli_parse.h"
 
+#include <cctype>
 #include <cerrno>
 #include <charconv>
 #include <cmath>
@@ -86,15 +87,15 @@ bool parse_double(const std::string& token, double& out) {
     return true;
 }
 
-bool parse_pair(const std::string& token, int& a, int& b) {
-    size_t comma = token.find(',');
-    if (comma == std::string::npos || comma == 0 || comma + 1 >= token.size()) {
+bool parse_pair(const std::string& token, int& a, int& b, char separator) {
+    size_t sep = token.find(separator);
+    if (sep == std::string::npos || sep == 0 || sep + 1 >= token.size()) {
         return false;
     }
-    if (token.find(',', comma + 1) != std::string::npos) {
+    if (token.find(separator, sep + 1) != std::string::npos) {
         return false;
     }
-    return parse_int(token.substr(0, comma), a) && parse_int(token.substr(comma + 1), b);
+    return parse_int(token.substr(0, sep), a) && parse_int(token.substr(sep + 1), b);
 }
 
 bool parse_quoted(std::string_view input, size_t& pos, std::string& out, std::string& error) {
@@ -165,6 +166,18 @@ std::filesystem::path get_executable_dir(const char* argv0) {
         return cwd;
     }
     return exec_dir;
+}
+
+std::string trim_copy(const std::string& s) {
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])) != 0) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])) != 0) {
+        --end;
+    }
+    return s.substr(start, end - start);
 }
 
 int compare_natural(std::string_view a, std::string_view b) {

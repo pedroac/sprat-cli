@@ -45,10 +45,14 @@ vcpkg_installed/
 **/CMakeFiles/
 **/CMakeCache
 **/CMakeCache.txt
-*.cmake
+cmake_install.cmake
+CTestTestfile.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
 **/Makefile
 **/build/
 **/build-win/
+**/build_win
 **/build_debug
 **/build_release
 **/Testing
@@ -62,12 +66,20 @@ spratpack
 spratconvert
 spratunpack
 spratframes
+# ...but not the source folder that shares the binary name
+!src/commands/spratlayout/
 README-assets/*
 !README-assets/*.png
-build_test/_deps/
+**/build_test
 **/_deps
 # Exclude temporary documentation snapshots
 README-assets/snapshot_*.png
 test_background/
 compile_commands.json
 fixes.json
+
+# Python bytecode
+__pycache__/
+
+# Asset regression test outputs (generated for human inspection)
+tests/output/

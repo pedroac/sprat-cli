@@ -36,8 +36,11 @@ namespace fs = std::filesystem;
 #include <cstddef>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include "core/cli_parse.h"
+#include "core/file_io.h"
 #include "core/i18n.h"
+#include "core/image_limits.h"
 
 #include <stb_image.h>
 
@@ -48,11 +51,10 @@ constexpr int k_default_rectangle_color_b = 255;
 constexpr int k_default_tolerance = 1; // Standardized to match other tools
 constexpr int k_default_min_sprite_size = 4;
 constexpr int k_default_max_sprites = 10000;
-constexpr int k_default_threads = 0; // Auto-detect
 constexpr unsigned char k_max_alpha = 255;
 constexpr unsigned char k_min_alpha = 0;
-constexpr int k_max_image_dimension = 32768;
-constexpr size_t k_max_total_pixels = 100000000;
+using sprat::core::k_max_image_dimension;
+using sprat::core::k_max_total_pixels;
 constexpr int k_default_color_distance_threshold = 30;
 constexpr int k_strict_color_distance_threshold = 15;
 constexpr int k_hex_short_len = 3;
@@ -67,6 +69,7 @@ using sprat::core::parse_positive_int;
 using sprat::core::parse_non_negative_int;
 using sprat::core::tr;
 using sprat::core::to_quoted;
+using sprat::core::trim_copy;
 
 struct Color {
     unsigned char r, g, b, a;
@@ -120,7 +123,6 @@ struct FramesConfig {
     int tolerance = k_default_tolerance;
     int min_sprite_size = k_default_min_sprite_size;
     int max_sprites = k_default_max_sprites;
-    unsigned int threads = k_default_threads;
     bool force = false;
 };
 
@@ -209,189 +211,157 @@ public:
             frames = extract_from_components();
         }
         
+        // Exit non-zero so a pipeline into spratunpack stops here with a clear reason.
         if (frames.empty()) {
-            std::cerr << tr("Warning: No frames found") << '\n';
-            return true;
+            std::cerr << tr("Error: No frames found in ") << to_quoted(config_.input_path.string()) << '\n';
+            return false;
         }
         
         return output_frames(frames);
     }
     
 private:
+    // Frames are the regions enclosed by rectangle-colored lines: 4-connected areas of other
+    // pixels that do not reach the image edge (the outside of the boxes does). Taking the
+    // enclosed area instead of the outline's bounding box handles separate boxes, grids
+    // whose cells share border lines, and borders thicker than one pixel alike. The whole
+    // cell is the frame, keeping the sheet's alignment; cells with nothing visible in them
+    // (empty grid slots) are skipped.
     bool detect_rectangles() {
         detected_rectangles_.clear();
-        
-        std::vector<std::uint8_t> visited(static_cast<size_t>(width_) * height_, 0);
-        
-        for (int y = 0; y < height_; ++y) {
-            for (int x = 0; x < width_; ++x) {
-                if ((visited.at((static_cast<size_t>(y) * width_) + x) == 0U) && is_rectangle_pixel(x, y)) {
-                    Rectangle rect = flood_fill_rectangle(x, y, visited);
-                    if (rect.w > 0 && rect.h > 0 && rect.area() >= config_.min_sprite_size) {
-                        detected_rectangles_.push_back(rect);
+
+        const size_t w = static_cast<size_t>(width_);
+        const size_t h = static_cast<size_t>(height_);
+        std::vector<std::uint8_t> visited(w * h, 0);
+        std::vector<size_t> stack;
+
+        for (size_t start = 0; start < w * h; ++start) {
+            if (visited[start] != 0U || is_rectangle_pixel(start)) {
+                continue;
+            }
+            visited[start] = 1;
+            stack.assign(1, start);
+            size_t min_x = start % w;
+            size_t max_x = min_x;
+            size_t min_y = start / w;
+            size_t max_y = min_y;
+            bool touches_edge = false;
+            bool has_content = false;
+            while (!stack.empty()) {
+                const size_t i = stack.back();
+                stack.pop_back();
+                has_content = has_content || is_content_pixel(i);
+                const size_t x = i % w;
+                const size_t y = i / w;
+                min_x = std::min(min_x, x);
+                max_x = std::max(max_x, x);
+                min_y = std::min(min_y, y);
+                max_y = std::max(max_y, y);
+                touches_edge = touches_edge || x == 0 || y == 0 || x + 1 == w || y + 1 == h;
+                const auto visit = [&](size_t n) {
+                    if (visited[n] == 0U && !is_rectangle_pixel(n)) {
+                        visited[n] = 1;
+                        stack.push_back(n);
                     }
-                }
+                };
+                if (x > 0) visit(i - 1);
+                if (x + 1 < w) visit(i + 1);
+                if (y > 0) visit(i - w);
+                if (y + 1 < h) visit(i + w);
+            }
+            if (touches_edge || !has_content) {
+                continue;
+            }
+            const Rectangle cell{.x = static_cast<int>(min_x), .y = static_cast<int>(min_y),
+                                 .w = static_cast<int>(max_x - min_x + 1), .h = static_cast<int>(max_y - min_y + 1)};
+            if (cell.area() >= config_.min_sprite_size) {
+                detected_rectangles_.push_back(cell);
             }
         }
-        
-        // Merge overlapping rectangles
+
+        // A closed shape of the rectangle color inside a sprite encloses a region of its own;
+        // merging folds it back into the cell around it.
         merge_rectangles(detected_rectangles_);
-        
-        return !detected_rectangles_.empty();
+
+        return true;
     }
-    
-    [[nodiscard]] bool is_rectangle_pixel(int x, int y) const {
-        if (x < 0 || x >= width_ || y < 0 || y >= height_) {
-            return false;
-        }
-        
-        size_t idx = (static_cast<size_t>(y) * width_ + x) * 4;
-        Color pixel{.r=image_data_.at(idx), .g=image_data_.at(idx+1), .b=image_data_.at(idx+2), .a=image_data_.at(idx+3)};
-        
-        // Check if pixel matches rectangle color (with some tolerance for anti-aliasing)
-        return color_distance(pixel, config_.rectangle_color) < k_default_color_distance_threshold;
+
+    // Visible and not the sheet's background. Background enclosed by rectangle lines is not
+    // connected to the image edge, so preprocessing leaves it opaque; it is checked by color.
+    [[nodiscard]] bool is_content_pixel(size_t pixel_index) const {
+        const Color c = pixel_at(pixel_index);
+        return !c.is_transparent() &&
+               !(has_detected_background_ &&
+                 color_distance(c, detected_background_color_) <= k_strict_color_distance_threshold);
     }
-    
+
+    [[nodiscard]] bool is_rectangle_pixel(size_t pixel_index) const {
+        // Matches the rectangle color with some tolerance for anti-aliasing.
+        return color_distance(pixel_at(pixel_index), config_.rectangle_color) < k_default_color_distance_threshold;
+    }
+
     [[nodiscard]] static int color_distance(const Color& a, const Color& b) {
         return std::abs(static_cast<int>(a.r) - static_cast<int>(b.r))
                + std::abs(static_cast<int>(a.g) - static_cast<int>(b.g))
                + std::abs(static_cast<int>(a.b) - static_cast<int>(b.b));
     }
-    
-    Rectangle flood_fill_rectangle(int start_x, int start_y, std::vector<std::uint8_t>& visited) {
-        fill_stack_.clear();
-        fill_stack_.emplace_back(start_x, start_y);
-        visited.at((static_cast<size_t>(start_y) * width_) + start_x) = 1;
 
-        int min_x = start_x;
-        int max_x = start_x;
-        int min_y = start_y;
-        int max_y = start_y;
-
-        constexpr std::array<int, 4> dx = {-1, 1, 0, 0};
-        constexpr std::array<int, 4> dy = {0, 0, -1, 1};
-
-        while (!fill_stack_.empty()) {
-            auto [x, y] = fill_stack_.back();
-            fill_stack_.pop_back();
-
-            min_x = std::min(min_x, x);
-            max_x = std::max(max_x, x);
-            min_y = std::min(min_y, y);
-            max_y = std::max(max_y, y);
-
-            for (size_t i = 0; i < 4; ++i) {
-                int nx = x + dx[i];
-                int ny = y + dy[i];
-
-                if (nx >= 0 && nx < width_ && ny >= 0 && ny < height_
-                    && (visited.at((static_cast<size_t>(ny) * width_) + nx) == 0U) && is_rectangle_pixel(nx, ny)) {
-                    visited.at((static_cast<size_t>(ny) * width_) + nx) = 1;
-                    fill_stack_.emplace_back(nx, ny);
-                }
-            }
+    // Pieces of one sprite (a detached weapon, a closed loop of the rectangle color inside a
+    // grid cell) sit mostly inside its box, while neighbouring sprites in a packed sheet only
+    // clip each other's corners. So two boxes are one sprite when their overlap covers at
+    // least half of the smaller box; boxes that merely clip stay separate frames. Scattered
+    // particles that never overlap their effect's box are joined with --tolerance instead.
+    [[nodiscard]] static bool same_sprite(const Rectangle& a, const Rectangle& b) {
+        if (!a.intersects(b)) {
+            return false;
         }
-
-        Rectangle bounds{};
-        bounds.x = min_x;
-        bounds.y = min_y;
-        bounds.w = max_x - min_x + 1;
-        bounds.h = max_y - min_y + 1;
-
-        return bounds;
+        const long long overlap_w = std::min(a.right(), b.right()) - std::max(a.x, b.x);
+        const long long overlap_h = std::min(a.bottom(), b.bottom()) - std::max(a.y, b.y);
+        const long long smaller = std::min(static_cast<long long>(a.w) * a.h, static_cast<long long>(b.w) * b.h);
+        return 2 * overlap_w * overlap_h >= smaller;
     }
-    
+
+    // Merges boxes of the same sprite. A merged box can cover more pieces than either part
+    // did, so passes repeat until nothing changes.
     static void merge_rectangles(std::vector<Rectangle>& rects) {
-        if (rects.size() <= 1) {
-            return;
-        }
-        
-        std::vector<bool> merged(rects.size(), false);
-        std::vector<Rectangle> result;
-        
-        for (size_t i = 0; i < rects.size(); ++i) {
-            if (merged[i]) {
-                continue;
-            }
-            Rectangle merged_rect = rects[i];
-            merged[i] = true;
-            
-            bool changed = true;
-            while (changed) {
-                changed = false;
-                for (size_t j = i + 1; j < rects.size(); ++j) {
-                    if (merged[j]) {
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (size_t i = 0; i < rects.size(); ++i) {
+                for (size_t j = i + 1; j < rects.size();) {
+                    if (!same_sprite(rects[i], rects[j])) {
+                        ++j;
                         continue;
                     }
-                    
-                    if (merged_rect.intersects(rects[j])) {
-                        // Merge rectangles
-                        int new_x = std::min(merged_rect.x, rects[j].x);
-                        int new_y = std::min(merged_rect.y, rects[j].y);
-                        int new_right = std::max(merged_rect.right(), rects[j].right());
-                        int new_bottom = std::max(merged_rect.bottom(), rects[j].bottom());
-                        
-                        merged_rect.x = new_x;
-                        merged_rect.y = new_y;
-                        merged_rect.w = new_right - new_x;
-                        merged_rect.h = new_bottom - new_y;
-                        
-                        merged[j] = true;
-                        changed = true;
-                    }
+                    const int left = std::min(rects[i].x, rects[j].x);
+                    const int top = std::min(rects[i].y, rects[j].y);
+                    const int right = std::max(rects[i].right(), rects[j].right());
+                    const int bottom = std::max(rects[i].bottom(), rects[j].bottom());
+                    rects[i] = {.x = left, .y = top, .w = right - left, .h = bottom - top};
+                    rects.erase(rects.begin() + static_cast<std::ptrdiff_t>(j));
+                    changed = true;
+                    j = i + 1;  // the grown box may now cover earlier candidates
                 }
             }
-            
-            result.push_back(merged_rect);
         }
-        
-        rects = std::move(result);
     }
-    
+
     std::vector<SpriteFrame> extract_from_rectangles() {
+        sort_reading_order(detected_rectangles_);
+        if (std::cmp_greater(detected_rectangles_.size(), config_.max_sprites)) {
+            std::cerr << tr("Warning: Found ") << detected_rectangles_.size() << tr(" frames; keeping the first ")
+                      << config_.max_sprites << tr(" (see --max-sprites)") << '\n';
+            detected_rectangles_.resize(static_cast<size_t>(config_.max_sprites));
+        }
+
         std::vector<SpriteFrame> frames;
         frames.reserve(detected_rectangles_.size());
-        
-        for (size_t i = 0; i < detected_rectangles_.size() && std::cmp_less(i ,config_.max_sprites); ++i) {
-            const Rectangle& rect = detected_rectangles_[i];
-            
-            // Extract sprite inside rectangle, removing the rectangle border
-            Rectangle sprite_bounds = rect;
-            sprite_bounds.x += 1;
-            sprite_bounds.y += 1;
-            sprite_bounds.w -= 2;
-            sprite_bounds.h -= 2;
-            
-            // Ensure bounds are valid
-            if (sprite_bounds.w <= 0 || sprite_bounds.h <= 0) {
-                continue;
-            }
-            if (sprite_bounds.x < 0) {
-                sprite_bounds.w += sprite_bounds.x;
-                sprite_bounds.x = 0;
-            }
-            if (sprite_bounds.y < 0) {
-                sprite_bounds.h += sprite_bounds.y;
-                sprite_bounds.y = 0;
-            }
-            if (sprite_bounds.right() > width_) {
-                sprite_bounds.w = width_ - sprite_bounds.x;
-            }
-            if (sprite_bounds.bottom() > height_) {
-                sprite_bounds.h = height_ - sprite_bounds.y;
-            }
-            
-            if (sprite_bounds.w > 0 && sprite_bounds.h > 0) {
-                SpriteFrame frame{};
-                frame.bounds = sprite_bounds;
-                frame.index = static_cast<int>(i);
-                frames.push_back(frame);
-            }
+        for (size_t i = 0; i < detected_rectangles_.size(); ++i) {
+            frames.push_back({.bounds = detected_rectangles_[i], .index = static_cast<int>(i)});
         }
-        
         return frames;
     }
-    
+
     bool find_connected_components() {
         component_labels_.assign(static_cast<size_t>(width_) * height_, -1);
         component_bounds_.clear();
@@ -414,7 +384,7 @@ private:
             }
         }
         
-        // Merge overlapping components to ensure frames never overlap
+        // Fold the pieces of one sprite into a single frame
         merge_rectangles(component_bounds_);
         
         // Return true if the algorithm completed successfully, even if no components were found
@@ -460,12 +430,16 @@ private:
         while (!fill_stack_.empty()) {
             auto [x, y] = fill_stack_.back();
             fill_stack_.pop_back();
-            size++;
 
-            min_x = std::min(min_x, x);
-            max_x = std::max(max_x, x);
-            min_y = std::min(min_y, y);
-            max_y = std::max(max_y, y);
+            // Transparent pixels near the sprite (--tolerance) only bridge gaps between its
+            // pieces; they are not part of the frame's bounds or its size.
+            if (is_sprite_pixel(x, y)) {
+                size++;
+                min_x = std::min(min_x, x);
+                max_x = std::max(max_x, x);
+                min_y = std::min(min_y, y);
+                max_y = std::max(max_y, y);
+            }
 
             for (size_t i = 0; i < dx.size(); ++i) {
                 int nx = x + dx[i];
@@ -521,28 +495,56 @@ private:
     }
     
     std::vector<SpriteFrame> extract_from_components() {
+        std::vector<Rectangle> bounds = component_bounds_;
+        // Over the limit, keep the largest frames (stray specks go first).
+        if (std::cmp_greater(bounds.size(), config_.max_sprites)) {
+            std::cerr << tr("Warning: Found ") << bounds.size() << tr(" frames; keeping the ")
+                      << config_.max_sprites << tr(" largest (see --max-sprites)") << '\n';
+            std::ranges::stable_sort(bounds, std::ranges::greater{}, &Rectangle::area);
+            bounds.resize(static_cast<size_t>(config_.max_sprites));
+        }
+        sort_reading_order(bounds);
+
         std::vector<SpriteFrame> frames;
-        frames.reserve(component_bounds_.size());
-        
-        // Sort components by area (largest first) to prioritize bigger sprites
-        std::vector<std::pair<int, int>> component_areas_with_index;
-        component_areas_with_index.reserve(component_bounds_.size());
-        for (size_t i = 0; i < component_bounds_.size(); ++i) {
-            component_areas_with_index.emplace_back(component_bounds_.at(i).area(), static_cast<int>(i));
+        frames.reserve(bounds.size());
+        for (size_t i = 0; i < bounds.size(); ++i) {
+            frames.push_back({.bounds = bounds[i], .index = static_cast<int>(i)});
         }
-        std::ranges::sort(std::ranges::reverse_view(component_areas_with_index));
-        
-        for (size_t i = 0; i < component_areas_with_index.size() && std::cmp_less(i ,config_.max_sprites); ++i) {
-            int component_idx = component_areas_with_index.at(i).second;
-            const Rectangle& bounds = component_bounds_.at(component_idx);
-            
-            SpriteFrame frame{};
-            frame.bounds = bounds;
-            frame.index = static_cast<int>(i);
-            frames.push_back(frame);
-        }
-        
         return frames;
+    }
+
+    // Frames are numbered like text is read, so animation strips and grids keep their frame
+    // order: rows top to bottom, left to right within a row. A row is started by its
+    // topmost frame and holds every frame whose top edge lies above the row's shortest
+    // bottom edge (it overlaps the band all frames of the row share). That tolerates frames
+    // of different sizes or baselines in one row, and keeps one tall frame from swallowing
+    // the rows below it.
+    static void sort_reading_order(std::vector<Rectangle>& rects) {
+        std::ranges::stable_sort(rects, [](const Rectangle& a, const Rectangle& b) {
+            return a.y != b.y ? a.y < b.y : a.x < b.x;
+        });
+        std::vector<Rectangle> ordered;
+        ordered.reserve(rects.size());
+        std::vector<bool> placed(rects.size(), false);
+        for (size_t i = 0; i < rects.size(); ++i) {
+            if (placed[i]) {
+                continue;
+            }
+            long long row_bottom = static_cast<long long>(rects[i].y) + rects[i].h;
+            std::vector<Rectangle> row;
+            // Frames are sorted by top edge, so every frame seen here starts below the row's top.
+            for (size_t j = i; j < rects.size(); ++j) {
+                const long long bottom = static_cast<long long>(rects[j].y) + rects[j].h;
+                if (!placed[j] && rects[j].y < row_bottom) {
+                    placed[j] = true;
+                    row.push_back(rects[j]);
+                    row_bottom = std::min(row_bottom, bottom);
+                }
+            }
+            std::ranges::stable_sort(row, {}, &Rectangle::x);
+            ordered.insert(ordered.end(), row.begin(), row.end());
+        }
+        rects = std::move(ordered);
     }
     
     bool output_frames(const std::vector<SpriteFrame>& frames) {
@@ -584,46 +586,116 @@ private:
         return true;
     }
     
+    [[nodiscard]] Color pixel_at(size_t pixel_index) const {
+        const size_t idx = pixel_index * 4;
+        return {.r = image_data_[idx], .g = image_data_[idx + 1], .b = image_data_[idx + 2], .a = image_data_[idx + 3]};
+    }
+
+    // The solid background of a sheet, if any: the most common non-transparent color of the
+    // image edge, when pixels close to it make up at least half of the edge. Sprites may
+    // touch the edge or the corners (tightly packed strips and grids), so no single pixel
+    // decides.
+    [[nodiscard]] bool find_edge_background(Color& out) const {
+        const size_t w = static_cast<size_t>(width_);
+        const size_t h = static_cast<size_t>(height_);
+        std::vector<size_t> edge;
+        edge.reserve((2 * w) + (2 * h));
+        for (size_t x = 0; x < w; ++x) {
+            edge.push_back(x);
+            if (h > 1) edge.push_back(((h - 1) * w) + x);
+        }
+        for (size_t y = 1; y + 1 < h; ++y) {
+            edge.push_back(y * w);
+            if (w > 1) edge.push_back((y * w) + w - 1);
+        }
+        std::unordered_map<std::uint32_t, size_t> counts;
+        std::uint32_t best_key = 0;
+        size_t best_count = 0;
+        for (const size_t i : edge) {
+            const Color c = pixel_at(i);
+            if (c.is_transparent()) {
+                continue;
+            }
+            const std::uint32_t key = (std::uint32_t{c.r} << 24U) | (std::uint32_t{c.g} << 16U) |
+                                      (std::uint32_t{c.b} << 8U) | std::uint32_t{c.a};
+            const size_t count = ++counts[key];
+            if (count > best_count) {
+                best_count = count;
+                best_key = key;
+            }
+        }
+        if (best_count == 0) {
+            return false;
+        }
+        const Color candidate{static_cast<unsigned char>(best_key >> 24U),
+                              static_cast<unsigned char>(best_key >> 16U),
+                              static_cast<unsigned char>(best_key >> 8U),
+                              static_cast<unsigned char>(best_key)};
+        const size_t close = static_cast<size_t>(std::ranges::count_if(edge, [&](size_t i) {
+            const Color c = pixel_at(i);
+            return !c.is_transparent() && color_distance(c, candidate) <= k_strict_color_distance_threshold;
+        }));
+        if (close * 2 < edge.size()) {
+            return false;
+        }
+        out = candidate;
+        return true;
+    }
+
+    // Removes a solid background (see find_edge_background). Only pixels of that color
+    // connected to the image edge are made transparent, so sprite pixels that happen to match
+    // it (an eye, an outline inside the sprite) are kept, and a sprite touching the edge is
+    // never taken for the background.
     bool preprocess_image() {
         if (width_ <= 0 || height_ <= 0) {
             return false;
         }
-        
-        // Check the first pixel (top-left corner)
-        Color first_pixel{.r=image_data_.at(0), .g=image_data_.at(1), .b=image_data_.at(2), .a=image_data_.at(3)};
-        
-        // If the first pixel is not transparent, make all pixels of that color transparent
-        if (!first_pixel.is_transparent()) {
-            has_detected_background_ = true;
-            detected_background_color_ = first_pixel;
-            // Make all pixels matching the first pixel color (within tolerance) transparent
-            for (int i = 0; i < width_ * height_; ++i) {
-                size_t idx = static_cast<size_t>(i) * 4;
-                Color pixel{.r=image_data_.at(idx), .g=image_data_.at(idx+1), .b=image_data_.at(idx+2), .a=image_data_.at(idx+3)};
-                if (color_distance(pixel, first_pixel) <= k_strict_color_distance_threshold) {
-                    // Update the image data array as well
-                    image_data_.at((static_cast<size_t>(i)*4) + 3) = 0;
-                }
-            }
+
+        const size_t w = static_cast<size_t>(width_);
+        const size_t h = static_cast<size_t>(height_);
+        Color background{};
+        if (!find_edge_background(background)) {
+            return true;
         }
-        
+        has_detected_background_ = true;
+        detected_background_color_ = background;
+
+        const auto is_background = [&](size_t i) {
+            const Color c = pixel_at(i);
+            return !c.is_transparent() && color_distance(c, background) <= k_strict_color_distance_threshold;
+        };
+        std::vector<std::uint8_t> visited(w * h, 0);
+        std::vector<size_t> stack;
+        const auto push = [&](size_t i) {
+            if (visited[i] == 0U && is_background(i)) {
+                visited[i] = 1;
+                stack.push_back(i);
+            }
+        };
+        for (size_t x = 0; x < w; ++x) {
+            push(x);
+            push(((h - 1) * w) + x);
+        }
+        for (size_t y = 0; y < h; ++y) {
+            push(y * w);
+            push((y * w) + w - 1);
+        }
+        while (!stack.empty()) {
+            const size_t i = stack.back();
+            stack.pop_back();
+            image_data_[(i * 4) + 3] = 0;
+            const size_t x = i % w;
+            const size_t y = i / w;
+            if (x > 0) push(i - 1);
+            if (x + 1 < w) push(i + 1);
+            if (y > 0) push(i - w);
+            if (y + 1 < h) push(i + w);
+        }
         return true;
     }
 };
 
 // Utility functions
-std::string trim_copy(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && (std::isspace(static_cast<unsigned char>(s[start])) != 0)) {
-        ++start;
-    }
-    size_t end = s.size();
-    while (end > start && (std::isspace(static_cast<unsigned char>(s[end - 1])) != 0)) {
-        --end;
-    }
-    return s.substr(start, end - start);
-}
-
 bool parse_color(const std::string& value, Color& out) {
     if (value.empty()) { return false;
 }
@@ -754,7 +826,7 @@ void print_usage() {
         << tr("  --tolerance N            Distance tolerance for sprite grouping (default: ") << k_default_tolerance << ")\n"
         << tr("  --min-size N             Minimum sprite size in pixels (default: ") << k_default_min_sprite_size << ")\n"
         << tr("  --max-sprites N          Maximum number of sprites to extract (default: ") << k_default_max_sprites << ")\n"
-        << tr("  --threads N              Number of threads to use (default: ") << k_default_threads << tr(" = auto)\n")
+        << tr("  --threads N              Accepted for compatibility; detection runs on one thread\n")
         << tr("  --help, -h               Show this help message\n")
         << tr("  --version, -v            Show version\n\n")
         << tr("Examples:\n")
@@ -812,7 +884,7 @@ int run_spratframes(int argc, char** argv) {
                 std::cerr << tr("Error: Invalid threads value: ") << argv[i] << '\n';
                 return 1;
             }
-            config.threads = static_cast<unsigned int>(threads_int);
+            // Accepted for compatibility with callers that pass it; detection is single-threaded.
         } else if (arg.empty() || arg[0] == '-') {
             std::cerr << tr("Error: Unknown option: ") << arg << '\n';
             print_usage();
@@ -847,17 +919,10 @@ int run_spratframes(int argc, char** argv) {
         return 1;
     }
     
-    // Set default threads if not specified
-    if (config.threads == 0) {
-        config.threads = std::max(1U, std::thread::hardware_concurrency());
-    }
-    
     // Detect frames
     SpriteFramesDetector detector(config);
     if (!detector.detect_frames()) {
-        std::cerr << tr("Error: Failed to detect frames") << '\n';
-        return 1;
+        return 1;  // the detector has reported why
     }
-    
-    return 0;
+    return sprat::core::finish_stdout() ? 0 : 1;
 }

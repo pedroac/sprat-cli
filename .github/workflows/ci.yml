@@ -10,44 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  pr-build-and-test:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install dependencies (Linux)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libarchive-dev gettext python3-pillow imagemagick
-
-      - name: Configure
-        run: |
-          cmake \
-            -S . \
-            -B build \
-            -DSPRAT_DOWNLOAD_STB=ON \
-            -DSPRAT_REQUIRE_GETTEXT=ON \
-            -DBUILD_TESTING=ON \
-            -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build --parallel --config Release
-
-      - name: Test
-        run: ctest --test-dir build --output-on-failure -C Release --output-junit build/test-results.xml
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ runner.os }}
-          path: build/test-results.xml
-          retention-days: 7
-
-  release-build-package:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+  # Pull requests are built and tested on every platform; packaging runs only for releases.
+  build-test-package:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/release')
     strategy:
       fail-fast: false
       matrix:
@@ -163,8 +128,17 @@ jobs:
           path: build/test-results.xml
           retention-days: 7
 
+      - name: Upload asset regression diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-regression-${{ github.job }}-${{ runner.os }}
+          path: tests/output/assets
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Package Linux (.tar.gz)
-        if: runner.os == 'Linux'
+        if: github.event_name == 'push' && runner.os == 'Linux'
         shell: bash
         run: |
           out_dir="dist/sprat-cli-linux-x64"
@@ -180,7 +154,7 @@ jobs:
           tar -C dist -czf dist/sprat-cli-linux-x64.tar.gz sprat-cli-linux-x64
 
       - name: Package macOS (.dmg)
-        if: runner.os == 'macOS'
+        if: github.event_name == 'push' && runner.os == 'macOS'
         shell: bash
         run: |
           out_dir="dist/sprat-cli-macos-x64"
@@ -201,7 +175,7 @@ jobs:
             dist/sprat-cli-macos-x64.dmg
 
       - name: Package Windows (.zip)
-        if: runner.os == 'Windows'
+        if: github.event_name == 'push' && runner.os == 'Windows'
         shell: pwsh
         run: |
           $outDir = "dist/sprat-cli-windows-x64"
@@ -215,6 +189,7 @@ jobs:
           Compress-Archive -Path "$outDir/*" -DestinationPath "dist/sprat-cli-windows-x64.zip" -Force
 
       - name: Upload packaged artifact
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: sprat-cli-${{ runner.os }}
@@ -227,7 +202,7 @@ jobs:
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/release'
     runs-on: ubuntu-latest
-    needs: release-build-package
+    needs: build-test-package
     permissions:
       contents: write
     steps:

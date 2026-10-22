@@ -16,6 +16,9 @@ namespace sprat::core {
 void init_i18n(const char* domain) {
 #ifdef SPRAT_ENABLE_GETTEXT
     std::setlocale(LC_ALL, "");
+    // Layouts, metadata and option values always use '.' decimals; a user locale such as
+    // pt_PT or de_DE would make strtod/snprintf read and write ',' instead.
+    std::setlocale(LC_NUMERIC, "C");
     const char* env_locale_dir = std::getenv("SPRAT_LOCALE_DIR");
     const char* locale_dir = (env_locale_dir != nullptr && env_locale_dir[0] != '\0')
         ? env_locale_dir

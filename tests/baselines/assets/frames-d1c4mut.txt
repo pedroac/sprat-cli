@@ -1,0 +1,32 @@
+# case: frames-d1c4mut
+# spratframes  'd1c4mut-6db0241c-6952-42d2-8d49-793f34733d25.png'
+[frames]
+path "d1c4mut-6db0241c-6952-42d2-8d49-793f34733d25.png"
+sprite 18,5 34,123
+sprite 65,40 63,88
+sprite 145,2 60,126
+sprite 231,0 79,128
+sprite 331,18 75,110
+sprite 419,55 74,72
+sprite 519,49 69,78
+sprite 621,53 64,76
+sprite 716,41 72,87
+sprite 34,133 49,123
+sprite 153,130 65,126
+sprite 271,135 96,116
+sprite 408,134 69,123
+sprite 532,132 73,97
+sprite 668,128 68,70
+sprite 787,128 106,69
+sprite 33,261 49,124
+sprite 152,258 65,127
+sprite 271,263 95,117
+sprite 408,262 69,123
+sprite 533,311 51,111
+sprite 636,311 44,146
+sprite 732,315 44,133
+sprite 830,285 42,132
+sprite 922,256 65,130
+sprite 9,447 100,65
+sprite 142,445 95,67
+sprite 265,448 99,64

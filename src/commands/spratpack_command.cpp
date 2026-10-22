@@ -22,6 +22,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -31,6 +32,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <fstream>
 #include <filesystem>
@@ -38,6 +40,9 @@
 #include <archive.h>
 #include <archive_entry.h>
 #include "core/layout_parser.h"
+#include "core/checked_math.h"
+#include "core/file_io.h"
+#include "core/parallel.h"
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
@@ -85,24 +90,9 @@ using sprat::core::parse_int;
 using sprat::core::parse_layout;
 using sprat::core::to_quoted;
 using sprat::core::tr;
+using sprat::core::checked_mul_size_t;
 using sprat::core::validate_output_pattern;
 namespace fs = std::filesystem;
-
-bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
-    if (a == 0 || b <= std::numeric_limits<size_t>::max() / a) {
-        out = a * b;
-        return true;
-    }
-    return false;
-}
-
-bool checked_add_size_t(size_t a, size_t b, size_t& out) {
-    if (b <= std::numeric_limits<size_t>::max() - a) {
-        out = a + b;
-        return true;
-    }
-    return false;
-}
 
 bool parse_line_color(const std::string& value, std::array<unsigned char, 4>& out) {
     constexpr int MAX_CHANNELS = 4;
@@ -234,6 +224,29 @@ bool sprites_have_overlap(const std::vector<Sprite>& sprites) {
 }
 
 
+// Sprites other than sprites[self] whose rectangles reach into [x0, x1) x [y0, y1). Extrude
+// and dilate write around a sprite but must never touch another sprite's pixels.
+std::vector<const Sprite*> other_sprites_in(const std::vector<Sprite>& sprites, size_t self,
+                                            int x0, int y0, int x1, int y1) {
+    std::vector<const Sprite*> others;
+    for (size_t i = 0; i < sprites.size(); ++i) {
+        const Sprite& o = sprites[i];
+        if (i != self && o.x < x1 && o.x + o.w > x0 && o.y < y1 && o.y + o.h > y0) {
+            others.push_back(&o);
+        }
+    }
+    return others;
+}
+
+bool inside_any(const std::vector<const Sprite*>& rects, int x, int y) {
+    return std::ranges::any_of(rects, [&](const Sprite* o) {
+        return x >= o->x && x < o->x + o->w && y >= o->y && y < o->y + o->h;
+    });
+}
+
+// Repeats each sprite's edge pixels `extrude` times outward. Pixels inside another sprite's
+// rectangle are left alone, so a layout with less padding than 2 * extrude is never corrupted;
+// the extrusion is just cut short there.
 void extrude_atlas(
     std::vector<unsigned char>& atlas,
     int atlas_width,
@@ -245,20 +258,28 @@ void extrude_atlas(
         return;
     }
 
-    auto set_pixel = [&](int dx, int dy, int sx, int sy) {
-        if (dx < 0 || dy < 0 || dx >= atlas_width || dy >= atlas_height ||
-            sx < 0 || sy < 0 || sx >= atlas_width || sy >= atlas_height) {
-            return;
-        }
-        size_t dest_offset = (static_cast<size_t>(dy) * atlas_width + dx) * NUM_CHANNELS;
-        size_t src_offset = (static_cast<size_t>(sy) * atlas_width + sx) * NUM_CHANNELS;
-        std::memcpy(&atlas[dest_offset], &atlas[src_offset], NUM_CHANNELS);
-    };
-
-    for (const auto& s : sprites) {
+    for (size_t si = 0; si < sprites.size(); ++si) {
+        const Sprite& s = sprites[si];
         if (s.w <= 0 || s.h <= 0) {
             continue;
         }
+        const long long grow = extrude;
+        const std::vector<const Sprite*> others = other_sprites_in(
+            sprites, si,
+            static_cast<int>(std::max<long long>(0, s.x - grow)), static_cast<int>(std::max<long long>(0, s.y - grow)),
+            static_cast<int>(std::min<long long>(atlas_width, static_cast<long long>(s.x) + s.w + grow)),
+            static_cast<int>(std::min<long long>(atlas_height, static_cast<long long>(s.y) + s.h + grow)));
+
+        auto set_pixel = [&](int dx, int dy, int sx, int sy) {
+            if (dx < 0 || dy < 0 || dx >= atlas_width || dy >= atlas_height ||
+                sx < 0 || sy < 0 || sx >= atlas_width || sy >= atlas_height || inside_any(others, dx, dy)) {
+                return;
+            }
+            size_t dest_offset = (static_cast<size_t>(dy) * atlas_width + dx) * NUM_CHANNELS;
+            size_t src_offset = (static_cast<size_t>(sy) * atlas_width + sx) * NUM_CHANNELS;
+            std::memcpy(&atlas[dest_offset], &atlas[src_offset], NUM_CHANNELS);
+        };
+
         // Extrude sides
         for (int e = 1; e <= extrude; ++e) {
             // Left & Right sides
@@ -276,19 +297,20 @@ void extrude_atlas(
         // Extrude corners
         for (int ey = 1; ey <= extrude; ++ey) {
             for (int ex = 1; ex <= extrude; ++ex) {
-                // Top-Left
                 set_pixel(s.x - ex, s.y - ey, s.x, s.y);
-                // Top-Right
                 set_pixel(s.x + s.w - 1 + ex, s.y - ey, s.x + s.w - 1, s.y);
-                // Bottom-Left
                 set_pixel(s.x - ex, s.y + s.h - 1 + ey, s.x, s.y + s.h - 1);
-                // Bottom-Right
                 set_pixel(s.x + s.w - 1 + ex, s.y + s.h - 1 + ey, s.x + s.w - 1, s.y + s.h - 1);
             }
         }
     }
 }
 
+// Fills the RGB of transparent pixels around and inside each sprite with the color of the
+// nearest visible pixel, `radius` pixels deep, keeping alpha at 0, so GPU filtering at sprite
+// edges does not pull in black. Each pass spreads from pixels colored by the previous one.
+// The fill stays within the sprite's rectangle grown by `radius` and never enters another
+// sprite's rectangle.
 void dilate_sprite_colors(
     std::vector<unsigned char>& atlas,
     int atlas_width,
@@ -300,71 +322,100 @@ void dilate_sprite_colors(
         return;
     }
 
-    // Two-buffer approach: read_buf holds the previous pass state, atlas is the write target.
-    // After each pass we copy only the affected sprite region back instead of the full atlas.
-    std::vector<unsigned char> read_buf = atlas;
-
-    auto get_pixel = [&](const std::vector<unsigned char>& buf, int px, int py, size_t channel) -> unsigned char {
-        if (px < 0 || py < 0 || px >= atlas_width || py >= atlas_height) {
-            return 0;
-        }
-        size_t offset = (static_cast<size_t>(py) * atlas_width + px) * NUM_CHANNELS + channel;
-        return buf[offset];
-    };
-
-    auto set_pixel_rgb = [&](int px, int py, unsigned char r, unsigned char g, unsigned char b) {
-        if (px < 0 || py < 0 || px >= atlas_width || py >= atlas_height) {
-            return;
-        }
-        size_t offset = (static_cast<size_t>(py) * atlas_width + px) * NUM_CHANNELS;
-        atlas[offset + CHANNEL_R] = r;
-        atlas[offset + CHANNEL_G] = g;
-        atlas[offset + CHANNEL_B] = b;
-    };
-
-    for (const auto& s : sprites) {
+    for (size_t si = 0; si < sprites.size(); ++si) {
+        const Sprite& s = sprites[si];
         if (s.w <= 0 || s.h <= 0) {
             continue;
         }
+        const long long grow = radius;
+        const int x0 = static_cast<int>(std::max<long long>(0, s.x - grow));
+        const int y0 = static_cast<int>(std::max<long long>(0, s.y - grow));
+        const int x1 = static_cast<int>(std::min<long long>(atlas_width, static_cast<long long>(s.x) + s.w + grow));
+        const int y1 = static_cast<int>(std::min<long long>(atlas_height, static_cast<long long>(s.y) + s.h + grow));
+        if (x0 >= x1 || y0 >= y1) {
+            continue;
+        }
+        const int rw = x1 - x0;
+        const int rh = y1 - y0;
 
-        // Clamp the dilate region to atlas bounds (sprite bbox expanded by 1 pixel)
-        const int region_y0 = std::max(0, s.y - 1);
-        const int region_y1 = std::min(atlas_height - 1, s.y + s.h);
-        const int region_x0 = std::max(0, s.x - 1);
-        const int region_x1 = std::min(atlas_width - 1, s.x + s.w);
-        const size_t region_row_bytes = static_cast<size_t>(region_x1 - region_x0 + 1) * NUM_CHANNELS;
+        const std::vector<const Sprite*> others = other_sprites_in(sprites, si, x0, y0, x1, y1);
 
-        // For each pass, dilate colors from opaque pixels to transparent neighbors
-        for (int pass = 0; pass < radius; ++pass) {
-            // Copy only the affected region from atlas to read_buf
-            for (int y = region_y0; y <= region_y1; ++y) {
-                size_t row_offset = (static_cast<size_t>(y) * atlas_width + region_x0) * NUM_CHANNELS;
-                std::memcpy(&read_buf[row_offset], &atlas[row_offset], region_row_bytes);
+        // 1 = visible or already filled: a source for the next pass.
+        std::vector<std::uint8_t> source(static_cast<size_t>(rw) * rh, 0);
+        for (int y = y0; y < y1; ++y) {
+            for (int x = x0; x < x1; ++x) {
+                const size_t offset = (static_cast<size_t>(y) * atlas_width + x) * NUM_CHANNELS;
+                source[static_cast<size_t>(y - y0) * rw + (x - x0)] = atlas[offset + CHANNEL_A] != 0 ? 1 : 0;
             }
-
-            // Check pixels around (and outside) each sprite
-            for (int y = region_y0; y <= region_y1; ++y) {
-                for (int x = region_x0; x <= region_x1; ++x) {
-                    // Only process transparent pixels
-                    if (get_pixel(read_buf, x, y, CHANNEL_A) != 0) {
+        }
+        std::vector<std::uint8_t> next = source;
+        constexpr int dx[] = {-1, 1, 0, 0};
+        constexpr int dy[] = {0, 0, -1, 1};
+        for (int pass = 0; pass < radius; ++pass) {
+            bool changed = false;
+            for (int y = y0; y < y1; ++y) {
+                for (int x = x0; x < x1; ++x) {
+                    const size_t local = static_cast<size_t>(y - y0) * rw + (x - x0);
+                    if (source[local] != 0 || inside_any(others, x, y)) {
                         continue;
                     }
-
-                    // Check 4 cardinal directions for opaque neighbors
-                    constexpr int dx[] = {-1, 1, 0, 0};
-                    constexpr int dy[] = {0, 0, -1, 1};
                     for (int dir = 0; dir < 4; ++dir) {
-                        int nx = x + dx[dir];
-                        int ny = y + dy[dir];
-                        unsigned char alpha = get_pixel(read_buf, nx, ny, CHANNEL_A);
-                        if (alpha != 0) {
-                            // Found opaque neighbor, copy its RGB
-                            unsigned char r = get_pixel(read_buf, nx, ny, CHANNEL_R);
-                            unsigned char g = get_pixel(read_buf, nx, ny, CHANNEL_G);
-                            unsigned char b = get_pixel(read_buf, nx, ny, CHANNEL_B);
-                            set_pixel_rgb(x, y, r, g, b);
-                            break;  // Only copy from first opaque neighbor
+                        const int nx = x + dx[dir];
+                        const int ny = y + dy[dir];
+                        if (nx < x0 || ny < y0 || nx >= x1 || ny >= y1 ||
+                            source[static_cast<size_t>(ny - y0) * rw + (nx - x0)] == 0) {
+                            continue;
                         }
+                        const size_t from = (static_cast<size_t>(ny) * atlas_width + nx) * NUM_CHANNELS;
+                        const size_t to = (static_cast<size_t>(y) * atlas_width + x) * NUM_CHANNELS;
+                        atlas[to + CHANNEL_R] = atlas[from + CHANNEL_R];
+                        atlas[to + CHANNEL_G] = atlas[from + CHANNEL_G];
+                        atlas[to + CHANNEL_B] = atlas[from + CHANNEL_B];
+                        next[local] = 1;
+                        changed = true;
+                        break;  // first visible or filled neighbour wins
+                    }
+                }
+            }
+            if (!changed) {
+                break;
+            }
+            source = next;
+        }
+    }
+}
+
+#ifdef SPRAT_HAS_SQUISH
+// A block's two colour endpoints are fitted to all 16 of its pixels, so the (invisible) RGB of
+// fully transparent pixels next to a sprite edge or in the padding would pull visible colours
+// towards it; libsquish's range fit ignores alpha weighting. Give every fully transparent pixel
+// the mean colour of the visible pixels of its 4x4 block instead.
+void fill_invisible_block_colours(std::vector<unsigned char>& rgba, int width, int height) {
+    for (int by = 0; by < height; by += 4) {
+        for (int bx = 0; bx < width; bx += 4) {
+            unsigned sum[3] = {0, 0, 0};
+            unsigned visible = 0;
+            for (int y = by; y < by + 4; ++y) {
+                for (int x = bx; x < bx + 4; ++x) {
+                    const unsigned char* p = &rgba[(static_cast<size_t>(y) * width + x) * NUM_CHANNELS];
+                    if (p[CHANNEL_A] != 0) {
+                        sum[0] += p[CHANNEL_R];
+                        sum[1] += p[CHANNEL_G];
+                        sum[2] += p[CHANNEL_B];
+                        ++visible;
+                    }
+                }
+            }
+            if (visible == 0 || visible == 16) {
+                continue;
+            }
+            for (int y = by; y < by + 4; ++y) {
+                for (int x = bx; x < bx + 4; ++x) {
+                    unsigned char* p = &rgba[(static_cast<size_t>(y) * width + x) * NUM_CHANNELS];
+                    if (p[CHANNEL_A] == 0) {
+                        p[CHANNEL_R] = static_cast<unsigned char>(sum[0] / visible);
+                        p[CHANNEL_G] = static_cast<unsigned char>(sum[1] / visible);
+                        p[CHANNEL_B] = static_cast<unsigned char>(sum[2] / visible);
                     }
                 }
             }
@@ -372,118 +423,138 @@ void dilate_sprite_colors(
     }
 }
 
-#ifdef SPRAT_HAS_SQUISH
+// libsquish 1.15 computes storage sizes and pixel/block offsets in int, so it writes past its
+// buffers once the padded RGBA image exceeds INT_MAX bytes (about 23170x23170; Direct3D
+// itself stops at 16384x16384). Such atlases are refused before anything is allocated.
+bool dds_size_supported(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    const long long padded_w = (static_cast<long long>(width) + 3) / 4 * 4;
+    const long long padded_h = (static_cast<long long>(height) + 3) / 4 * 4;
+    return padded_w * padded_h * NUM_CHANNELS <= std::numeric_limits<int>::max();
+}
+
+// Encodes the atlas as a single-level DXT1/DXT5 DDS texture. The image is padded with
+// transparent pixels to a multiple of 4 (Direct3D 10+ require it for block-compressed
+// textures; sprite coordinates are unchanged because the padding is at the right and bottom).
+// Rows of 4x4 blocks are independent, so strips of them are compressed on `threads` workers.
+// `best` selects libsquish's cluster fit, about 30x slower than the default range fit.
 std::vector<unsigned char> compress_to_dds(
     const std::vector<unsigned char>& rgba_data,
     int width,
     int height,
-    const std::string& format
+    bool dxt1,
+    bool best,
+    unsigned int threads
 ) {
-    std::vector<unsigned char> dds_output;
-
-    // Validate dimensions are multiple of 4 (DXT requirement)
-    if (width % 4 != 0 || height % 4 != 0) {
-        return dds_output;  // Return empty on error
+    if (!dds_size_supported(width, height)) {
+        return {};
     }
-
-    // Determine compression flags
-    int squish_flags = 0;
-    if (format == "dxt1" || format == "DXT1") {
-        squish_flags = squish::kDxt1 | squish::kColourClusterFit;
-    } else {
-        squish_flags = squish::kDxt5 | squish::kColourClusterFit;
+    const int padded_w = (width + 3) / 4 * 4;
+    const int padded_h = (height + 3) / 4 * 4;
+    std::vector<unsigned char> padded(static_cast<size_t>(padded_w) * padded_h * NUM_CHANNELS, 0);
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(&padded[static_cast<size_t>(y) * padded_w * NUM_CHANNELS],
+                    &rgba_data[static_cast<size_t>(y) * width * NUM_CHANNELS],
+                    static_cast<size_t>(width) * NUM_CHANNELS);
     }
+    fill_invisible_block_colours(padded, padded_w, padded_h);
+    const unsigned char* pixels = padded.data();
 
-    // Compute compressed size (DXT1: width*height/2, DXT5: width*height)
-    size_t compressed_bytes = (format == "dxt1" || format == "DXT1")
-                              ? (static_cast<size_t>(width) * static_cast<size_t>(height)) / 2
-                              : static_cast<size_t>(width) * static_cast<size_t>(height);
+    // Weighting colour by alpha keeps transparent pixels (sprite margins, padding) from
+    // dragging the colours of visible pixels that share a 4x4 block towards their RGB.
+    const int squish_flags = (dxt1 ? squish::kDxt1 : squish::kDxt5) |
+                             (best ? squish::kColourClusterFit : squish::kColourRangeFit) |
+                             squish::kWeightColourByAlpha;
+    const size_t block_bytes = dxt1 ? 8 : 16;
+    const int blocks_x = padded_w / 4;
+    const int block_rows = padded_h / 4;
+    // Not squish::GetStorageRequirements, whose int result could wrap.
+    const size_t data_bytes = static_cast<size_t>(blocks_x) * static_cast<size_t>(block_rows) * block_bytes;
+    std::vector<unsigned char> dds(128 + data_bytes, 0);
 
-    // Build minimal DDS header (128 bytes)
-    struct DdsHeader {
-        uint32_t magic;               // 0x20534444 = "DDS "
-        uint32_t size;                // Header size (124 bytes)
-        uint32_t flags;               // Surface descriptor flags
-        uint32_t height;              // Texture height
-        uint32_t width;               // Texture width
-        uint32_t pitch_or_linear;     // Pitch or linear size
-        uint32_t depth;               // Texture depth (0 for 2D)
-        uint32_t mipmap_count;        // Number of mipmaps
-        uint32_t reserved[11];        // Reserved/unused
-        // PixelFormat (32 bytes)
-        struct {
-            uint32_t size;            // PixelFormat size (32 bytes)
-            uint32_t flags;           // Flags
-            uint32_t fourcc;          // FourCC code
-            uint32_t rgb_bit_count;   // RGB bits
-            uint32_t r_mask;          // Red mask
-            uint32_t g_mask;          // Green mask
-            uint32_t b_mask;          // Blue mask
-            uint32_t a_mask;          // Alpha mask
-        } pixel_format;
-        // Caps (16 bytes)
-        uint32_t caps1;
-        uint32_t caps2;
-        uint32_t caps3;
-        uint32_t caps4;
-        uint32_t reserved2;
+    // DDS_HEADER, little-endian (Microsoft's DDS reference).
+    size_t at = 0;
+    const auto put = [&](uint32_t v) {
+        for (int b = 0; b < 4; ++b) {
+            dds[at++] = static_cast<unsigned char>((v >> (8 * b)) & 0xFFU);
+        }
     };
-    static_assert(sizeof(DdsHeader) == 128, "DDS header must be 128 bytes");
+    constexpr uint32_t k_caps = 0x1, k_height = 0x2, k_width = 0x4, k_pixelformat = 0x1000;
+    constexpr uint32_t k_linearsize = 0x80000, k_fourcc = 0x4, k_texture = 0x1000;
+    put(0x20534444);  // "DDS "
+    put(124);         // header size
+    put(k_caps | k_height | k_width | k_pixelformat | k_linearsize);
+    put(static_cast<uint32_t>(padded_h));
+    put(static_cast<uint32_t>(padded_w));
+    put(static_cast<uint32_t>(data_bytes));  // linear size of the top level
+    put(0);                                  // depth
+    put(1);                                  // mipmap count
+    at += 11 * 4;                            // reserved
+    put(32);                                 // pixel format size
+    put(k_fourcc);
+    put(dxt1 ? 0x31545844 : 0x35545844);     // "DXT1" / "DXT5"
+    at += 5 * 4;                             // RGB bit count and masks (unused with FOURCC)
+    put(k_texture);                          // caps; caps2-4 and reserved stay 0
 
-    DdsHeader header = {};
-    header.magic = 0x20534444;  // "DDS "
-    header.size = 124;
-    header.flags = 0x0001 | 0x0002 | 0x0004 | 0x1000;  // CAPS | HEIGHT | WIDTH | LINEARSIZE
-    header.height = static_cast<uint32_t>(height);
-    header.width = static_cast<uint32_t>(width);
-    header.pitch_or_linear = static_cast<uint32_t>(compressed_bytes);
-    header.depth = 0;
-    header.mipmap_count = 1;
-
-    header.pixel_format.size = 32;
-    header.pixel_format.flags = 0x0004;  // FOURCC
-    header.pixel_format.fourcc = (format == "dxt1" || format == "DXT1") ? 0x31545844 : 0x35545844;  // "DXT1" or "DXT5"
-
-    header.caps1 = 0x1000;  // TEXTURE
-
-    // Write header
-    const unsigned char* header_bytes = reinterpret_cast<const unsigned char*>(&header);
-    dds_output.insert(dds_output.end(), header_bytes, header_bytes + sizeof(header));
-
-    // Compress and append data
-    std::vector<unsigned char> compressed(compressed_bytes);
-    squish::CompressImage(rgba_data.data(), static_cast<int>(width), static_cast<int>(height),
-                         compressed.data(), squish_flags);
-    dds_output.insert(dds_output.end(), compressed.begin(), compressed.end());
-
-    return dds_output;
+    unsigned char* blocks = dds.data() + 128;
+    const int workers = static_cast<int>(std::clamp<unsigned int>(threads, 1, static_cast<unsigned int>(block_rows)));
+    const int rows_per_worker = (block_rows + workers - 1) / workers;
+    const auto compress_rows = [&](int first_row, int row_count) {
+        squish::CompressImage(pixels + static_cast<size_t>(first_row) * 4 * padded_w * NUM_CHANNELS,
+                              padded_w, row_count * 4,
+                              blocks + static_cast<size_t>(first_row) * blocks_x * block_bytes,
+                              squish_flags);
+    };
+    const int strips = (block_rows + rows_per_worker - 1) / rows_per_worker;
+    sprat::core::run_workers(static_cast<unsigned int>(strips), [&](unsigned int strip) {
+        const int first = static_cast<int>(strip) * rows_per_worker;
+        compress_rows(first, std::min(rows_per_worker, block_rows - first));
+    });
+    return dds;
 }
 #endif
 
 #ifdef SPRAT_HAS_WEBP
+// Lossless (quality 100) keeps every pixel exactly. libwebp's simple lossless API rewrites the
+// colour of fully transparent pixels, which would undo --dilate and change the atlas, so the
+// advanced API is used with `exact` set.
 std::vector<unsigned char> encode_webp(
     const unsigned char* rgba_data,
     int width,
     int height,
     int quality
 ) {
-    uint8_t* output = nullptr;
-    size_t output_size = 0;
-
-    if (quality >= 100) {
-        output_size = WebPEncodeLosslessRGBA(rgba_data, width, height,
-                                              width * 4, &output);
-    } else {
-        float q = (quality < 0) ? 100.0f : static_cast<float>(quality);
-        output_size = WebPEncodeRGBA(rgba_data, width, height,
-                                      width * 4, q, &output);
-    }
-
     std::vector<unsigned char> result;
-    if (output_size > 0 && output) {
-        result.assign(output, output + output_size);
+    WebPConfig config;
+    WebPPicture picture;
+    if (!WebPConfigInit(&config) || !WebPPictureInit(&picture)) {
+        return result;
     }
-    WebPFree(output);
+    const bool lossless = quality >= 100 || quality < 0;
+    config.lossless = lossless ? 1 : 0;
+    config.quality = lossless ? 75.0f : static_cast<float>(quality);  // lossless: effort, not fidelity
+    config.exact = lossless ? 1 : 0;
+    if (!WebPValidateConfig(&config)) {
+        return result;
+    }
+    picture.use_argb = 1;
+    picture.width = width;
+    picture.height = height;
+    if (!WebPPictureImportRGBA(&picture, rgba_data, width * 4)) {
+        WebPPictureFree(&picture);
+        return result;
+    }
+    WebPMemoryWriter writer;
+    WebPMemoryWriterInit(&writer);
+    picture.writer = WebPMemoryWrite;
+    picture.custom_ptr = &writer;
+    if (WebPEncode(&config, &picture) && writer.size > 0) {
+        result.assign(writer.mem, writer.mem + writer.size);
+    }
+    WebPMemoryWriterClear(&writer);
+    WebPPictureFree(&picture);
     return result;
 }
 #endif
@@ -555,11 +626,12 @@ void print_usage() {
               << tr("Writes PNG to stdout for single-atlas input; TAR to stdout for multipack input.\n")
               << tr("\n")
               << tr("Options:\n")
-              << tr("  -a, --atlas PATTERN    Output filename pattern (e.g. atlas_%d.png)\n")
+              << tr("  -a, --atlas PATTERN    Output filename pattern (e.g. atlas_%d.png); alias: -o, --output\n")
               << tr("  --atlas-index N        Pick a specific atlas index to output\n")
               << tr("  --extrude N            Repeat edge pixels N times (overrides layout)\n")
               << tr("  --dilate N             Bleed opaque pixels into transparent neighbors (N passes)\n")
-              << tr("  --gpu-compress FORMAT  Compress to DCS: dxt1 or dxt5 (requires libsquish)\n")
+              << tr("  --gpu-compress FORMAT  Compress to DDS: dxt1 or dxt5 (requires libsquish)\n")
+              << tr("  --gpu-quality fast|best  DDS compression quality (default: fast; best is much slower)\n")
               << tr("  --frame-lines          Draw rectangle outlines for each sprite\n")
               << tr("  --line-width N         Outline thickness in pixels (default: 1)\n")
               << tr("  --line-color R,G,B[,A] Outline color channels (0-255, default: 255,0,0,255)\n")
@@ -594,14 +666,24 @@ int run_spratpack(int argc, char** argv) {
     bool has_extrude_override = false;
     int dilate = 0;
     bool has_dilate_override = false;
-    std::string gpu_compress_format;
+    std::string gpu_compress_format;  // lowercase: dxt1 or dxt5
+    bool gpu_quality_best = false;
     bool has_gpu_compress = false;
     std::string output_format = "png";
     int quality = -1;  // -1 = default (lossless for webp/avif)
     std::string path_suffix;
     double output_scale = 1.0;
+    static const std::unordered_set<std::string> k_value_options = {
+        "--atlas", "-a", "--output", "-o", "--atlas-index", "--extrude", "--dilate",
+        "--gpu-compress", "--gpu-quality", "--line-width", "--line-color", "--scale-filter", "--threads",
+        "--format", "--quality", "--path-suffix", "--output-scale"
+    };
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
+        if (k_value_options.contains(arg) && i + 1 >= argc) {
+            std::cerr << tr("Error: Missing value for ") << arg << "\n";
+            return 1;
+        }
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
@@ -613,6 +695,10 @@ int run_spratpack(int argc, char** argv) {
         } else if (arg == "--protect") {
             protect = true;
         } else if (arg == "--zopfli") {
+#ifndef SPRAT_HAS_ZOPFLI
+            std::cerr << tr("Error: --zopfli requires zopflipng support (not compiled in)\n");
+            return 1;
+#endif
             use_zopfli = true;
         } else if ((arg == "--atlas" || arg == "-a" || arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern = argv[++i];
@@ -637,12 +723,12 @@ int run_spratpack(int argc, char** argv) {
             }
             has_dilate_override = true;
         } else if (arg == "--gpu-compress" && i + 1 < argc) {
-            gpu_compress_format = argv[++i];
-            std::string lower_format = gpu_compress_format;
-            std::transform(lower_format.begin(), lower_format.end(), lower_format.begin(),
-                          [](unsigned char c) { return std::tolower(c); });
-            if (lower_format != "dxt1" && lower_format != "dxt5") {
-                std::cerr << tr("Invalid gpu-compress format: ") << gpu_compress_format << tr(" (must be dxt1 or dxt5)\n");
+            const std::string value = argv[++i];
+            gpu_compress_format = value;
+            std::transform(gpu_compress_format.begin(), gpu_compress_format.end(), gpu_compress_format.begin(),
+                          [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (gpu_compress_format != "dxt1" && gpu_compress_format != "dxt5") {
+                std::cerr << tr("Invalid gpu-compress format: ") << value << tr(" (must be dxt1 or dxt5)\n");
                 return 1;
             }
 #ifndef SPRAT_HAS_SQUISH
@@ -650,6 +736,13 @@ int run_spratpack(int argc, char** argv) {
             return 1;
 #endif
             has_gpu_compress = true;
+        } else if (arg == "--gpu-quality" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (value != "fast" && value != "best") {
+                std::cerr << tr("Invalid gpu-quality: ") << value << tr(" (must be fast or best)\n");
+                return 1;
+            }
+            gpu_quality_best = value == "best";
         } else if (arg == "--frame-lines") {
             draw_frame_lines = true;
         } else if (arg == "--line-width" && i + 1 < argc) {
@@ -716,7 +809,16 @@ int run_spratpack(int argc, char** argv) {
                 std::cerr << tr("Invalid output scale: ") << value << tr(" (must be a positive number)\n");
                 return 1;
             }
+        } else {
+            std::cerr << tr("Error: Unknown option: ") << arg << "\n";
+            std::cerr << tr("Run 'spratpack --help' for usage.\n");
+            return 1;
         }
+    }
+
+    if (use_zopfli && output_format != "png") {
+        std::cerr << tr("Error: --zopfli only applies to PNG output\n");
+        return 1;
     }
 
     if (debug) {
@@ -757,13 +859,13 @@ int run_spratpack(int argc, char** argv) {
             }
         }
         for (auto& alias : layout.aliases) {
-            std::filesystem::path ap(alias.first);
+            std::filesystem::path ap(alias.path);
             if (ap.is_relative()) {
-                alias.first = (root_path / ap).string();
+                alias.path = (root_path / ap).string();
             }
-            std::filesystem::path cp(alias.second);
+            std::filesystem::path cp(alias.canonical_path);
             if (cp.is_relative()) {
-                alias.second = (root_path / cp).string();
+                alias.canonical_path = (root_path / cp).string();
             }
         }
     }
@@ -867,6 +969,14 @@ int run_spratpack(int argc, char** argv) {
             std::cerr << tr("Error: Scaled output atlas ") << atlas_idx << tr(" dimensions are too large for memory allocation\n");
             return 1;
         }
+#ifdef SPRAT_HAS_SQUISH
+        if (has_gpu_compress && !dds_size_supported(output_width, output_height)) {
+            std::cerr << tr("Error: Atlas ") << atlas_idx << " (" << output_width << "x" << output_height
+                      << tr(") is too large for --gpu-compress (at most about 23170x23170; ")
+                      << tr("Direct3D supports up to 16384x16384)\n");
+            return 1;
+        }
+#endif
         std::vector<unsigned char> atlas_data(output_byte_count, 0);
 
         // Map a layout-space span [start, start+len) to output space. Both edges are
@@ -896,7 +1006,7 @@ int run_spratpack(int argc, char** argv) {
             unsigned char* data = stbi_load(load_path.c_str(), &w, &h, &channels, static_cast<int>(NUM_CHANNELS));
             if (!data) {
                 // stbi_failure_reason() is global, but since we are stopping on first error, it's acceptable here.
-                error_out = "Failed to load image: " + to_quoted(load_path) + " (Reason: " + stbi_failure_reason() + ")";
+                error_out = std::string(tr("Failed to load image: ")) + to_quoted(load_path) + tr(" (Reason: ") + stbi_failure_reason() + ")";
                 return false;
             }
             // Use RAII for image data
@@ -936,16 +1046,21 @@ int run_spratpack(int argc, char** argv) {
                 }
             }
 
+            // 64-bit so out-of-range trim offsets are rejected instead of overflowing.
+            const long long crop_w = s.has_trim
+                ? static_cast<long long>(w) - s.src_x - s.trim_right : static_cast<long long>(w);
+            const long long crop_h = s.has_trim
+                ? static_cast<long long>(h) - s.src_y - s.trim_bottom : static_cast<long long>(h);
             const int source_x = s.has_trim ? s.src_x : 0;
             const int source_y = s.has_trim ? s.src_y : 0;
-            const int source_w = s.has_trim ? (w - s.src_x - s.trim_right) : w;
-            const int source_h = s.has_trim ? (h - s.src_y - s.trim_bottom) : h;
 
-            if (source_x < 0 || source_y < 0 || source_w <= 0 || source_h <= 0 ||
-                source_x > w - source_w || source_y > h - source_h) {
-                error_out = "Error: Crop/Trim out of bounds for " + to_quoted(load_path);
+            if (source_x < 0 || source_y < 0 || crop_w <= 0 || crop_h <= 0 ||
+                source_x > w - crop_w || source_y > h - crop_h) {
+                error_out = tr("Error: Crop/Trim out of bounds for ") + to_quoted(load_path);
                 return false;
             }
+            const int source_w = static_cast<int>(crop_w);
+            const int source_h = static_cast<int>(crop_h);
 
             // Scaled destination position and slot in the output atlas
             int sdest_x = 0, sdest_y = 0, sdest_slot_w = 0, sdest_slot_h = 0;
@@ -955,7 +1070,7 @@ int run_spratpack(int argc, char** argv) {
             if (sdest_x < 0 || sdest_y < 0 || sdest_slot_w <= 0 || sdest_slot_h <= 0 ||
                 sdest_x > output_width || sdest_y > output_height ||
                 sdest_slot_w > output_width - sdest_x || sdest_slot_h > output_height - sdest_y) {
-                error_out = "Error: Sprite " + to_quoted(load_path) + " placement out of atlas bounds";
+                error_out = std::string(tr("Error: Sprite ")) + to_quoted(load_path) + tr(" placement out of atlas bounds");
                 return false;
             }
 
@@ -997,14 +1112,14 @@ int run_spratpack(int argc, char** argv) {
                 stbir_set_filters(&resize,
                     to_stbir_filter(scale_filter), to_stbir_filter(scale_filter));
                 if (!stbir_resize_extended(&resize)) {
-                    error_out = "Error: Failed to resize image " + to_quoted(load_path);
+                    error_out = tr("Error: Failed to resize image ") + to_quoted(load_path);
                     return false;
                 }
                 blit_ptr = scaled_buf.data();
                 blit_stride_bytes = dest_w * static_cast<int>(NUM_CHANNELS);
             }
 
-            // Blit to atlas, handling 90° CW rotation if needed
+            // Blit to atlas, handling 90° rotation (CW by default, CCW for "rotation ccw") if needed
             if (!s.rotated) {
                 const size_t row_bytes = static_cast<size_t>(dest_w) * NUM_CHANNELS;
                 for (int row = 0; row < dest_h; ++row) {
@@ -1015,11 +1130,12 @@ int run_spratpack(int argc, char** argv) {
                     std::memcpy(atlas_data.data() + dest_off, blit_ptr + src_off, row_bytes);
                 }
             } else {
-                // atlas(sdest_x+col, sdest_y+row) <- source(px=row, py=dest_h-1-col)
+                // CW:  atlas(sdest_x+col, sdest_y+row) <- source(px=row, py=dest_h-1-col)
+                // CCW: atlas(sdest_x+col, sdest_y+row) <- source(px=dest_w-1-row, py=col)
                 for (int row = 0; row < sdest_slot_h; ++row) {
                     for (int col = 0; col < sdest_slot_w; ++col) {
-                        const int px = row;
-                        const int py = dest_h - 1 - col;
+                        const int px = layout.rotate_ccw ? dest_w - 1 - row : row;
+                        const int py = layout.rotate_ccw ? col : dest_h - 1 - col;
                         const size_t dest_off =
                             (static_cast<size_t>(sdest_y + row) * output_width + (sdest_x + col)) * NUM_CHANNELS;
                         const size_t src_off =
@@ -1050,23 +1166,19 @@ int run_spratpack(int argc, char** argv) {
             std::atomic<bool> failed{false};
             std::mutex err_mtx;
             std::string first_err;
-            std::vector<std::thread> workers;
-            for (unsigned int i = 0; i < atlas_worker_count; ++i) {
-                workers.emplace_back([&]() {
-                    while (!failed.load(std::memory_order_relaxed)) {
-                        size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
-                        if (idx >= atlas_sprites.size()) break;
-                        std::string error;
-                        if (!blit_sprite(atlas_sprites[idx], error)) {
-                            std::scoped_lock lock(err_mtx);
-                            if (first_err.empty()) first_err = std::move(error);
-                            failed.store(true, std::memory_order_relaxed);
-                            break;
-                        }
+            sprat::core::run_workers(atlas_worker_count, [&](unsigned int) {
+                while (!failed.load(std::memory_order_relaxed)) {
+                    size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
+                    if (idx >= atlas_sprites.size()) break;
+                    std::string error;
+                    if (!blit_sprite(atlas_sprites[idx], error)) {
+                        std::scoped_lock lock(err_mtx);
+                        if (first_err.empty()) first_err = std::move(error);
+                        failed.store(true, std::memory_order_relaxed);
+                        break;
                     }
-                });
-            }
-            for (auto& w : workers) w.join();
+                }
+            });
             if (failed.load(std::memory_order_relaxed)) { std::cerr << first_err << "\n"; return 1; }
         }
 
@@ -1123,9 +1235,14 @@ int run_spratpack(int argc, char** argv) {
 
 #ifdef SPRAT_HAS_SQUISH
         if (has_gpu_compress) {
-            output_data = compress_to_dds(atlas_data, output_width, output_height, gpu_compress_format);
+            unsigned int dds_threads = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
+#ifdef __EMSCRIPTEN__
+            dds_threads = 1;
+#endif
+            output_data = compress_to_dds(atlas_data, output_width, output_height,
+                                          gpu_compress_format == "dxt1", gpu_quality_best, dds_threads);
             if (output_data.empty()) {
-                std::cerr << tr("Error: Failed to compress to DDS for atlas ") << atlas_idx << tr(" (atlas dimensions must be multiple of 4)\n");
+                std::cerr << tr("Error: Failed to encode DDS for atlas ") << atlas_idx << "\n";
                 return 1;
             }
             output_extension = ".dds";
@@ -1220,14 +1337,26 @@ int run_spratpack(int argc, char** argv) {
                 std::cerr << tr("Invalid output pattern: ") << pattern_error << "\n";
                 return 1;
             }
-            std::ofstream out_file(filename, std::ios::binary);
-            if (!out_file) {
-                std::cerr << tr("Error: Failed to open output file: ") << filename << "\n";
+            std::string write_error;
+            if (!sprat::core::write_file(filename,
+                    std::string_view(reinterpret_cast<const char*>(output_data.data()), output_data.size()),
+                    write_error)) {
+                std::cerr << tr("Error: Failed to write output file ") << to_quoted(filename)
+                          << ": " << write_error << "\n";
                 return 1;
             }
-            out_file.write(reinterpret_cast<const char*>(output_data.data()), static_cast<std::streamsize>(output_data.size()));
         }
     }
 
+    if (a) {
+        // Closing writes the TAR trailer, which must reach stdout too.
+        if (archive_write_close(a.get()) != ARCHIVE_OK) {
+            std::cerr << tr("Error: Failed to write TAR data: ") << archive_error_string(a.get()) << "\n";
+            return 1;
+        }
+    }
+    if (output_to_stdout && !sprat::core::finish_stdout()) {
+        return 1;
+    }
     return 0;
 }

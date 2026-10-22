@@ -25,6 +25,7 @@
 namespace fs = std::filesystem;
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <string>
@@ -34,6 +35,7 @@ namespace fs = std::filesystem;
 #include <system_error>
 #include "core/layout_parser.h"
 #include "core/cli_parse.h"
+#include "core/file_io.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
 #include "core/fnv1a.h"
@@ -81,38 +83,25 @@ using sprat::core::parse_layout;
 using sprat::core::parse_pair;
 using sprat::core::parse_quoted;
 using sprat::core::tr;
+using sprat::core::trim_copy;
 using sprat::core::validate_output_pattern;
-
-std::string trim_copy(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])) != 0) {
-        ++start;
-    }
-
-    size_t end = s.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])) != 0) {
-        --end;
-    }
-
-    return s.substr(start, end - start);
-}
 
 bool read_text_file(const fs::path& path, std::string& out, std::string& error) {
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in) {
-        error = "Failed to open file: " + path.string();
+        error = tr("Failed to open file: ") + path.string();
         return false;
     }
     const auto size = in.tellg();
     if (size < 0) {
-        error = "Failed to read file: " + path.string();
+        error = tr("Failed to read file: ") + path.string();
         return false;
     }
     in.seekg(0);
     out.resize(static_cast<size_t>(size));
     in.read(out.data(), size);
     if (!in.good() && !in.eof()) {
-        error = "Failed to read file: " + path.string();
+        error = tr("Failed to read file: ") + path.string();
         return false;
     }
     return true;
@@ -155,10 +144,8 @@ std::string sprite_name_from_path(const std::string& path) {
     fs::path p(path);
     std::string name = p.stem().string();
     // Strip the ".9" from Android nine-patch stems ("button.9" → "button").
-    constexpr std::string_view np_suffix = ".9.png";
     if (name.size() >= 2 && name.compare(name.size() - 2, 2, ".9") == 0 &&
-        path.size() >= np_suffix.size() &&
-        path.compare(path.size() - np_suffix.size(), np_suffix.size(), np_suffix) == 0) {
+        sprat::core::is_nine_patch_path(path)) {
         name.resize(name.size() - 2);
     }
     if (!name.empty()) {
@@ -169,6 +156,20 @@ std::string sprite_name_from_path(const std::string& path) {
         return name;
     }
     return path;
+}
+
+// Sprite lookups match path suffixes split on either separator, so metadata
+// files written on one platform (or joined with a root on Windows, where
+// fs::path uses '\\') still resolve against layout paths that use '/'.
+constexpr const char* kPathSeparators = "/\\";
+
+// Joins a metadata-file `root` with a relative path using '/' on every
+// platform, matching how layout sprite paths are written.
+std::string join_metadata_root(const std::string& root, const std::string& path) {
+    if (root.empty() || !fs::path(path).is_relative()) {
+        return path;
+    }
+    return (fs::path(root) / path).generic_string();
 }
 
 void collect_sprite_name_indexes(const Layout& layout,
@@ -184,14 +185,14 @@ void collect_sprite_name_indexes(const Layout& layout,
         by_path[s.path] = idx;
         fs::path p(s.path);
         by_path[p.filename().string()] = idx;
-        size_t sep = s.path.find('/');
+        size_t sep = s.path.find_first_of(kPathSeparators);
         while (sep != std::string::npos) {
             ++sep;
             std::string suffix = s.path.substr(sep);
             if (!suffix.empty()) {
                 by_path.emplace(suffix, idx);
             }
-            sep = s.path.find('/', sep);
+            sep = s.path.find_first_of(kPathSeparators, sep);
         }
         std::string name = sprite_name_from_path(s.path);
         sprite_names.push_back(name);
@@ -207,7 +208,7 @@ int resolve_sprite_index(const std::string& key,
     if (by_path_it != by_path.end()) {
         return by_path_it->second;
     }
-    size_t sep = key.find('/');
+    size_t sep = key.find_first_of(kPathSeparators);
     while (sep != std::string::npos) {
         ++sep;
         if (sep < key.size()) {
@@ -216,7 +217,7 @@ int resolve_sprite_index(const std::string& key,
                 return it->second;
             }
         }
-        sep = key.find('/', sep);
+        sep = key.find_first_of(kPathSeparators, sep);
     }
     auto by_name_it = by_name.find(key);
     if (by_name_it != by_name.end()) {
@@ -268,16 +269,12 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
             if (pos < trimmed.size() && trimmed[pos] == '"') {
                 std::string error;
                 if (parse_quoted(trimmed, pos, path, error)) {
-                    if (!raw_root.empty() && fs::path(path).is_relative()) {
-                        path = (fs::path(raw_root) / path).string();
-                    }
+                    path = join_metadata_root(raw_root, path);
                     current_sprite_index = resolve_sprite_index(path, by_path, by_name);
                 }
             } else {
                 if (liss >> path) {
-                    if (!raw_root.empty() && fs::path(path).is_relative()) {
-                        path = (fs::path(raw_root) / path).string();
-                    }
+                    path = join_metadata_root(raw_root, path);
                     current_sprite_index = resolve_sprite_index(path, by_path, by_name);
                 }
             }
@@ -487,9 +484,7 @@ std::vector<AnimationItem> parse_animations_data(
                 std::string path;
                 std::string error;
                 if (parse_quoted(trimmed, pos, path, error)) {
-                    if (!raw_root.empty() && fs::path(path).is_relative()) {
-                        path = (fs::path(raw_root) / path).string();
-                    }
+                    path = join_metadata_root(raw_root, path);
                     int idx = resolve_sprite_index(path, by_path, by_name);
                     if (idx >= 0) {
                         current_anim->sprite_indexes.push_back(idx);
@@ -502,9 +497,7 @@ std::vector<AnimationItem> parse_animations_data(
                     if (parse_int(frame_token, idx)) {
                         current_anim->sprite_indexes.push_back(idx);
                     } else {
-                        if (!raw_root.empty() && fs::path(frame_token).is_relative()) {
-                            frame_token = (fs::path(raw_root) / frame_token).string();
-                        }
+                        frame_token = join_metadata_root(raw_root, frame_token);
                         idx = resolve_sprite_index(frame_token, by_path, by_name);
                         if (idx >= 0) {
                             current_anim->sprite_indexes.push_back(idx);
@@ -630,6 +623,29 @@ std::string extract_variant(const std::string& stem) {
 
 // ─── Jsonnet helpers ──────────────────────────────────────────────────────────
 
+// Name for the whole atlas set, e.g. a Phaser texture key. A single atlas uses its own stem;
+// multipack atlases share one key: the pattern's stem without its %d placeholder
+// ("atlas_%d.png" -> "atlas").
+std::string texture_key(const std::string& pattern, size_t atlas_count, const std::string& atlas_stem) {
+    if (atlas_count <= 1 || pattern.empty()) {
+        return atlas_stem;
+    }
+    const std::string stem = fs::path(pattern).stem().string();
+    std::string key;
+    for (size_t i = 0; i < stem.size(); ++i) {
+        if (stem[i] == '%' && i + 1 < stem.size()) {
+            if (stem[i + 1] == '%') key.push_back('%');
+            ++i;
+            continue;
+        }
+        key.push_back(stem[i]);
+    }
+    const auto is_separator = [](char c) { return c == '_' || c == '-' || c == '.' || c == ' '; };
+    while (!key.empty() && is_separator(key.back())) key.pop_back();
+    while (!key.empty() && is_separator(key.front())) key.erase(key.begin());
+    return key.empty() ? "atlas" : key;
+}
+
 // Build the JSON data string passed as std.extVar("sprat") to all transforms.
 std::string build_sprat_json(
     const Layout& layout,
@@ -641,6 +657,7 @@ std::string build_sprat_json(
     int global_pivot_y,
     bool has_global_pivot,
     const std::string& output_pattern_arg,
+    const std::string& image_pattern_arg,
     const std::string& output_stem,
     const std::string& markers_path_arg,
     const std::string& animations_path_arg,
@@ -649,6 +666,11 @@ std::string build_sprat_json(
     const std::string& collision_atlas_pattern_arg,
     double collision_atlas_scale)
 {
+    // How the metadata refers to atlas image N: --image-path when given, else the -a path.
+    // The -a path itself still names the per-atlas output files and seeds stable hashes.
+    const std::string& reference_pattern = image_pattern_arg.empty() ? output_pattern_arg : image_pattern_arg;
+    auto image_path = [&](int atlas_index) { return format_atlas_path(reference_pattern, atlas_index); };
+
     // Helper: format uint64 as 16-char hex string
     auto to_hex16 = [](uint64_t v) -> std::string {
         char buf[17];
@@ -673,22 +695,24 @@ std::string build_sprat_json(
     };
 
     // Helper: build JSON array of marker objects
+    // Marker files use original-image pixels; exported markers use atlas pixels.
     auto marker_to_json = [&](const MarkerItem& m) -> std::string {
+        const auto sc = [&](int v) { return std::to_string(sprat::core::scale_to_atlas(v, layout.scale)); };
         std::string o = "{\"name\":\"" + escape_json(m.name) + "\"";
         o += ",\"type\":\"" + escape_json(m.type) + "\"";
-        o += ",\"x\":" + std::to_string(m.x);
-        o += ",\"y\":" + std::to_string(m.y);
+        o += ",\"x\":" + sc(m.x);
+        o += ",\"y\":" + sc(m.y);
         if (m.type == "circle") {
-            o += ",\"radius\":" + std::to_string(m.radius);
+            o += ",\"radius\":" + sc(m.radius);
         } else if (m.type == "rectangle") {
-            o += ",\"w\":" + std::to_string(m.w);
-            o += ",\"h\":" + std::to_string(m.h);
+            o += ",\"w\":" + sc(m.w);
+            o += ",\"h\":" + sc(m.h);
         } else if (m.type == "polygon") {
             o += ",\"vertices\":[";
             for (size_t vi = 0; vi < m.vertices.size(); ++vi) {
                 if (vi > 0) o += ',';
-                o += "{\"x\":" + std::to_string(m.vertices[vi].first);
-                o += ",\"y\":" + std::to_string(m.vertices[vi].second) + "}";
+                o += "{\"x\":" + sc(m.vertices[vi].first);
+                o += ",\"y\":" + sc(m.vertices[vi].second) + "}";
             }
             o += "]";
         }
@@ -707,36 +731,49 @@ std::string build_sprat_json(
 
         const int content_w = s.rotated ? s.h : s.w;
         const int content_h = s.rotated ? s.w : s.h;
-        const int source_w  = content_w + s.src_x + s.trim_right;
-        const int source_h  = content_h + s.src_y + s.trim_bottom;
-        const bool has_trim = (s.src_x != 0) || (s.src_y != 0) ||
-                              (s.trim_right != 0) || (s.trim_bottom != 0);
+        const sprat::core::MetadataTrim trim = sprat::core::metadata_trim(s, layout.scale);
+        const int source_w  = content_w + trim.left + trim.right;
+        const int source_h  = content_h + trim.top + trim.bottom;
+        const bool has_trim = (trim.left != 0) || (trim.top != 0) ||
+                              (trim.right != 0) || (trim.bottom != 0);
 
         int unity_y = 0;
         if (s.atlas_index >= 0 && static_cast<size_t>(s.atlas_index) < layout.atlases.size()) {
             unity_y = layout.atlases[static_cast<size_t>(s.atlas_index)].height - s.y - s.h;
         }
 
-        int px = has_global_pivot ? global_pivot_x : 0;
-        int py = has_global_pivot ? global_pivot_y : 0;
+        bool has_pivot = has_global_pivot;
+        int pivot_src_x = has_global_pivot ? global_pivot_x : 0;
+        int pivot_src_y = has_global_pivot ? global_pivot_y : 0;
         for (const auto& marker : sprite_markers[i]) {
             if (marker.name == "pivot" && marker.type == "point") {
-                px = marker.x;
-                py = marker.y;
+                pivot_src_x = marker.x;
+                pivot_src_y = marker.y;
+                has_pivot = true;
                 break;
             }
         }
+        // Pivot markers are in original-image pixels; normalize from the unrounded scaled value.
+        const double pivot_ax = static_cast<double>(pivot_src_x) * layout.scale;
+        const double pivot_ay = static_cast<double>(pivot_src_y) * layout.scale;
+        const int px = sprat::core::scale_to_atlas(pivot_src_x, layout.scale);
+        const int py = sprat::core::scale_to_atlas(pivot_src_y, layout.scale);
 
-        double pivot_x_norm = (source_w > 0) ? (static_cast<double>(px) / source_w) : 0.0;
-        double pivot_y_norm = (source_h > 0) ? (1.0 - static_cast<double>(py) / source_h) : 0.0;
-        double pivot_y_norm_raw = (source_h > 0) ? (static_cast<double>(py) / source_h) : 0.0;
+        double pivot_x_norm = (source_w > 0) ? (pivot_ax / source_w) : 0.0;
+        double pivot_y_norm = (source_h > 0) ? (1.0 - pivot_ay / source_h) : 0.0;
+        double pivot_y_norm_raw = (source_h > 0) ? (pivot_ay / source_h) : 0.0;
+        // Relative to the trimmed rect, for engines whose sprite rect has no trim (Unity).
+        const double pivot_rect_x_norm = (content_w > 0) ? ((pivot_ax - trim.left) / content_w) : 0.0;
+        const double pivot_rect_y_norm_raw = (content_h > 0) ? ((pivot_ay - trim.top) / content_h) : 0.0;
 
         const uint64_t nh = sprat::core::fnv1a_hash(
             reinterpret_cast<const unsigned char*>(sname.c_str()), sname.size());
         const std::string nh_hex = to_hex16(nh);
         const std::string nh_dec = std::to_string(nh);
+        // Unity stores internalID/fileID as signed 64-bit; reinterpret the hash bits.
+        const std::string nh_signed = std::to_string(static_cast<int64_t>(nh));
 
-        std::string a_path = format_atlas_path(output_pattern_arg, s.atlas_index);
+        const std::string a_path = image_path(s.atlas_index);
 
         std::string o = "{";
         o += "\"index\":" + std::to_string(i);
@@ -748,18 +785,19 @@ std::string build_sprat_json(
         o += ",\"y\":" + std::to_string(s.y);
         o += ",\"w\":" + std::to_string(s.w);
         o += ",\"h\":" + std::to_string(s.h);
-        o += ",\"trim_left\":" + std::to_string(s.src_x);
-        o += ",\"trim_top\":" + std::to_string(s.src_y);
-        o += ",\"trim_right\":" + std::to_string(s.trim_right);
-        o += ",\"trim_bottom\":" + std::to_string(s.trim_bottom);
+        o += ",\"trim_left\":" + std::to_string(trim.left);
+        o += ",\"trim_top\":" + std::to_string(trim.top);
+        o += ",\"trim_right\":" + std::to_string(trim.right);
+        o += ",\"trim_bottom\":" + std::to_string(trim.bottom);
         o += ",\"has_trim\":" + std::string(has_trim ? "true" : "false");
         o += ",\"rotated\":" + std::string(s.rotated ? "true" : "false");
+        o += ",\"alias_of\":\"" + escape_json(s.alias_of) + "\"";
         o += ",\"has_slice\":" + std::string(s.has_slice ? "true" : "false");
         if (s.has_slice) {
-            o += ",\"slice_left\":" + std::to_string(s.slice_left);
-            o += ",\"slice_top\":" + std::to_string(s.slice_top);
-            o += ",\"slice_right\":" + std::to_string(s.slice_right);
-            o += ",\"slice_bottom\":" + std::to_string(s.slice_bottom);
+            o += ",\"slice_left\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_left, layout.scale));
+            o += ",\"slice_top\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_top, layout.scale));
+            o += ",\"slice_right\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_right, layout.scale));
+            o += ",\"slice_bottom\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_bottom, layout.scale));
             o += ",\"slice_h\":\"" + s.slice_h + "\"";
             o += ",\"slice_v\":\"" + s.slice_v + "\"";
         }
@@ -768,13 +806,17 @@ std::string build_sprat_json(
         o += ",\"source_w\":" + std::to_string(source_w);
         o += ",\"source_h\":" + std::to_string(source_h);
         o += ",\"unity_y\":" + std::to_string(unity_y);
+        o += ",\"has_pivot\":" + std::string(has_pivot ? "true" : "false");
         o += ",\"pivot_x\":" + std::to_string(px);
         o += ",\"pivot_y\":" + std::to_string(py);
         o += ",\"pivot_x_norm\":" + format_double(pivot_x_norm);
         o += ",\"pivot_y_norm\":" + format_double(pivot_y_norm);
         o += ",\"pivot_y_norm_raw\":" + format_double(pivot_y_norm_raw);
+        o += ",\"pivot_rect_x_norm\":" + format_double(pivot_rect_x_norm);
+        o += ",\"pivot_rect_y_norm\":" + format_double(1.0 - pivot_rect_y_norm_raw);
         o += ",\"name_hash_hex\":\"" + nh_hex + "\"";
         o += ",\"name_hash_decimal\":\"" + nh_dec + "\"";
+        o += ",\"name_hash_signed\":\"" + nh_signed + "\"";
         o += ",\"name_css\":\"" + escape_json(to_css_name(sname)) + "\"";
 
         // sprite_markers array
@@ -805,9 +847,14 @@ std::string build_sprat_json(
     const uint64_t stem_hash = sprat::core::fnv1a_hash(
         reinterpret_cast<const unsigned char*>(hash_source.c_str()), hash_source.size());
     const std::string stem_hash_hex = to_hex16(stem_hash);
+    // Same for every transform of a run (a group, or separate runs with the same --atlas),
+    // unlike output_stem, which is each transform's own variant name: IDs that one output
+    // refers to in another (Unity texture GUIDs) are built from it.
+    const uint64_t pattern_hash = sprat::core::fnv1a_hash(
+        reinterpret_cast<const unsigned char*>(output_pattern_arg.c_str()), output_pattern_arg.size());
 
-    const std::string atlas_path_0 = format_atlas_path(output_pattern_arg, 0);
-    const std::string atlas_stem_0 = fs::path(atlas_path_0).stem().string();
+    const std::string atlas_path_0 = image_path(0);
+    const std::string atlas_stem_0 = fs::path(format_atlas_path(output_pattern_arg, 0)).stem().string();
 
     const int eff_fps = animation_fps > 0 ? animation_fps : DEFAULT_ANIMATION_FPS;
     const int atlas_w0 = layout.atlases.empty() ? 0 : layout.atlases[0].width;
@@ -818,18 +865,23 @@ std::string build_sprat_json(
     // Global scalars
     j += "\"atlas_path\":\"" + escape_json(atlas_path_0) + "\"";
     j += ",\"atlas_stem\":\"" + escape_json(atlas_stem_0) + "\"";
+    j += ",\"texture_key\":\"" + escape_json(texture_key(output_pattern_arg, layout.atlases.size(), atlas_stem_0)) + "\"";
     j += ",\"atlas_width\":" + std::to_string(atlas_w0);
     j += ",\"atlas_height\":" + std::to_string(atlas_h0);
     j += ",\"atlas_count\":" + std::to_string(layout.atlases.size());
     j += ",\"multipack\":" + std::string(layout.multipack ? "true" : "false");
     j += ",\"scale\":" + format_double(layout.scale);
     j += ",\"extrude\":" + std::to_string(layout.extrude);
+    const bool has_rotated = std::ranges::any_of(layout.sprites, [](const Sprite& s) { return s.rotated; });
+    j += ",\"rotation_direction\":\"" + std::string(layout.rotate_ccw ? "ccw" : "cw") + "\"";
+    j += ",\"has_rotated\":" + std::string(has_rotated ? "true" : "false");
     j += ",\"sprite_count\":" + std::to_string(layout.sprites.size());
     j += ",\"animation_count\":" + std::to_string(normalized_animations.size());
     j += ",\"marker_count\":" + std::to_string(marker_items.size());
     j += ",\"output_pattern\":\"" + escape_json(output_pattern_arg) + "\"";
     j += ",\"output_stem\":\"" + escape_json(output_stem) + "\"";
     j += ",\"output_stem_hash_hex\":\"" + stem_hash_hex + "\"";
+    j += ",\"output_pattern_hash_hex\":\"" + to_hex16(pattern_hash) + "\"";
     j += ",\"has_animations\":" + std::string(normalized_animations.empty() ? "false" : "true");
     j += ",\"has_markers\":" + std::string(marker_items.empty() ? "false" : "true");
     j += ",\"animations_path\":\"" + escape_json(animations_path_arg) + "\"";
@@ -866,7 +918,14 @@ std::string build_sprat_json(
         j += "{\"index\":" + std::to_string(ai);
         j += ",\"width\":" + std::to_string(atlas.width);
         j += ",\"height\":" + std::to_string(atlas.height);
-        j += ",\"path\":\"" + escape_json(a_path) + "\"";
+        j += ",\"path\":\"" + escape_json(image_path(static_cast<int>(ai))) + "\"";
+        // Per-atlas names and a stable hash, for formats that write one file per atlas.
+        const fs::path a_fs_path(a_path);
+        j += ",\"stem\":\"" + escape_json(a_fs_path.stem().string()) + "\"";
+        j += ",\"filename\":\"" + escape_json(a_fs_path.filename().string()) + "\"";
+        const uint64_t a_hash = sprat::core::fnv1a_hash(
+            reinterpret_cast<const unsigned char*>(a_path.c_str()), a_path.size());
+        j += ",\"hash_hex\":\"" + to_hex16(a_hash) + "\"";
         const std::string n_path = format_atlas_path(normal_atlas_pattern_arg, static_cast<int>(ai));
         j += ",\"normal_path\":\"" + escape_json(n_path) + "\"";
         const std::string c_path = format_atlas_path(collision_atlas_pattern_arg, static_cast<int>(ai));
@@ -925,6 +984,7 @@ std::string build_sprat_json(
             j += ",\"name\":\"" + escape_json(fname) + "\"";
             j += ",\"name_hash_hex\":\"" + to_hex16(fnh) + "\"";
             j += ",\"name_hash_decimal\":\"" + std::to_string(fnh) + "\"";
+            j += ",\"name_hash_signed\":\"" + std::to_string(static_cast<int64_t>(fnh)) + "\"";
             j += "}";
         }
         j += "]";
@@ -954,7 +1014,7 @@ std::string evaluate_transform(
 {
     jsonnet::Jsonnet vm;
     if (!vm.init()) {
-        error = "Failed to initialize Jsonnet VM";
+        error = tr("Failed to initialize Jsonnet VM");
         return "";
     }
     vm.bindExtCodeVar("sprat", sprat_json);
@@ -980,6 +1040,7 @@ struct TransformResult {
     std::string icon;                          // optional relative path to icon
     // Exactly one of content or files is populated:
     std::string content;                        // single-file mode
+    std::string filename;                       // optional --output-dir name for content
     struct FileEntry { std::string filename; std::string content; };
     std::vector<FileEntry> files;              // multi-file mode
 };
@@ -1077,6 +1138,42 @@ static bool find_json_string_value(const std::string& json, const std::string& k
 }
 
 // Parse the JSON object output from a Jsonnet transform evaluation.
+// Windows opens a device instead of a file for these names, with any extension ("con.anim",
+// "nul.json"), so the output would silently go nowhere.
+static bool is_windows_reserved_name(const std::string& name) {
+    std::string stem = name.substr(0, name.find('.'));
+    std::ranges::transform(stem, stem.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") {
+        return true;
+    }
+    return stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) &&
+           stem[3] >= '1' && stem[3] <= '9';
+}
+
+// A transform-provided filename must name a file directly inside --output-dir: no
+// directories, no parent references and nothing Windows treats as a drive or device path.
+// Rules are the same on every platform, so output written on one works on the others.
+static bool is_safe_output_filename(const std::string& name) {
+    if (name.empty() || name == "." || name == "..") {
+        return false;
+    }
+    // Windows drops a trailing dot or space, so "a." would overwrite "a".
+    if (name.back() == '.' || name.back() == ' ' || is_windows_reserved_name(name)) {
+        return false;
+    }
+    return std::ranges::none_of(name, [](char c) {
+        const auto u = static_cast<unsigned char>(c);
+        return u < 0x20 || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+               c == '"' || c == '<' || c == '>' || c == '|';
+    });
+}
+
+static std::string unsafe_output_filename_error(const std::string& name) {
+    return std::string(tr("Transform output filename must be a plain file name that is valid on every "
+                          "platform (no folders, no device names such as CON or NUL, no trailing dot "
+                          "or space): ")) + name;
+}
+
 bool parse_transform_result(const std::string& json, TransformResult& out, std::string& error) {
     // Extract name
     size_t vs = 0, ve = 0;
@@ -1092,7 +1189,7 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
     if (find_json_string_value(json, "extension", vs, ve)) {
         out.extension = json_unescape_string(json, vs, ve);
     } else {
-        error = "Transform result missing required field: extension";
+        error = tr("Transform result missing required field: extension");
         return false;
     }
 
@@ -1106,7 +1203,7 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
         // skip to '['
         while (fp < json.size() && json[fp] != '[') ++fp;
         if (fp >= json.size()) {
-            error = "Malformed files array in transform result";
+            error = tr("Malformed files array in transform result");
             return false;
         }
         ++fp; // skip '['
@@ -1141,6 +1238,17 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
                 entry.content = json_unescape_string(obj_str, fvs, fve);
             }
             if (!entry.filename.empty()) {
+                if (!is_safe_output_filename(entry.filename)) {
+                    error = unsafe_output_filename_error(entry.filename);
+                    return false;
+                }
+                const bool duplicate = std::ranges::any_of(out.files, [&](const auto& fe) {
+                    return fe.filename == entry.filename;
+                });
+                if (duplicate) {
+                    error = tr("Transform produces the same output filename twice: ") + entry.filename;
+                    return false;
+                }
                 out.files.push_back(std::move(entry));
             }
             fp = obj_end;
@@ -1151,10 +1259,18 @@ bool parse_transform_result(const std::string& json, TransformResult& out, std::
     // No "files" key — check for top-level "content" (single-file mode).
     if (find_json_string_value(json, "content", vs, ve)) {
         out.content = json_unescape_string(json, vs, ve);
+        // Optional name for --output-dir (stdout output ignores it), e.g. "atlas.png.meta".
+        if (find_json_string_value(json, "filename", vs, ve)) {
+            out.filename = json_unescape_string(json, vs, ve);
+            if (!out.filename.empty() && !is_safe_output_filename(out.filename)) {
+                error = unsafe_output_filename_error(out.filename);
+                return false;
+            }
+        }
         return true;
     }
 
-    error = "Transform result must have either 'content' or 'files' field";
+    error = tr("Transform result must have either 'content' or 'files' field");
     return false;
 }
 
@@ -1224,9 +1340,10 @@ void list_transforms() {
 
     // Empty mock data for listing
     const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
-        R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
-        R"("multipack":false,"scale":1,"extrude":0,"sprite_count":0,"animation_count":0,)"
-        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
+        R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
+        R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
+        R"("sprite_count":0,"animation_count":0,)"
+        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000","output_pattern_hash_hex":"0000000000000000",)"
         R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
         R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
         R"("has_collision_atlas":false,"collision_atlas_pattern":"","collision_atlas_path":"","collision_atlas_scale":1})";
@@ -1293,9 +1410,10 @@ void list_transforms_json() {
     std::ranges::sort(paths);
 
     const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
-        R"("atlas_path":"","atlas_stem":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
-        R"("multipack":false,"scale":1,"extrude":0,"sprite_count":0,"animation_count":0,)"
-        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000",)"
+        R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
+        R"("multipack":false,"scale":1,"extrude":0,"rotation_direction":"cw","has_rotated":false,)"
+        R"("sprite_count":0,"animation_count":0,)"
+        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000","output_pattern_hash_hex":"0000000000000000",)"
         R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8,)"
         R"("has_normal_atlas":false,"normal_atlas_pattern":"","normal_atlas_path":"",)"
         R"("has_collision_atlas":false,"collision_atlas_pattern":"","collision_atlas_path":"","collision_atlas_scale":1})";
@@ -1353,6 +1471,7 @@ void print_usage() {
               << tr("Options:\n")
               << tr("  --transform NAME|PATH      Transform name or path (default: json)\n")
               << tr("  --atlas, -a PATTERN        Atlas path pattern for atlas_* placeholders\n")
+              << tr("  --image-path PATTERN       Image path written into the metadata (default: the --atlas path as given)\n")
               << tr("  --output-dir PATH          Write output to PATH/{variant}{extension} instead of stdout\n")
               << tr("  --list-transforms          Print available transforms and exit\n")
               << tr("  --list-transforms-json     Print available transforms as JSON and exit\n")
@@ -1380,6 +1499,7 @@ int run_spratconvert(int argc, char** argv) {
     std::string markers_path_arg;
     std::string animations_path_arg;
     std::string output_pattern_arg;
+    std::string image_pattern_arg;
     std::string normal_atlas_pattern_arg;
     std::string collision_atlas_pattern_arg;
     double collision_atlas_scale = 1.0;
@@ -1395,6 +1515,8 @@ int run_spratconvert(int argc, char** argv) {
             transform_arg = argv[++i];
         } else if ((arg == "--atlas" || arg == "-a" || arg == "--output" || arg == "-o") && i + 1 < argc) {
             output_pattern_arg = argv[++i];
+        } else if (arg == "--image-path" && i + 1 < argc) {
+            image_pattern_arg = argv[++i];
         } else if (arg == "--normal-atlas" && i + 1 < argc) {
             normal_atlas_pattern_arg = argv[++i];
         } else if (arg == "--collision-atlas" && i + 1 < argc) {
@@ -1463,11 +1585,23 @@ int run_spratconvert(int argc, char** argv) {
     std::istringstream layout_iss(input_text);
     Layout layout;
     std::string layout_error;
-    if (!parse_layout(layout_iss, layout, layout_error)) {
+    if (!parse_layout(layout_iss, layout, layout_error)
+        || !sprat::core::expand_layout_aliases(layout, layout_error)) {
         std::cerr << layout_error << "\n";
         return 1;
     }
 
+    if (!image_pattern_arg.empty()) {
+        std::string image_pattern_error;
+        if (!validate_output_pattern(image_pattern_arg, layout.atlases.size(), true, image_pattern_error)) {
+            std::cerr << tr("Invalid image path pattern: ") << image_pattern_error << "\n";
+            return 1;
+        }
+    }
+    if (output_pattern_arg.empty()) {
+        // Without -a, the --image-path pattern also names the atlas files.
+        output_pattern_arg = image_pattern_arg;
+    }
     if (output_pattern_arg.empty()) {
         if (layout.multipack || layout.atlases.size() > 1) {
             output_pattern_arg = "atlas_%d.png";
@@ -1537,8 +1671,14 @@ int run_spratconvert(int argc, char** argv) {
             if (anim_name.empty()) continue;
             grouped[anim_name].push_back(static_cast<int>(i));
         }
-        for (auto const& [name, frames] : grouped) {
+        for (auto& [name, frames] : grouped) {
             if (frames.size() > 1) {
+                // Layout order is packing order (and aliases come last), so order
+                // frames by name: run_2 before run_10.
+                std::sort(frames.begin(), frames.end(), [&](int a, int b) {
+                    return sprat::core::compare_natural(sprite_names[static_cast<size_t>(a)],
+                                                        sprite_names[static_cast<size_t>(b)]) < 0;
+                });
                 AnimationItem anim;
                 anim.index = animation_items.size();
                 anim.name = name;
@@ -1611,13 +1751,12 @@ int run_spratconvert(int argc, char** argv) {
             int exit_code = 0;
             for (const auto& fe : result.files) {
                 const fs::path out_path = fs::path(out_dir) / fe.filename;
-                std::ofstream out_file(out_path, std::ios::binary);
-                if (!out_file) {
-                    std::cerr << tr("Failed to open output file: ") << out_path.string() << "\n";
+                std::string write_error;
+                if (!sprat::core::write_file(out_path, fe.content, write_error)) {
+                    std::cerr << tr("Failed to write output file ") << to_quoted(out_path.string())
+                              << ": " << write_error << "\n";
                     exit_code = 1;
-                    continue;
                 }
-                out_file << fe.content;
             }
             return exit_code;
         }
@@ -1630,14 +1769,15 @@ int run_spratconvert(int argc, char** argv) {
                 std::cerr << tr("Failed to create output directory: ") << ec.message() << "\n";
                 return 1;
             }
-            const std::string out_filename = file_stem + result.extension;
+            const std::string out_filename =
+                result.filename.empty() ? file_stem + result.extension : result.filename;
             const fs::path out_path = fs::path(out_dir) / out_filename;
-            std::ofstream out_file(out_path, std::ios::binary);
-            if (!out_file) {
-                std::cerr << tr("Failed to open output file: ") << out_path.string() << "\n";
+            std::string write_error;
+            if (!sprat::core::write_file(out_path, result.content, write_error)) {
+                std::cerr << tr("Failed to write output file ") << to_quoted(out_path.string())
+                          << ": " << write_error << "\n";
                 return 1;
             }
-            out_file << result.content;
             return 0;
         }
 
@@ -1648,18 +1788,15 @@ int run_spratconvert(int argc, char** argv) {
     };
 
     if (group_mode) {
-        std::error_code ec;
-        fs::create_directories(output_dir_arg, ec);
-        if (ec) {
-            std::cerr << tr("Failed to create output directory: ") << ec.message() << "\n";
-            return 1;
-        }
+        // Evaluate every member before writing anything, so a member that refuses the
+        // layout (for example rotated sprites in unity.meta) leaves no partial output.
+        std::vector<std::pair<std::string, TransformResult>> results;
         int exit_code = 0;
         for (const GroupMember& member : group_members) {
             const std::string sprat_json = build_sprat_json(
                 layout, sprite_names, marker_items, normalized_animations, sprite_markers,
                 global_pivot_x, global_pivot_y, has_global_pivot,
-                output_pattern_arg, member.variant,
+                output_pattern_arg, image_pattern_arg, member.variant,
                 markers_path_arg, animations_path_arg, animation_fps,
                 normal_atlas_pattern_arg,
                 collision_atlas_pattern_arg, collision_atlas_scale);
@@ -1679,8 +1816,21 @@ int run_spratconvert(int argc, char** argv) {
                 exit_code = 1;
                 continue;
             }
+            results.emplace_back(member.variant, std::move(result));
+        }
+        if (exit_code != 0) {
+            std::cerr << tr("No files were written.\n");
+            return exit_code;
+        }
 
-            const int r = write_result(result, output_dir_arg, member.variant, nullptr);
+        std::error_code ec;
+        fs::create_directories(output_dir_arg, ec);
+        if (ec) {
+            std::cerr << tr("Failed to create output directory: ") << ec.message() << "\n";
+            return 1;
+        }
+        for (const auto& [variant, result] : results) {
+            const int r = write_result(result, output_dir_arg, variant, nullptr);
             if (r != 0) exit_code = r;
         }
         return exit_code;
@@ -1695,7 +1845,7 @@ int run_spratconvert(int argc, char** argv) {
     const std::string sprat_json = build_sprat_json(
         layout, sprite_names, marker_items, normalized_animations, sprite_markers,
         global_pivot_x, global_pivot_y, has_global_pivot,
-        output_pattern_arg, output_stem,
+        output_pattern_arg, image_pattern_arg, output_stem,
         markers_path_arg, animations_path_arg, animation_fps,
         normal_atlas_pattern_arg,
         collision_atlas_pattern_arg, collision_atlas_scale);
@@ -1714,5 +1864,9 @@ int run_spratconvert(int argc, char** argv) {
         return 1;
     }
 
-    return write_result(result, output_dir_arg, output_stem, &std::cout);
+    const int status = write_result(result, output_dir_arg, output_stem, &std::cout);
+    if (status == 0 && output_dir_arg.empty() && !sprat::core::finish_stdout()) {
+        return 1;
+    }
+    return status;
 }

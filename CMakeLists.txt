@@ -7,10 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(-fpermissive)
-endif()
-
 if(WIN32)
     add_definitions(-DNOMINMAX)
     option(SPRAT_STATIC "Prefer static linking for dependencies on Windows" OFF)
@@ -65,7 +61,9 @@ set(STB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/stb)
 file(MAKE_DIRECTORY ${STB_DIR})
 
 option(SPRAT_DOWNLOAD_STB "Download stb headers when missing" OFF)
-set(STB_REF "master" CACHE STRING "Git ref (branch, tag, or commit) used when downloading stb headers")
+# Pinned so builds are reproducible: upstream master reorganizes files (stb_image_resize2.h
+# moved to its own repository in 2026-10), which breaks downloads from a moving branch.
+set(STB_REF "2b2e64bc4778df6a06fbea3a5dbe61f7a76ecf19" CACHE STRING "Git ref (branch, tag, or commit) used when downloading stb headers")
 set(STB_BASE_URL https://raw.githubusercontent.com/nothings/stb/${STB_REF})
 
 function(ensure_stb_header header_name)
@@ -223,9 +221,16 @@ if(NOT ZOPFLIPNG_FOUND)
     endif()
 endif()
 
-# Squish (libsquish) detection for GPU compression
+# Squish (libsquish) for GPU compression (spratpack --gpu-compress): a system library when
+# one is installed, otherwise the pinned upstream release is downloaded into _deps.
+option(SPRAT_DOWNLOAD_SQUISH "Download and build libsquish when it is not installed" ON)
 if(PkgConfig_FOUND)
     pkg_check_modules(SQUISH squish)
+endif()
+# A cached path to a library that was uninstalled since would break the link; look again.
+if(SQUISH_LIBRARY AND NOT EXISTS "${SQUISH_LIBRARY}")
+    unset(SQUISH_LIBRARY CACHE)
+    unset(SQUISH_INCLUDE_DIR CACHE)
 endif()
 
 if(NOT SQUISH_FOUND)
@@ -244,6 +249,68 @@ if(NOT SQUISH_FOUND)
                       DOC "Path to squish DLL")
         endif()
     endif()
+endif()
+
+if(NOT SQUISH_FOUND AND SPRAT_DOWNLOAD_SQUISH AND NOT EMSCRIPTEN)
+    # Downloaded by hand rather than with FetchContent, whose failure would stop the whole
+    # configure: without network access (distro or Nix builds, air-gapped CI) spratpack is
+    # then built without --gpu-compress, as when SPRAT_DOWNLOAD_SQUISH is OFF.
+    set(_squish_url https://downloads.sourceforge.net/project/libsquish/libsquish-1.15.tgz)
+    set(_squish_sha256 628796eeba608866183a61d080d46967c9dda6723bc0a3ec52324c85d2147269)
+    set(_squish_archive ${CMAKE_BINARY_DIR}/_deps/libsquish-1.15.tgz)
+    set(squish_SOURCE_DIR ${CMAKE_BINARY_DIR}/_deps/squish-src)
+    set(squish_BINARY_DIR ${CMAKE_BINARY_DIR}/_deps/squish-build)
+    if(NOT EXISTS ${squish_SOURCE_DIR}/CMakeLists.txt)
+        file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/_deps)
+        message(STATUS "Downloading libsquish 1.15 from ${_squish_url}")
+        file(DOWNLOAD ${_squish_url} ${_squish_archive} STATUS _squish_status TLS_VERIFY ON)
+        list(GET _squish_status 0 _squish_code)
+        if(_squish_code EQUAL 0)
+            file(SHA256 ${_squish_archive} _squish_actual)
+            if(NOT _squish_actual STREQUAL _squish_sha256)
+                file(REMOVE ${_squish_archive})
+                message(FATAL_ERROR "libsquish download has SHA256 ${_squish_actual}, expected ${_squish_sha256}")
+            endif()
+            # The archive has no top-level folder; extract into a fresh directory.
+            file(REMOVE_RECURSE ${squish_SOURCE_DIR}.tmp)
+            file(MAKE_DIRECTORY ${squish_SOURCE_DIR}.tmp)
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E tar xzf ${_squish_archive}
+                WORKING_DIRECTORY ${squish_SOURCE_DIR}.tmp
+                RESULT_VARIABLE _squish_extract)
+            if(_squish_extract EQUAL 0 AND EXISTS ${squish_SOURCE_DIR}.tmp/CMakeLists.txt)
+                file(RENAME ${squish_SOURCE_DIR}.tmp ${squish_SOURCE_DIR})
+            else()
+                file(REMOVE_RECURSE ${squish_SOURCE_DIR}.tmp)
+                message(WARNING "Could not extract ${_squish_archive}; building without --gpu-compress")
+            endif()
+        else()
+            list(GET _squish_status 1 _squish_error)
+            file(REMOVE ${_squish_archive})
+            message(WARNING "Could not download libsquish (${_squish_error}); building spratpack "
+                            "without --gpu-compress. Install libsquish, or configure with "
+                            "-DSPRAT_DOWNLOAD_SQUISH=OFF to skip the download.")
+        endif()
+    endif()
+endif()
+if(NOT SQUISH_FOUND AND SPRAT_DOWNLOAD_SQUISH AND NOT EMSCRIPTEN AND EXISTS ${squish_SOURCE_DIR}/CMakeLists.txt)
+    # libsquish adds -msse2 on every non-Windows platform, which arm64 compilers reject, and
+    # builds with OpenMP flags that would not reach spratpack's link line; spratpack runs the
+    # compression on its own threads instead.
+    set(_sprat_squish_sse2 OFF)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x86)$")
+        set(_sprat_squish_sse2 ON)
+    endif()
+    set(BUILD_SQUISH_WITH_SSE2 ${_sprat_squish_sse2} CACHE BOOL "" FORCE)
+    set(BUILD_SQUISH_WITH_OPENMP OFF CACHE BOOL "" FORCE)
+    set(BUILD_SQUISH_EXTRA OFF CACHE BOOL "" FORCE)
+    # libsquish declares cmake_minimum_required(2.8.3), which CMake 4 rejects without this.
+    set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE INTERNAL "")
+    add_subdirectory(${squish_SOURCE_DIR} ${squish_BINARY_DIR} EXCLUDE_FROM_ALL)
+    set(SQUISH_LIBRARIES squish)
+    set(SQUISH_INCLUDE_DIRS ${squish_SOURCE_DIR})
+    set(SQUISH_FOUND TRUE)
+    message(STATUS "libsquish: building the downloaded 1.15 release")
 endif()
 
 # libwebp detection
@@ -459,10 +526,17 @@ add_library(spratcore STATIC
     src/core/cli_parse.cpp
     src/core/layout_parser.cpp
     src/core/output_pattern.cpp
+    src/core/perceptual_dedup.cpp
     src/core/i18n.cpp
     src/core/stb_impl.cpp
     src/commands/spratlayout_command.cpp
-    src/commands/spratpack_command.cpp
+    src/commands/spratlayout/cache.cpp
+    src/commands/spratlayout/input.cpp
+    src/commands/spratlayout/output.cpp
+    src/commands/spratlayout/packing.cpp
+    src/commands/spratlayout/profiles.cpp
+    src/commands/spratlayout/search.cpp
+    src/commands/spratlayout/sprites.cpp
     src/commands/spratconvert_command.cpp
     src/commands/spratframes_command.cpp
     src/commands/spratunpack_command.cpp
@@ -470,6 +544,8 @@ add_library(spratcore STATIC
 
 target_include_directories(spratcore PUBLIC src)
 target_include_directories(spratcore SYSTEM PRIVATE ${STB_DIR})
+# nlohmann/json, bundled with jsonnet; used to read JSON frame definitions.
+target_include_directories(spratcore SYSTEM PRIVATE ${jsonnet_SOURCE_DIR}/third_party/json)
 target_include_directories(spratcore PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_link_libraries(spratcore PRIVATE ${LIBARCHIVE_LIBRARIES})
 # Under Emscripten BUILD_STATIC_LIBS is OFF (see above), so the _static alias
@@ -493,7 +569,9 @@ target_link_libraries(spratlayout PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratlayout PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratlayout SYSTEM PRIVATE ${STB_DIR})
 
-add_executable(spratpack src/spratpack.cpp)
+# spratpack's command is built into the executable, not spratcore, because its optional
+# codecs (Zopfli, libsquish, WebP, AVIF) are configured on this target below.
+add_executable(spratpack src/spratpack.cpp src/commands/spratpack_command.cpp)
 target_link_libraries(spratpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 if(ZOPFLIPNG_FOUND)
     target_link_libraries(spratpack PRIVATE ${ZOPFLIPNG_LIBRARIES})
@@ -538,7 +616,8 @@ target_include_directories(spratunpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratunpack SYSTEM PRIVATE ${STB_DIR})
 
 target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_definitions(spratlayout PRIVATE
+# The profile lookup is compiled into spratcore, so the define must be set there.
+target_compile_definitions(spratcore PRIVATE
     SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")
 
 # Keep a default profile config beside built binaries (e.g. build-win/) so

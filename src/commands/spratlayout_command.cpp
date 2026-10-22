@@ -1,6 +1,9 @@
-// spratlayout.cpp
-// MIT License (c) 2026 Pedro
-// Compile: g++ -std=c++20 -O2 src/spratlayout.cpp -o spratlayout
+// spratlayout: scan images and write a text layout of their atlas positions.
+//
+// The pipeline lives in src/commands/spratlayout/: input (folders, lists, archives),
+// sprites (measuring and deduplication), packing and search (placing sprites),
+// cache (on-disk caches) and output (the layout text). This file parses options,
+// resolves profiles and runs the pipeline.
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -9,7 +12,6 @@
 #include <io.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <intrin.h>
 #ifndef _O_BINARY
 #define _O_BINARY 0x8000
 #endif
@@ -21,115 +23,42 @@
 #endif
 #endif
 
-#ifdef _MSC_VER
-static inline int popcount64(unsigned long long x) { return (int)__popcnt64(x); }
-#else
-static inline int popcount64(unsigned long long x) { return __builtin_popcountll(x); }
-#endif
-
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
-#include <string>
-#include <filesystem>
-namespace fs = std::filesystem;
-#include <cstdint>
-#include <cstdlib>
-#include <cstdio>
-#include <cerrno>
-#include <cctype>
-#include <functional>
-#include <memory>
-#include <limits>
-#include <cmath>
-#include <array>
-#include <cstddef>
-#include <chrono>
-#include <fstream>
-#include <iomanip>
-#include <sstream>
-#include <atomic>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <optional>
-#include <numeric>
-#include <cstring>
-#include <system_error>
-#include <archive.h>
-#include <archive_entry.h>
+
+#include "commands/entrypoints.h"
+#include "commands/spratlayout/cache.h"
+#include "commands/spratlayout/common.h"
+#include "commands/spratlayout/input.h"
+#include "commands/spratlayout/output.h"
+#include "commands/spratlayout/packing.h"
+#include "commands/spratlayout/profiles.h"
+#include "commands/spratlayout/search.h"
+#include "commands/spratlayout/sprites.h"
+#include "core/checked_math.h"
 #include "core/cli_parse.h"
+#include "core/file_io.h"
 #include "core/i18n.h"
-#include "core/fnv1a.h"
-
-#include <stb_image.h>
-
-constexpr int k_output_cache_format_version = 4;
-constexpr int k_seed_cache_format_version = 4;
-#ifndef SPRAT_GLOBAL_PROFILE_CONFIG
-#define SPRAT_GLOBAL_PROFILE_CONFIG "/usr/local/share/sprat/spratprofiles.cfg"
-#endif
+#include "core/perceptual_dedup.h"
 
 namespace {
+
+using namespace sprat::layout;
+using sprat::core::checked_add_int;
+using sprat::core::checked_mul_size_t;
 using sprat::core::parse_non_negative_int;
 using sprat::core::parse_positive_int;
 using sprat::core::parse_positive_uint;
-using sprat::core::tr;
 using sprat::core::to_quoted;
+using sprat::core::tr;
 
-std::string trim_copy(const std::string& s) {
-    size_t start = 0;
-    while (start < s.size() && (std::isspace(static_cast<unsigned char>(s[start])) != 0)) {
-        ++start;
-    }
-    size_t end = s.size();
-    while (end > start && (std::isspace(static_cast<unsigned char>(s[end - 1])) != 0)) {
-        --end;
-    }
-    return s.substr(start, end - start);
-}
-
-std::string normalize_path_key(const fs::path& path) {
-    std::error_code ec;
-    fs::path absolute = fs::absolute(path, ec);
-    if (!ec) {
-        return absolute.lexically_normal().string();
-    }
-    return path.lexically_normal().string();
-}
-
-bool parse_quoted_path_argument(std::string_view input, size_t& pos, std::string& out) {
-    std::string error;
-    return sprat::core::parse_quoted(input, pos, out, error);
-}
-
-enum class Mode : std::uint8_t { POT, COMPACT, FAST, GRID };
-enum class OptimizeTarget : std::uint8_t { GPU, SPACE };
-enum class ResolutionReference : std::uint8_t { Largest, Smallest };
-
-struct ProfileDefinition {
-    std::string name;
-    std::string label;
-    Mode mode = Mode::COMPACT;
-    OptimizeTarget optimize_target = OptimizeTarget::GPU;
-    std::optional<int> max_width;
-    std::optional<int> max_height;
-    std::optional<int> padding;
-    std::optional<int> extrude;
-    std::optional<double> scale;
-    std::optional<bool> trim_transparent;
-    std::optional<bool> rotate;
-    std::optional<bool> multipack;
-    std::optional<unsigned int> threads;
-    std::optional<bool> incremental;
-    std::optional<std::pair<int, int>> source_resolution;
-    std::optional<std::pair<int, int>> target_resolution;
-    std::optional<ResolutionReference> resolution_reference;
-};
-
-constexpr const char* k_profiles_config_filename = "spratprofiles.cfg";
-constexpr const char* k_global_profiles_config_path = SPRAT_GLOBAL_PROFILE_CONFIG;
 constexpr const char k_default_profile_name[] = "fast";
 constexpr Mode k_default_mode = Mode::FAST;
 constexpr OptimizeTarget k_default_optimize_target = OptimizeTarget::GPU;
@@ -138,70 +67,12 @@ constexpr int k_default_extrude = 0;
 constexpr double k_default_scale = 1.0;
 constexpr bool k_default_trim_transparent = false;
 constexpr unsigned int k_default_threads = 0;
+// Compact profiles whose layouts a compact run can also cache (see prewarm_compact_profiles).
 constexpr std::array<const char*, 3> k_compact_prewarm_profiles = {
     "desktop",
     "mobile",
     "space",
 };
-
-constexpr int k_max_image_dimension = 100000;
-constexpr int k_output_precision = 8;
-constexpr int k_max_cache_entries = 10000;
-constexpr long long k_max_cache_age_seconds_limit = 31536000; // 1 year
-constexpr long long k_default_cache_age_seconds = 86400; // 1 day
-constexpr uintmax_t k_max_file_size = 1000000000; // 1GB
-constexpr size_t k_tar_read_buffer_size = 10240;
-constexpr size_t k_max_extension_len = 10;
-constexpr size_t k_content_detection_buffer_size = 512;
-constexpr size_t k_tar_magic_offset = 257;
-constexpr size_t k_tar_magic_len = 5;
-constexpr size_t k_min_tar_read_len = k_tar_magic_offset;
-constexpr size_t k_ustar_sig_required_len = k_tar_magic_offset + 6;
-constexpr int k_floating_point_precision = 17;
-constexpr int k_search_step_divisor = 24;
-constexpr int k_search_step_min = 8;
-constexpr size_t k_guided_offsets_count = 15;
-constexpr std::array<int, k_guided_offsets_count> k_guided_search_offsets = {
-    0, -1, 1, -2, 2, -4, 4, -8, 8, -12, 12, -16, 16, -20, 20
-};
-constexpr size_t k_sort_mode_count = 6;
-constexpr size_t k_sort_mode_index_area = 0;
-constexpr size_t k_sort_mode_index_maxside = 1;
-constexpr size_t k_sort_mode_index_height = 2;
-constexpr size_t k_sort_mode_index_width = 3;
-constexpr size_t k_sort_mode_index_perimeter = 4;
-constexpr size_t k_sort_mode_index_none = 5;
-
-enum class RectHeuristic : std::uint8_t {
-    BestShortSideFit,
-    BestAreaFit,
-    BottomLeft
-};
-
-constexpr size_t k_rect_heuristic_count = 3;
-constexpr size_t k_guided_anchor_count = 4;
-constexpr size_t k_guided_sort_mode_count = 4;
-constexpr std::array<size_t, k_guided_sort_mode_count> k_guided_sort_indices = {
-    k_sort_mode_index_height,
-    k_sort_mode_index_area,
-    k_sort_mode_index_maxside,
-    k_sort_mode_index_none
-};
-constexpr size_t k_guided_heuristic_count = 3;
-constexpr std::array<RectHeuristic, k_guided_heuristic_count> k_guided_heuristics = {
-    RectHeuristic::BestShortSideFit,
-    RectHeuristic::BestAreaFit,
-    RectHeuristic::BottomLeft
-};
-constexpr long long k_cache_max_age_seconds = 3600;
-constexpr size_t k_cache_max_layout_files = 16;
-constexpr size_t k_cache_max_seed_files = 8;
-
-std::string to_lower_copy(std::string value) {
-    std::ranges::transform(value, value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
-}
 
 bool env_flag_enabled(const char* name) {
     const char* value = std::getenv(name);
@@ -211,1315 +82,6 @@ bool env_flag_enabled(const char* name) {
     std::string lower = to_lower_copy(value);
     return !(lower == "0" || lower == "false" || lower == "no" || lower == "off");
 }
-
-bool parse_mode_from_string(const std::string& value, Mode& out, std::string& error) {
-    std::string lower = to_lower_copy(value);
-    if (lower == "compact") {
-        out = Mode::COMPACT;
-        return true;
-    }
-    if (lower == "pot") {
-        out = Mode::POT;
-        return true;
-    }
-    if (lower == "fast") {
-        out = Mode::FAST;
-        return true;
-    }
-    if (lower == "grid") {
-        out = Mode::GRID;
-        return true;
-    }
-    error = "invalid mode '" + value + "'";
-    return false;
-}
-
-bool parse_optimize_target_from_string(const std::string& value, OptimizeTarget& out, std::string& error) {
-    std::string lower = to_lower_copy(value);
-    if (lower == "gpu") {
-        out = OptimizeTarget::GPU;
-        return true;
-    }
-    if (lower == "space") {
-        out = OptimizeTarget::SPACE;
-        return true;
-    }
-    error = "invalid optimize target '" + value + "'";
-    return false;
-}
-
-struct PresetDefinition {
-    Mode mode;
-    OptimizeTarget optimize_target;
-};
-
-bool parse_preset_from_string(const std::string& value, PresetDefinition& out) {
-    std::string lower = to_lower_copy(value);
-    if (lower == "fast") {
-        out = {Mode::FAST, OptimizeTarget::GPU};
-        return true;
-    }
-    if (lower == "quality") {
-        out = {Mode::COMPACT, OptimizeTarget::GPU};
-        return true;
-    }
-    if (lower == "small") {
-        out = {Mode::COMPACT, OptimizeTarget::SPACE};
-        return true;
-    }
-    if (lower == "pot") {
-        out = {Mode::POT, OptimizeTarget::GPU};
-        return true;
-    }
-    return false;
-}
-
-bool parse_resolution_reference_from_string(const std::string& value,
-                                            ResolutionReference& out,
-                                            std::string& error) {
-    std::string lower = to_lower_copy(value);
-    if (lower == "largest") {
-        out = ResolutionReference::Largest;
-        return true;
-    }
-    if (lower == "smallest") {
-        out = ResolutionReference::Smallest;
-        return true;
-    }
-    error = "invalid resolution reference '" + value + "'";
-    return false;
-}
-
-std::string strip_trailing_cr(std::string value) {
-    while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) {
-        value.pop_back();
-    }
-    return value;
-}
-
-bool parse_scale_factor(const std::string& value, double& out) {
-    if (value.empty()) {
-        return false;
-    }
-    const char* begin = value.c_str();
-    char* end = nullptr;
-    errno = 0;
-    const double parsed = std::strtod(begin, &end);
-    if (end != begin + value.size() || errno == ERANGE) {
-        return false;
-    }
-    if (!std::isfinite(parsed) || parsed <= 0.0 || parsed > 1.0) {
-        return false;
-    }
-    out = parsed;
-    return true;
-}
-
-bool parse_resolution(const std::string& value, int& out_width, int& out_height) {
-    if (value.empty()) {
-        return false;
-    }
-    const size_t sep = value.find('x');
-    if (sep == std::string::npos || sep == 0 || sep + 1 >= value.size()) {
-        return false;
-    }
-    if (value.find('x', sep + 1) != std::string::npos) {
-        return false;
-    }
-
-    const std::string width_str = value.substr(0, sep);
-    const std::string height_str = value.substr(sep + 1);
-    return !(!parse_positive_int(width_str, out_width) || !parse_positive_int(height_str, out_height));
-}
-
-bool parse_bool_value(const std::string& value, bool& out) {
-    std::string lower = to_lower_copy(value);
-    if (lower == "1" || lower == "true" || lower == "yes" || lower == "on") {
-        out = true;
-        return true;
-    }
-    if (lower == "0" || lower == "false" || lower == "no" || lower == "off") {
-        out = false;
-        return true;
-    }
-    return false;
-}
-
-// Parses a [profile <name>] section header.  On success, initialises `out`
-// with default values and the parsed name and returns true.
-bool parse_profile_section_header(const std::string& header_content,
-                                  std::unordered_set<std::string>& seen_names,
-                                  size_t line_number,
-                                  ProfileDefinition& out,
-                                  std::string& error) {
-    std::istringstream iss(header_content);
-    std::string section_type;
-    if (!(iss >> section_type)) {
-        error = "empty section header at line " + std::to_string(line_number);
-        return false;
-    }
-    section_type = to_lower_copy(section_type);
-    if (section_type != "profile") {
-        error = "unsupported section '" + section_type + "' at line " + std::to_string(line_number);
-        return false;
-    }
-
-    std::string remainder;
-    std::getline(iss, remainder);
-    remainder = trim_copy(remainder);
-    if (remainder.empty()) {
-        error = "missing profile name at line " + std::to_string(line_number);
-        return false;
-    }
-
-    std::string name;
-    if (remainder.front() == '"') {
-        size_t pos = 0;
-        std::string parse_error;
-        if (!sprat::core::parse_quoted(remainder, pos, name, parse_error)) {
-            error = "invalid quoted profile name at line " + std::to_string(line_number) + ": " + parse_error;
-            return false;
-        }
-        if (!trim_copy(remainder.substr(pos)).empty()) {
-            error = "unexpected token after quoted profile name at line " + std::to_string(line_number);
-            return false;
-        }
-    } else {
-        std::istringstream name_iss(remainder);
-        std::string extra;
-        if (!(name_iss >> name)) {
-            error = "missing profile name at line " + std::to_string(line_number);
-            return false;
-        }
-        if (name_iss >> extra) {
-            error = "unexpected token '" + extra + "' in profile name (use quotes for names with spaces) at line " +
-                    std::to_string(line_number);
-            return false;
-        }
-    }
-
-    if (seen_names.contains(name)) {
-        error = "duplicate profile '" + name + "' at line " + std::to_string(line_number);
-        return false;
-    }
-    seen_names.insert(name);
-    out = ProfileDefinition{};
-    out.name = name;
-    out.mode = Mode::COMPACT;
-    out.optimize_target = OptimizeTarget::GPU;
-    return true;
-}
-
-// Applies a single key=value entry to `def`.  Returns false and sets `error`
-// on any validation failure.
-bool apply_profile_entry(ProfileDefinition& def,
-                         const std::string& key,
-                         const std::string& value,
-                         size_t line_number,
-                         std::string& error) {
-    const std::string lower_key = to_lower_copy(key);
-    if (lower_key == "mode") {
-        Mode parsed_mode;
-        if (!parse_mode_from_string(value, parsed_mode, error)) {
-            error += " at line " + std::to_string(line_number);
-            return false;
-        }
-        def.mode = parsed_mode;
-    } else if (lower_key == "optimize") {
-        OptimizeTarget parsed_target;
-        if (!parse_optimize_target_from_string(value, parsed_target, error)) {
-            error += " at line " + std::to_string(line_number);
-            return false;
-        }
-        def.optimize_target = parsed_target;
-    } else if (lower_key == "max_width" || lower_key == "default_max_width") {
-        int parsed_width = 0;
-        if (!parse_positive_int(value, parsed_width)) {
-            error = "invalid max_width '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.max_width = parsed_width;
-    } else if (lower_key == "max_height" || lower_key == "default_max_height") {
-        int parsed_height = 0;
-        if (!parse_positive_int(value, parsed_height)) {
-            error = "invalid max_height '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.max_height = parsed_height;
-    } else if (lower_key == "padding") {
-        int parsed_padding = 0;
-        if (!parse_non_negative_int(value, parsed_padding)) {
-            error = "invalid padding '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.padding = parsed_padding;
-    } else if (lower_key == "extrude") {
-        int parsed_extrude = 0;
-        if (!parse_non_negative_int(value, parsed_extrude)) {
-            error = "invalid extrude '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.extrude = parsed_extrude;
-    } else if (lower_key == "scale") {
-        double parsed_scale = 0.0;
-        if (!parse_scale_factor(value, parsed_scale)) {
-            error = "invalid scale '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.scale = parsed_scale;
-    } else if (lower_key == "trim_transparent") {
-        bool parsed_trim = false;
-        if (!parse_bool_value(value, parsed_trim)) {
-            error = "invalid trim_transparent '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.trim_transparent = parsed_trim;
-    } else if (lower_key == "rotate") {
-        bool parsed_rotate = false;
-        if (!parse_bool_value(value, parsed_rotate)) {
-            error = "invalid rotate '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.rotate = parsed_rotate;
-    } else if (lower_key == "threads") {
-        unsigned int parsed_threads = 0;
-        if (!parse_positive_uint(value, parsed_threads)) {
-            error = "invalid threads '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.threads = parsed_threads;
-    } else if (lower_key == "multipack") {
-        bool parsed_multipack = false;
-        if (!parse_bool_value(value, parsed_multipack)) {
-            error = "invalid multipack '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.multipack = parsed_multipack;
-    } else if (lower_key == "incremental") {
-        bool parsed_incremental = false;
-        if (!parse_bool_value(value, parsed_incremental)) {
-            error = "invalid incremental '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.incremental = parsed_incremental;
-    } else if (lower_key == "source_resolution") {
-        int w = 0;
-        int h = 0;
-        if (!parse_resolution(value, w, h)) {
-            error = "invalid source_resolution '" + value + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        def.source_resolution = std::make_pair(w, h);
-    } else if (lower_key == "target_resolution") {
-        if (to_lower_copy(value) == "source") {
-            def.target_resolution = std::make_pair(-1, -1);
-        } else {
-            int w = 0;
-            int h = 0;
-            if (!parse_resolution(value, w, h)) {
-                error = "invalid target_resolution '" + value + "' at line " + std::to_string(line_number);
-                return false;
-            }
-            def.target_resolution = std::make_pair(w, h);
-        }
-    } else if (lower_key == "resolution_reference") {
-        ResolutionReference ref;
-        if (!parse_resolution_reference_from_string(value, ref, error)) {
-            error += " at line " + std::to_string(line_number);
-            return false;
-        }
-        def.resolution_reference = ref;
-    } else if (lower_key == "label") {
-        def.label = value;
-    } else {
-        error = "unknown key '" + key + "' at line " + std::to_string(line_number);
-        return false;
-    }
-    return true;
-}
-
-bool parse_profiles_config(std::istream& input,
-                           std::vector<ProfileDefinition>& out,
-                           std::string& error) {
-    out.clear();
-    std::unordered_set<std::string> seen_names;
-    std::optional<ProfileDefinition> current;
-    std::string line;
-    size_t line_number = 0;
-
-    while (std::getline(input, line)) {
-        ++line_number;
-        const std::string trimmed = trim_copy(line);
-        if (trimmed.empty() || trimmed.front() == '#' || trimmed.front() == ';') {
-            continue;
-        }
-
-        if (trimmed.front() == '[' && trimmed.back() == ']') {
-            if (current) {
-                out.push_back(*current);
-            }
-            current.reset();
-            ProfileDefinition def;
-            if (!parse_profile_section_header(trimmed.substr(1, trimmed.size() - 2),
-                                              seen_names, line_number, def, error)) {
-                return false;
-            }
-            current = def;
-            continue;
-        }
-
-        if (!current) {
-            error = "entry outside of profile section at line " + std::to_string(line_number);
-            return false;
-        }
-
-        const size_t equals = trimmed.find('=');
-        if (equals == std::string::npos) {
-            error = "invalid line '" + trimmed + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        const std::string key = trim_copy(trimmed.substr(0, equals));
-        const std::string value = trim_copy(trimmed.substr(equals + 1));
-        if (key.empty()) {
-            error = "empty key at line " + std::to_string(line_number);
-            return false;
-        }
-        if (value.empty()) {
-            error = "empty value for key '" + key + "' at line " + std::to_string(line_number);
-            return false;
-        }
-        if (!apply_profile_entry(*current, key, value, line_number, error)) {
-            return false;
-        }
-    }
-
-    if (current) {
-        out.push_back(*current);
-    }
-    if (out.empty()) {
-        error = "no profiles defined";
-        return false;
-    }
-    return true;
-}
-
-bool load_profiles_config_from_file(const fs::path& path,
-                                    std::vector<ProfileDefinition>& out,
-                                    std::string& error) {
-    std::ifstream input(path);
-    if (!input) {
-        error = "failed to open '" + path.string() + "'";
-        return false;
-    }
-    return parse_profiles_config(input, out, error);
-}
-
-std::optional<fs::path> resolve_user_profiles_config_path() {
-#ifdef _WIN32
-    // Windows: %APPDATA%\sprat\spratprofiles.cfg
-    static const char* const envs[] = {"APPDATA", "LOCALAPPDATA"};
-    for (const char* env : envs) {
-        const char* val = std::getenv(env);
-        if (val != nullptr && val[0] != '\0') {
-            const fs::path cfg = fs::path(val) / "sprat" / k_profiles_config_filename;
-            std::error_code ec;
-            if (fs::exists(cfg, ec) && !ec) {
-                return cfg;
-            }
-        }
-    }
-    return std::nullopt;
-#elif defined(__APPLE__)
-    // macOS: ~/Library/Application Support/sprat/spratprofiles.cfg
-    const char* home = std::getenv("HOME");
-    if (home == nullptr || home[0] == '\0') {
-        return std::nullopt;
-    }
-    const fs::path mac_cfg = fs::path(home) / "Library" / "Application Support" / "sprat" / k_profiles_config_filename;
-    std::error_code ec_mac;
-    if (fs::exists(mac_cfg, ec_mac) && !ec_mac) {
-        return mac_cfg;
-    }
-    return std::nullopt;
-#else
-    // Linux/other: $XDG_CONFIG_HOME/sprat/spratprofiles.cfg (default ~/.config/sprat/)
-    const char* home = std::getenv("HOME");
-    if (home == nullptr || home[0] == '\0') {
-        return std::nullopt;
-    }
-    const char* xdg_config_home = std::getenv("XDG_CONFIG_HOME");
-    const fs::path cfg = (xdg_config_home != nullptr && xdg_config_home[0] != '\0')
-        ? fs::path(xdg_config_home) / "sprat" / k_profiles_config_filename
-        : fs::path(home) / ".config" / "sprat" / k_profiles_config_filename;
-    std::error_code ec;
-    if (fs::exists(cfg, ec) && !ec) {
-        return cfg;
-    }
-    return std::nullopt;
-#endif
-}
-
-std::vector<fs::path> build_default_profiles_config_candidates(const fs::path& exec_dir) {
-    std::vector<fs::path> candidates;
-    // Lookup order:
-    // 1) {exec_dir}/spratprofiles.cfg (beside executable, portable install)
-    // 2) user config:
-    //      Windows:  %APPDATA%\sprat\spratprofiles.cfg
-    //      macOS:    ~/Library/Application Support/sprat/spratprofiles.cfg
-    //      Linux:    $XDG_CONFIG_HOME/sprat/spratprofiles.cfg (default ~/.config/sprat/)
-    // 3) global installed config
-    if (!exec_dir.empty()) {
-        candidates.push_back(exec_dir / k_profiles_config_filename);
-    }
-    if (std::optional<fs::path> user_config = resolve_user_profiles_config_path()) {
-        candidates.push_back(*user_config);
-    }
-    candidates.emplace_back(k_global_profiles_config_path);
-    return candidates;
-}
-
-struct Sprite {
-    std::string path;
-    int w{}, h{};
-    int x = 0, y = 0;
-    int trim_left = 0, trim_top = 0;
-    int trim_right = 0, trim_bottom = 0;
-    bool rotated = false;
-    int atlas_index = 0;
-    bool has_slice = false;
-    int slice_left = 0, slice_top = 0, slice_right = 0, slice_bottom = 0;
-};
-
-struct Atlas {
-    int width = 0;
-    int height = 0;
-};
-
-struct ImageMeta {
-    uintmax_t file_size = 0;
-    long long mtime_ticks = 0;
-};
-
-struct ImageSource {
-    fs::path file_path;
-    std::string path;
-    ImageMeta meta;
-};
-
-struct ImageCacheEntry {
-    bool trim_transparent = false;
-    uintmax_t file_size = 0;
-    long long mtime_ticks = 0;
-    int w = 0;
-    int h = 0;
-    int trim_left = 0;
-    int trim_top = 0;
-    int trim_right = 0;
-    int trim_bottom = 0;
-    long long cached_at_unix = 0;
-    uint64_t content_hash = 0;     // FNV-1a hash of visible pixel region (0 = not computed)
-    uint64_t perceptual_hash = 0;  // dHash of visible pixel region   (0 = not computed)
-    bool has_slice = false;
-    int slice_left = 0, slice_top = 0, slice_right = 0, slice_bottom = 0;
-};
-
-struct LayoutCandidate {
-    bool valid = false;
-    size_t area = 0;
-    int w = 0;
-    int h = 0;
-    std::vector<Sprite> sprites;
-};
-
-struct LayoutSeedEntry {
-    std::string path;
-    int x = 0;
-    int y = 0;
-    int w = 0;
-    int h = 0;
-    int trim_left = 0;
-    int trim_top = 0;
-    int trim_right = 0;
-    int trim_bottom = 0;
-    bool rotated = false;
-};
-
-struct LayoutSeedCache {
-    std::string signature;
-    int padding = 0;
-    int atlas_width = 0;
-    int atlas_height = 0;
-    std::vector<LayoutSeedEntry> entries;
-};
-
-struct Node {
-    int x, y, w, h;
-    bool used = false;
-    std::unique_ptr<Node> right;
-    std::unique_ptr<Node> down;
-
-    Node(int x_, int y_, int w_, int h_) : x(x_), y(y_), w(w_), h(h_) {}
-};
-
-bool checked_add_int(int a, int b, int& out) {
-    if (b > 0 && a > std::numeric_limits<int>::max() - b) {
-        return false;
-    }
-    if (b < 0 && a < std::numeric_limits<int>::min() - b) {
-        return false;
-    }
-    out = a + b;
-    return true;
-}
-
-bool checked_mul_size_t(size_t a, size_t b, size_t& out) {
-    if (a == 0 || b <= std::numeric_limits<size_t>::max() / a) {
-        out = a * b;
-        return true;
-    }
-    return false;
-}
-
-bool compute_trim_bounds(const unsigned char* rgba,
-                         int w,
-                         int h,
-                         int& min_x,
-                         int& min_y,
-                         int& max_x,
-                         int& max_y) {
-    min_x = 0;
-    min_y = 0;
-    max_x = -1;
-    max_y = -1;
-    if (w <= 0 || h <= 0 || rgba == nullptr) {
-        return false;
-    }
-
-    // Validate that the image dimensions are reasonable
-    if (w > k_max_image_dimension || h > k_max_image_dimension) {
-        return false;
-    }
-
-    // Use direct pointer arithmetic for alpha channel access.
-    // Bounds are already validated above (w > 0, h > 0, w/h <= k_max_image_dimension).
-    const size_t stride = static_cast<size_t>(w) * 4;
-
-    int top_hit_x = -1;
-    for (int y = 0; y < h; ++y) {
-        const unsigned char* row_alpha = rgba + static_cast<size_t>(y) * stride + 3;
-        for (int x = 0; x < w; ++x) {
-            if (row_alpha[static_cast<size_t>(x) * 4] != 0) {
-                min_y = y;
-                top_hit_x = x;
-                break;
-            }
-        }
-        if (top_hit_x >= 0) {
-            break;
-        }
-    }
-    if (top_hit_x < 0) {
-        return false;
-    }
-
-    int bottom_hit_x = -1;
-    for (int y = h - 1; y >= min_y; --y) {
-        const unsigned char* row_alpha = rgba + static_cast<size_t>(y) * stride + 3;
-        for (int x = w - 1; x >= 0; --x) {
-            if (row_alpha[static_cast<size_t>(x) * 4] != 0) {
-                max_y = y;
-                bottom_hit_x = x;
-                break;
-            }
-        }
-        if (bottom_hit_x >= 0) {
-            break;
-        }
-    }
-
-    const int left_search_end = std::min(top_hit_x, bottom_hit_x);
-    min_x = left_search_end;
-    for (int x = 0; x <= left_search_end; ++x) {
-        bool found = false;
-        const unsigned char* col_alpha = rgba + static_cast<size_t>(x) * 4 + 3;
-        for (int y = min_y; y <= max_y; ++y) {
-            if (col_alpha[static_cast<size_t>(y) * stride] != 0) {
-                min_x = x;
-                found = true;
-                break;
-            }
-        }
-        if (found) {
-            break;
-        }
-    }
-
-    const int right_search_start = std::max(top_hit_x, bottom_hit_x);
-    max_x = right_search_start;
-    for (int x = w - 1; x >= right_search_start; --x) {
-        bool found = false;
-        const unsigned char* col_alpha = rgba + static_cast<size_t>(x) * 4 + 3;
-        for (int y = min_y; y <= max_y; ++y) {
-            if (col_alpha[static_cast<size_t>(y) * stride] != 0) {
-                max_x = x;
-                found = true;
-                break;
-            }
-        }
-        if (found) {
-            break;
-        }
-    }
-
-    return max_x >= min_x && max_y >= min_y;
-}
-
-bool read_image_meta(const fs::path& path, ImageMeta& out) {
-    std::error_code ec;
-    uintmax_t size = fs::file_size(path, ec);
-    if (ec) {
-        return false;
-    }
-    if (size > k_max_file_size) { // 1GB limit
-        return false;
-    }
-    fs::file_time_type mtime = fs::last_write_time(path, ec);
-    if (ec) {
-        return false;
-    }
-    out.file_size = size;
-    out.mtime_ticks = mtime.time_since_epoch().count();
-    return true;
-}
-
-long long now_unix_seconds() {
-    return std::chrono::duration_cast<std::chrono::seconds>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
-}
-
-bool is_supported_image_extension(const fs::path& path) {
-    std::string ext = path.extension().string();
-    if (ext.empty() || ext.size() > k_max_extension_len) {
-        return false;
-    }
-    std::ranges::transform(ext, ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp"
-           || ext == ".tga" || ext == ".gif" || ext == ".psd" || ext == ".pic"
-           || ext == ".pnm" || ext == ".pgm" || ext == ".ppm" || ext == ".hdr"
-           || ext == ".webp";
-}
-
-enum class ContentType : std::uint8_t {
-    Directory,
-    ListFile,
-    TarFile,
-    CompressedTarFile,
-    ArchiveFile,
-    Unknown
-};
-
-ContentType detect_content_type_from_path(const fs::path& path) {
-    const bool is_dir = fs::exists(path) && fs::is_directory(path);
-    const bool is_file = fs::exists(path) && fs::is_regular_file(path);
-    
-    if (is_dir) {
-        return ContentType::Directory;
-    }
-    if (!is_file) {
-        return ContentType::Unknown;
-    }
-    
-    // For files, check extension first for quick detection
-    std::string ext = path.extension().string();
-    std::ranges::transform(ext, ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    
-    if (ext == ".tar") {
-        return ContentType::TarFile;
-    }
-    
-    if (ext == ".zip" || ext == ".7z" || ext == ".rar") {
-        return ContentType::ArchiveFile;
-    }
-    
-    std::string filename = path.filename().string();
-    std::ranges::transform(filename, filename.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    
-    // Check for compressed tar extensions
-    if (filename.find(".tar.gz") != std::string::npos
-        || filename.find(".tar.bz2") != std::string::npos
-        || filename.find(".tar.xz") != std::string::npos
-        || filename.find(".tgz") != std::string::npos
-        || filename.find(".tbz2") != std::string::npos
-        || filename.find(".txz") != std::string::npos) {
-        return ContentType::CompressedTarFile;
-    }
-    
-    // For other files, assume list file
-    return ContentType::ListFile;
-}
-
-bool is_tar_file(const fs::path& path) {
-    ContentType type = detect_content_type_from_path(path);
-    return type == ContentType::TarFile || type == ContentType::ArchiveFile;
-}
-
-bool is_compressed_tar_file(const fs::path& path) {
-    return detect_content_type_from_path(path) == ContentType::CompressedTarFile;
-}
-
-// Returns an empty path if entry_name would escape output_dir (Zip Slip guard).
-fs::path safe_extract_path(const fs::path& output_dir, const char* entry_name) {
-    if (entry_name == nullptr) {
-        return {};
-    }
-    fs::path entry(entry_name);
-    if (entry.is_absolute()) {
-        return {};
-    }
-    fs::path candidate = (output_dir / entry).lexically_normal();
-    fs::path rel = candidate.lexically_relative(output_dir.lexically_normal());
-    if (rel.empty() || rel.begin()->string() == "..") {
-        return {};
-    }
-    return candidate;
-}
-
-bool extract_tar_file(const fs::path& tar_path, const fs::path& output_dir) {
-    struct archive* a = archive_read_new();
-    if (a == nullptr) {
-        std::cerr << tr("Error: Failed to create archive reader") << '\n';
-        return false;
-    }
-
-    // Enable all supported formats and compression
-    archive_read_support_format_all(a);
-    archive_read_support_filter_all(a);
-
-    if (archive_read_open_filename(a, tar_path.string().c_str(), k_tar_read_buffer_size) != ARCHIVE_OK) {
-        std::cerr << tr("Error: Failed to open archive file: ") << archive_error_string(a) << '\n';
-        archive_read_free(a);
-        return false;
-    }
-
-    struct archive* ext = archive_write_disk_new();
-    if (ext == nullptr) {
-        std::cerr << tr("Error: Failed to create archive writer") << '\n';
-        archive_read_free(a);
-        return false;
-    }
-
-    archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
-
-    bool had_error = false;
-    struct archive_entry* entry = nullptr;
-
-    while (true) {
-        la_ssize_t r = archive_read_next_header(a, &entry);
-        if (r == ARCHIVE_EOF) {
-            break;
-        }
-        if (r < ARCHIVE_OK) {
-            std::cerr << tr("Error: Failed to read archive header: ") << archive_error_string(a) << '\n';
-            had_error = true;
-            break;
-        }
-
-        // Skip directories
-        if (archive_entry_filetype(entry) == AE_IFDIR) {
-            continue;
-        }
-
-        // Validate and resolve extraction path (guards against Zip Slip)
-        fs::path output_path = safe_extract_path(output_dir, archive_entry_pathname(entry));
-        if (output_path.empty()) {
-            std::cerr << tr("Warning: Skipping archive entry with unsafe path: ")
-                      << (archive_entry_pathname(entry) ? archive_entry_pathname(entry) : "(null)") << '\n';
-            continue;
-        }
-
-        // Create parent directory if needed
-        std::error_code ec;
-        fs::create_directories(output_path.parent_path(), ec);
-
-        // Set the extraction path
-        archive_entry_set_pathname(entry, output_path.string().c_str());
-
-        // Extract the file
-        r = archive_write_header(ext, entry);
-        if (r < ARCHIVE_OK) {
-            std::cerr << tr("Error: Failed to write archive header: ") << archive_error_string(ext) << '\n';
-            had_error = true;
-        } else {
-            const void* buff = nullptr;
-            size_t size = 0;
-            la_int64_t offset = 0;
-            bool block_error = false;
-
-            while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
-                if (archive_write_data_block(ext, buff, size, offset) < ARCHIVE_OK) {
-                    std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(ext) << '\n';
-                    had_error = true;
-                    block_error = true;
-                    break;
-                }
-            }
-
-            if (!block_error && archive_write_finish_entry(ext) < ARCHIVE_OK) {
-                std::cerr << tr("Error: Failed to finish archive entry: ") << archive_error_string(ext) << '\n';
-                had_error = true;
-            }
-        }
-    }
-
-    archive_read_close(a);
-    archive_read_free(a);
-    archive_write_close(ext);
-    archive_write_free(ext);
-
-    return !had_error;
-}
-
-bool extract_tar_from_stdin(const fs::path& output_dir) {
-    struct archive* a = archive_read_new();
-    if (a == nullptr) {
-        std::cerr << tr("Error: Failed to create archive reader") << '\n';
-        return false;
-    }
-    
-    // Enable all supported formats and compression
-    archive_read_support_format_all(a);
-    archive_read_support_filter_all(a);
-    
-    // Use a read callback so that input flows through std::cin.  In embedded
-    // mode std::cin is redirected to a stringstream; reading from the OS-level
-    // stdin fd would bypass that redirection and receive no data.
-    auto tar_read_cb = [](struct archive* a, void* /*client_data*/,
-                          const void** buffer) -> la_ssize_t {
-        static thread_local std::vector<char> buf(k_tar_read_buffer_size);
-        std::cin.read(buf.data(), static_cast<std::streamsize>(buf.size()));
-        if (std::cin.bad() || (std::cin.fail() && !std::cin.eof())) {
-            archive_set_error(a, EIO, "std::cin read error");
-            return -1;
-        }
-        auto n = std::cin.gcount();
-        *buffer = buf.data();
-        return static_cast<la_ssize_t>(n);
-    };
-    if (archive_read_open(a, nullptr, nullptr, tar_read_cb, nullptr) != ARCHIVE_OK) {
-        std::cerr << tr("Error: Failed to open stdin for archive extraction: ") << archive_error_string(a) << '\n';
-        archive_read_free(a);
-        return false;
-    }
-    
-    struct archive* ext = archive_write_disk_new();
-    if (ext == nullptr) {
-        std::cerr << tr("Error: Failed to create archive writer") << '\n';
-        archive_read_free(a);
-        return false;
-    }
-    
-    archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
-
-    bool had_error = false;
-    struct archive_entry* entry = nullptr;
-
-    while (true) {
-        la_ssize_t r = archive_read_next_header(a, &entry);
-        if (r == ARCHIVE_EOF) {
-            break;
-        }
-        if (r < ARCHIVE_OK) {
-            std::cerr << tr("Error: Failed to read archive header: ") << archive_error_string(a) << '\n';
-            had_error = true;
-            break;
-        }
-
-        // Skip directories
-        if (archive_entry_filetype(entry) == AE_IFDIR) {
-            continue;
-        }
-
-        // Validate and resolve extraction path (guards against Zip Slip)
-        fs::path output_path = safe_extract_path(output_dir, archive_entry_pathname(entry));
-        if (output_path.empty()) {
-            std::cerr << tr("Warning: Skipping archive entry with unsafe path: ")
-                      << (archive_entry_pathname(entry) ? archive_entry_pathname(entry) : "(null)") << '\n';
-            continue;
-        }
-
-        // Create parent directory if needed
-        std::error_code ec;
-        fs::create_directories(output_path.parent_path(), ec);
-
-        // Set the extraction path
-        archive_entry_set_pathname(entry, output_path.string().c_str());
-
-        // Extract the file
-        r = archive_write_header(ext, entry);
-        if (r < ARCHIVE_OK) {
-            std::cerr << tr("Error: Failed to write archive header: ") << archive_error_string(ext) << '\n';
-            had_error = true;
-        } else {
-            const void* buff = nullptr;
-            size_t size = 0;
-            la_int64_t offset = 0;
-            bool block_error = false;
-
-            while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
-                if (archive_write_data_block(ext, buff, size, offset) < ARCHIVE_OK) {
-                    std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(ext) << '\n';
-                    had_error = true;
-                    block_error = true;
-                    break;
-                }
-            }
-
-            if (!block_error && archive_write_finish_entry(ext) < ARCHIVE_OK) {
-                std::cerr << tr("Error: Failed to finish archive entry: ") << archive_error_string(ext) << '\n';
-                had_error = true;
-            }
-        }
-    }
-
-    archive_read_close(a);
-    archive_read_free(a);
-    archive_write_close(ext);
-    archive_write_free(ext);
-
-    return !had_error;
-}
-
-enum class InputType : std::uint8_t {
-    Directory,
-    ListFile,
-    TarFile,
-    StdinTar,
-    StdinList
-};
-
-struct InputContext {
-    InputType type;
-    fs::path working_folder;
-    std::vector<fs::path> temp_dirs_to_cleanup;
-};
-
-bool detect_and_extract_tar_content(const fs::path& input_path, InputContext& out_context) {
-    const bool is_dir = fs::exists(input_path) && fs::is_directory(input_path);
-    const bool is_file = fs::exists(input_path) && fs::is_regular_file(input_path);
-    const bool is_tar = is_file && is_tar_file(input_path);
-    const bool is_compressed_tar = is_file && is_compressed_tar_file(input_path);
-    
-    out_context.temp_dirs_to_cleanup.clear();
-    
-    if (is_tar || is_compressed_tar) {
-        // Use a unique directory per invocation to avoid races between concurrent processes.
-        static std::atomic<unsigned int> extract_counter{0};
-        fs::path temp_dir = fs::temp_directory_path()
-            / ("spratlayout_extract_" + std::to_string(extract_counter.fetch_add(1)));
-        std::error_code ec;
-        fs::create_directories(temp_dir, ec);
-        if (ec) {
-            std::cerr << tr("Error: Failed to create temporary directory for archive extraction\n");
-            return false;
-        }
-        
-        out_context.temp_dirs_to_cleanup.push_back(temp_dir);
-        
-        // Extract the archive file
-        if (!extract_tar_file(input_path, temp_dir)) {
-            std::cerr << tr("Error: Failed to extract archive file: ") << to_quoted(input_path) << "\n";
-            // Cleanup on error
-            for (const auto& dir : out_context.temp_dirs_to_cleanup) {
-                fs::remove_all(dir, ec);
-            }
-            return false;
-        }
-        
-        out_context.type = InputType::TarFile;
-        out_context.working_folder = temp_dir;
-        return true;
-    } if (is_dir) {
-        out_context.type = InputType::Directory;
-        out_context.working_folder = input_path;
-        return true;
-    } else if (is_file) {
-        out_context.type = InputType::ListFile;
-        out_context.working_folder = input_path;
-        return true;
-    }
-
-    std::cerr << tr("Error: Input path does not exist or is not a file/directory: ")
-              << to_quoted(input_path) << "\n";
-    return false;
-}
-
-bool load_content_from_stdin(InputContext& out_context) {
-    // Use a unique directory per invocation to avoid races between concurrent processes.
-    static std::atomic<unsigned int> stdin_counter{0};
-    fs::path temp_dir = fs::temp_directory_path()
-        / ("spratlayout_extract_stdin_" + std::to_string(stdin_counter.fetch_add(1)));
-    std::error_code ec;
-    fs::create_directories(temp_dir, ec);
-    if (ec) {
-        std::cerr << tr("Error: Failed to create temporary directory for stdin tar extraction\n");
-        return false;
-    }
-    
-    out_context.temp_dirs_to_cleanup.push_back(temp_dir);
-    
-    // Extract from stdin
-    if (!extract_tar_from_stdin(temp_dir)) {
-        std::cerr << tr("Error: Failed to extract archive from stdin\n");
-        // Cleanup on error
-        for (const auto& dir : out_context.temp_dirs_to_cleanup) {
-            fs::remove_all(dir, ec);
-        }
-        return false;
-    }
-    
-    out_context.type = InputType::StdinTar;
-    out_context.working_folder = temp_dir;
-    
-    return true;
-}
-
-bool load_list_from_stdin(InputContext& out_context, const fs::path& cwd) {
-    out_context.type = InputType::StdinList;
-    out_context.working_folder = cwd;
-    out_context.temp_dirs_to_cleanup.clear();
-    return true;
-}
-
-void prune_stale_cache_entries(std::unordered_map<std::string, ImageCacheEntry>& entries,
-                               long long now_unix,
-                               long long max_age_seconds) {
-    if (max_age_seconds < 0 || max_age_seconds > k_max_cache_age_seconds_limit) { // 1 year limit
-        max_age_seconds = k_default_cache_age_seconds; // default to 1 day
-    }
-    for (auto it = entries.begin(); it != entries.end();) {
-        const long long cached_at = it->second.cached_at_unix;
-        if (cached_at <= 0 || cached_at > now_unix || (now_unix - cached_at) > max_age_seconds) {
-            it = entries.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-bool load_image_cache(const fs::path& cache_path,
-                      std::unordered_map<std::string, ImageCacheEntry>& out) {
-    out.clear();
-    std::ifstream in(cache_path);
-    if (!in) {
-        return false;
-    }
-
-    std::string header_tag;
-    int version = 0;
-    if (!(in >> header_tag >> version)) {
-        return false;
-    }
-    if (header_tag != "spratlayout_cache" || (version != 1 && version != 2 && version != 3 && version != 4)) {
-        return false;
-    }
-
-    std::string path;
-    int trim_flag = 0;
-    ImageCacheEntry entry;
-    while (true) {
-        entry = ImageCacheEntry{};
-        if (!(in >> std::quoted(path)
-                 >> trim_flag
-                 >> entry.file_size
-                 >> entry.mtime_ticks
-                 >> entry.w
-                 >> entry.h
-                 >> entry.trim_left
-                 >> entry.trim_top
-                 >> entry.trim_right
-                 >> entry.trim_bottom)) {
-            break;
-        }
-        if (version >= 2) {
-            if (!(in >> entry.cached_at_unix)) {
-                break;
-            }
-        }
-        if (version >= 3) {
-            if (!(in >> entry.content_hash >> entry.perceptual_hash)) {
-                break;
-            }
-        }
-        if (version >= 4) {
-            int slice_flag = 0;
-            if (!(in >> slice_flag >> entry.slice_left >> entry.slice_top >> entry.slice_right >> entry.slice_bottom)) {
-                break;
-            }
-            entry.has_slice = slice_flag != 0;
-        }
-        if (entry.w <= 0 || entry.h <= 0 || entry.w > k_max_image_dimension || entry.h > k_max_image_dimension) {
-            continue;
-        }
-        entry.trim_transparent = trim_flag != 0;
-        const std::string key = path + (entry.trim_transparent ? "|1" : "|0");
-        out[key] = entry;
-        if (out.size() >= k_max_cache_entries) {
-            break;
-        }
-    }
-
-    return true;
-}
-
-bool save_image_cache(const fs::path& cache_path,
-                      const std::unordered_map<std::string, ImageCacheEntry>& entries) {
-    fs::path tmp = cache_path;
-    tmp += ".tmp";
-
-    std::ofstream out(tmp, std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-
-    // Collect valid entries; if over the limit, keep only the most recently used.
-    using KV = std::pair<const std::string*, const ImageCacheEntry*>;
-    std::vector<KV> valid;
-    valid.reserve(entries.size());
-    for (const auto& kv : entries) {
-        const ImageCacheEntry& e = kv.second;
-        if (e.w > 0 && e.h > 0 && e.w <= k_max_image_dimension && e.h <= k_max_image_dimension) {
-            valid.push_back({&kv.first, &e});
-        }
-    }
-    if (valid.size() > k_max_cache_entries) {
-        std::ranges::sort(valid, [](const KV& a, const KV& b) {
-            return a.second->cached_at_unix > b.second->cached_at_unix; // newest first
-        });
-        valid.resize(k_max_cache_entries);
-    }
-
-    out << "spratlayout_cache 4\n";
-    for (const auto& [key_ptr, e_ptr] : valid) {
-        std::string path = *key_ptr;
-        if (path.size() > 2 &&
-            path[path.size() - 2] == '|' &&
-            (path.back() == '0' || path.back() == '1')) {
-            path = path.substr(0, path.size() - 2);
-        }
-        const ImageCacheEntry& e = *e_ptr;
-        out << std::quoted(path) << " "
-            << (e.trim_transparent ? 1 : 0) << " "
-            << e.file_size << " "
-            << e.mtime_ticks << " "
-            << e.w << " "
-            << e.h << " "
-            << e.trim_left << " "
-            << e.trim_top << " "
-            << e.trim_right << " "
-            << e.trim_bottom << " "
-            << e.cached_at_unix << " "
-            << e.content_hash << " "
-            << e.perceptual_hash << " "
-            << (e.has_slice ? 1 : 0) << " "
-            << e.slice_left << " "
-            << e.slice_top << " "
-            << e.slice_right << " "
-            << e.slice_bottom << "\n";
-    }
-    out.close();
-    if (!out) {
-        return false;
-    }
-
-    std::error_code ec;
-    fs::rename(tmp, cache_path, ec);
-    if (ec) {
-        fs::remove(cache_path, ec);
-        ec.clear();
-        fs::rename(tmp, cache_path, ec);
-        if (ec) {
-            fs::remove(tmp, ec);
-            return false;
-        }
-    }
-    return true;
-}
-
-fs::path default_temp_dir() {
-    std::error_code ec;
-    fs::path path = fs::temp_directory_path(ec);
-    if (!ec && !path.empty()) {
-        return path;
-    }
-
-    const char* tmp = std::getenv("TMP");
-    if (tmp != nullptr && *tmp != '\0') {
-        return fs::path(tmp);
-    }
-    const char* temp = std::getenv("TEMP");
-    if (temp != nullptr && *temp != '\0') {
-        return fs::path(temp);
-    }
-    const char* tmpdir = std::getenv("TMPDIR");
-    if (tmpdir != nullptr && *tmpdir != '\0') {
-        return fs::path(tmpdir);
-    }
-
-#ifdef _WIN32
-    return fs::path(".");
-#else
-    return fs::path("/tmp");
-#endif
-}
-
-fs::path cache_root_dir() {
-    fs::path root = default_temp_dir() / "sprat";
-    std::error_code ec;
-    fs::create_directories(root, ec);
-    if (!ec) {
-        return root;
-    }
-    return default_temp_dir();
-}
-
-fs::path build_cache_path(const fs::path& folder) {
-    std::error_code ec;
-    fs::path normalized = fs::absolute(folder, ec);
-    std::string folder_key = (!ec ? normalized.lexically_normal().string() : folder.string());
-    uint64_t hash = sprat::core::fnv1a_hash(
-        reinterpret_cast<const unsigned char*>(folder_key.data()), folder_key.size());
-
-    std::array<char, 40> buf{};
-    std::snprintf(buf.data(), buf.size(), "spratlayout_%016llx.cache",
-                  static_cast<unsigned long long>(hash));
-    return cache_root_dir() / buf.data();
-}
-
-fs::path build_output_cache_path(const fs::path& base_cache_path,
-                                 const std::string& layout_signature) {
-    return base_cache_path.string() + ".layout." + layout_signature;
-}
-
-fs::path build_seed_cache_path(const fs::path& base_cache_path,
-                               const std::string& seed_signature) {
-    return base_cache_path.string() + ".seed." + seed_signature;
-}
-
-fs::path build_incremental_seed_cache_path(const fs::path& base_cache_path,
-                                           const std::string& signature) {
-    return base_cache_path.string() + ".iseed." + signature;
-}
-
-std::string to_hex_size_t(size_t value) {
-    std::array<char, 20> buf{};
-    int n = std::snprintf(buf.data(), buf.size(), "%zx", value);
-    return std::string(buf.data(), n > 0 ? static_cast<size_t>(n) : 0);
-}
-
 
 void print_usage() {
     std::cout << tr("Usage: spratlayout <folder> [OPTIONS]\n")
@@ -1552,13 +114,18 @@ void print_usage() {
               << tr("  --scale F                  Pre-scale factor (0 < F <= 1)\n")
               << tr("  --trim-transparent         Enable transparent-border trimming\n")
               << tr("  --rotate                   Allow 90-degree sprite rotation during packing\n")
+              << tr("  --rotate-direction DIR     Rotation direction of rotated sprites: cw (default) or ccw\n")
+              << tr("                             (libGDX needs ccw; TexturePacker-style formats need cw)\n")
               << tr("  --multipack                Split into multiple atlases if they don't fit\n")
-              << tr("  --incremental              Reuse positions for unchanged sprites (layout stability)\n")
+              << tr("  --incremental              Reuse positions for unchanged sprites (layout stability;\n")
+              << tr("                             single atlas only, ignored in grid mode)\n")
               << tr("  --deduplicate <mode>       Deduplication mode: none, exact, perceptual\n")
               << tr("  --dedup-threshold N        Max Hamming distance for perceptual dedup (0-64, default: 5)\n")
+              << tr("  --dedup-tolerance N        Max per-channel pixel difference for perceptual dedup (0-255, default: 8)\n")
               << tr("  --sort name|none|stable[:<metric>]  Order of sprites in layout (default: none)\n")
               << tr("                             stable: deterministic sort by size then path; <metric> is\n")
-              << tr("                             area (default), maxside, height, width, or perimeter\n")
+              << tr("                             area (default), maxside, height, width, or perimeter;\n")
+              << tr("                             folders are always read in natural filename order\n")
               << tr("  --threads N                Number of worker threads\n")
               << tr("  --debug                    Enable detailed error reporting and debug visualization\n")
               << tr("  --stdin-list               Read image paths from stdin (one per line) instead of <folder>\n")
@@ -1567,2076 +134,6 @@ void print_usage() {
               << tr("  --version, -v              Show version\n");
 }
 
-bool is_file_older_than_seconds(const fs::path& path, long long max_age_seconds) {
-    if (max_age_seconds < 0 || max_age_seconds > k_max_cache_age_seconds_limit) { // 1 year limit
-        return true;
-    }
-    std::error_code ec;
-    if (!fs::exists(path, ec) || ec) {
-        return true;
-    }
-    fs::file_time_type file_time = fs::last_write_time(path, ec);
-    if (ec) {
-        return true;
-    }
-    fs::file_time_type now = fs::file_time_type::clock::now();
-    if (file_time > now) {
-        return true; // future mtime (clock skew); treat as stale
-    }
-    long long age = std::chrono::duration_cast<std::chrono::seconds>(now - file_time).count();
-    return age > max_age_seconds;
-}
-
-// Builds a sorted-or-ordered list of "path|file_size|mtime" strings for all sources.
-std::vector<std::string> build_source_sig_parts(bool preserve_source_order,
-                                                       const std::vector<ImageSource>& sources) {
-    std::vector<std::string> parts;
-    parts.reserve(sources.size());
-    for (const auto& source : sources) {
-        std::string line;
-        line += source.path;
-        line += '|';
-        line += std::to_string(source.meta.file_size);
-        line += '|';
-        line += std::to_string(source.meta.mtime_ticks);
-        parts.push_back(std::move(line));
-    }
-    if (!preserve_source_order) {
-        std::ranges::sort(parts);
-    }
-    return parts;
-}
-
-std::string build_layout_signature(const std::string& profile_name,
-                                   Mode mode,
-                                   OptimizeTarget optimize_target,
-                                   int max_width_limit,
-                                   int max_height_limit,
-                                   int padding,
-                                   int extrude,
-                                   double scale,
-                                   bool trim_transparent,
-                                   bool allow_rotate,
-                                   bool preserve_source_order,
-                                   const std::string& deduplicateMode,
-                                   int dedup_threshold,
-                                   const std::vector<ImageSource>& sources) {
-    const std::vector<std::string> parts = build_source_sig_parts(preserve_source_order, sources);
-
-    std::array<char, 32> scale_buf{};
-    std::snprintf(scale_buf.data(), scale_buf.size(), "%.*g", k_floating_point_precision, scale);
-
-    std::string sig;
-    sig += profile_name;
-    sig += '|';
-    sig += std::to_string(static_cast<int>(mode));
-    sig += '|';
-    sig += std::to_string(static_cast<int>(optimize_target));
-    sig += '|';
-    sig += std::to_string(max_width_limit);
-    sig += '|';
-    sig += std::to_string(max_height_limit);
-    sig += '|';
-    sig += std::to_string(padding);
-    sig += '|';
-    sig += std::to_string(extrude);
-    sig += '|';
-    sig += scale_buf.data();
-    sig += '|';
-    sig += (trim_transparent ? '1' : '0');
-    sig += '|';
-    sig += (allow_rotate ? '1' : '0');
-    sig += '|';
-    sig += (preserve_source_order ? '1' : '0');
-    sig += '|';
-    sig += deduplicateMode;
-    sig += '|';
-    sig += std::to_string(dedup_threshold);
-    for (const std::string& part : parts) {
-        sig += '\n';
-        sig += part;
-    }
-    return to_hex_size_t(std::hash<std::string>{}(sig));
-}
-
-std::string build_layout_seed_signature(const std::string& profile_name,
-                                        Mode mode,
-                                        OptimizeTarget optimize_target,
-                                        int max_width_limit,
-                                        int max_height_limit,
-                                        int extrude,
-                                        double scale,
-                                        bool trim_transparent,
-                                        bool allow_rotate,
-                                        bool preserve_source_order,
-                                        const std::vector<ImageSource>& sources) {
-    const std::vector<std::string> parts = build_source_sig_parts(preserve_source_order, sources);
-
-    std::array<char, 32> scale_buf{};
-    std::snprintf(scale_buf.data(), scale_buf.size(), "%.*g", k_floating_point_precision, scale);
-
-    std::string sig;
-    sig += profile_name;
-    sig += '|';
-    sig += std::to_string(static_cast<int>(mode));
-    sig += '|';
-    sig += std::to_string(static_cast<int>(optimize_target));
-    sig += '|';
-    sig += std::to_string(max_width_limit);
-    sig += '|';
-    sig += std::to_string(max_height_limit);
-    sig += '|';
-    sig += std::to_string(extrude);
-    sig += '|';
-    sig += scale_buf.data();
-    sig += '|';
-    sig += (trim_transparent ? '1' : '0');
-    sig += '|';
-    sig += (allow_rotate ? '1' : '0');
-    sig += '|';
-    sig += (preserve_source_order ? '1' : '0');
-    for (const std::string& part : parts) {
-        sig += '\n';
-        sig += part;
-    }
-    return to_hex_size_t(std::hash<std::string>{}(sig));
-}
-
-std::string build_incremental_seed_signature(
-    const std::string& profile_name,
-    Mode mode, OptimizeTarget optimize_target,
-    int max_width_limit, int max_height_limit,
-    int extrude, double scale,
-    bool trim_transparent, bool allow_rotate,
-    const fs::path& working_dir) {
-
-    std::array<char, 32> scale_buf{};
-    std::snprintf(scale_buf.data(), scale_buf.size(), "%.*g", k_floating_point_precision, scale);
-
-    std::string normalized_dir = working_dir.string();
-
-    std::string sig;
-    sig += "iseed|";
-    sig += profile_name;
-    sig += '|';
-    sig += std::to_string(static_cast<int>(mode));
-    sig += '|';
-    sig += std::to_string(static_cast<int>(optimize_target));
-    sig += '|';
-    sig += std::to_string(max_width_limit);
-    sig += '|';
-    sig += std::to_string(max_height_limit);
-    sig += '|';
-    sig += std::to_string(extrude);
-    sig += '|';
-    sig += scale_buf.data();
-    sig += '|';
-    sig += (trim_transparent ? '1' : '0');
-    sig += '|';
-    sig += (allow_rotate ? '1' : '0');
-    sig += '|';
-    sig += normalized_dir;
-    return to_hex_size_t(std::hash<std::string>{}(sig));
-}
-
-bool load_output_cache(const fs::path& cache_path,
-                       const std::string& expected_signature,
-                       std::string& output) {
-    std::ifstream in(cache_path, std::ios::binary);
-    if (!in) {
-        return false;
-    }
-
-    std::string expected_header = "spratlayout_output_cache " + std::to_string(k_output_cache_format_version);
-    std::string header;
-    if (!std::getline(in, header) || header != expected_header) {
-        return false;
-    }
-
-    std::string signature;
-    if (!std::getline(in, signature) || signature != expected_signature) {
-        return false;
-    }
-
-    std::ostringstream buffer;
-    buffer << in.rdbuf();
-    if (!in.good() && !in.eof()) {
-        return false;
-    }
-    output = buffer.str();
-    return true;
-}
-
-bool save_output_cache(const fs::path& cache_path,
-                       const std::string& signature,
-                       const std::string& output) {
-    fs::path tmp = cache_path;
-    tmp += ".tmp";
-
-    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-    out << "spratlayout_output_cache " << k_output_cache_format_version << "\n";
-    out << signature << "\n";
-    out << output;
-    out.close();
-    if (!out) {
-        return false;
-    }
-
-    std::error_code ec;
-    fs::rename(tmp, cache_path, ec);
-    if (ec) {
-        fs::remove(cache_path, ec);
-        ec.clear();
-        fs::rename(tmp, cache_path, ec);
-        if (ec) {
-            fs::remove(tmp, ec);
-            return false;
-        }
-    }
-    return true;
-}
-
-bool load_layout_seed_cache(const fs::path& cache_path,
-                            const std::string& expected_signature,
-                            LayoutSeedCache& out) {
-    out = LayoutSeedCache{};
-    std::ifstream in(cache_path);
-    if (!in) {
-        return false;
-    }
-
-    std::string header_tag;
-    int version = 0;
-    if (!(in >> header_tag >> version)) {
-        return false;
-    }
-    if (header_tag != "spratlayout_seed_cache" ||
-        (version != 2 && version != k_seed_cache_format_version)) {
-        return false;
-    }
-
-    if (!(in >> out.signature) || out.signature != expected_signature) {
-        return false;
-    }
-
-    size_t count = 0;
-    if (!(in >> out.padding >> out.atlas_width >> out.atlas_height >> count)) {
-        return false;
-    }
-    if (count == 0 || out.atlas_width <= 0 || out.atlas_height <= 0) {
-        return false;
-    }
-
-    out.entries.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        LayoutSeedEntry entry;
-        if (!(in >> std::quoted(entry.path)
-                 >> entry.x >> entry.y
-                 >> entry.w >> entry.h
-                 >> entry.trim_left >> entry.trim_top
-                 >> entry.trim_right >> entry.trim_bottom)) {
-            return false;
-        }
-        if (version >= 3) {
-            int rotated_flag = 0;
-            if (!(in >> rotated_flag)) {
-                return false;
-            }
-            entry.rotated = rotated_flag != 0;
-        }
-        out.entries.push_back(std::move(entry));
-    }
-
-    return true;
-}
-
-bool save_layout_seed_cache(const fs::path& cache_path,
-                            const LayoutSeedCache& seed) {
-    if (seed.signature.empty() || seed.entries.empty() ||
-        seed.atlas_width <= 0 || seed.atlas_height <= 0) {
-        return false;
-    }
-
-    fs::path tmp = cache_path;
-    tmp += ".tmp";
-
-    std::ofstream out(tmp, std::ios::trunc);
-    if (!out) {
-        return false;
-    }
-
-    out << "spratlayout_seed_cache " << k_seed_cache_format_version << "\n";
-    out << seed.signature << "\n";
-    out << seed.padding << " "
-        << seed.atlas_width << " "
-        << seed.atlas_height << " "
-        << seed.entries.size() << "\n";
-    for (const auto& entry : seed.entries) {
-        out << std::quoted(entry.path) << " "
-            << entry.x << " "
-            << entry.y << " "
-            << entry.w << " "
-            << entry.h << " "
-            << entry.trim_left << " "
-            << entry.trim_top << " "
-            << entry.trim_right << " "
-            << entry.trim_bottom << " "
-            << (entry.rotated ? 1 : 0) << "\n";
-    }
-    out.close();
-    if (!out) {
-        return false;
-    }
-
-    std::error_code ec;
-    fs::rename(tmp, cache_path, ec);
-    if (ec) {
-        fs::remove(cache_path, ec);
-        ec.clear();
-        fs::rename(tmp, cache_path, ec);
-        if (ec) {
-            fs::remove(tmp, ec);
-            return false;
-        }
-    }
-    return true;
-}
-
-void prune_cache_family_group(const fs::path& base_cache_path,
-                              const std::string& group_suffix,
-                              long long max_age_seconds,
-                              size_t max_files_to_keep) {
-    if (max_files_to_keep == 0) {
-        return;
-    }
-
-    const fs::path parent = base_cache_path.parent_path();
-    if (parent.empty()) {
-        return;
-    }
-
-    const std::string prefix = base_cache_path.filename().string() + group_suffix;
-    std::error_code ec;
-    if (!fs::exists(parent, ec) || ec || !fs::is_directory(parent, ec)) {
-        return;
-    }
-
-    const fs::file_time_type now = fs::file_time_type::clock::now();
-    struct CacheFileInfo {
-        fs::path path;
-        fs::file_time_type mtime;
-    };
-    std::vector<CacheFileInfo> keep_candidates;
-
-    for (fs::directory_iterator it(parent, ec), end; it != end; it.increment(ec)) {
-        if (ec) {
-            ec.clear();
-            continue;
-        }
-        const auto& entry = *it;
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-
-        const std::string name = entry.path().filename().string();
-        if (!name.starts_with(prefix)) {
-            continue;
-        }
-
-        if (name.ends_with(".tmp")) {
-            fs::remove(entry.path(), ec);
-            ec.clear();
-            continue;
-        }
-
-        fs::file_time_type mtime = entry.last_write_time(ec);
-        if (ec) {
-            ec.clear();
-            continue;
-        }
-
-        bool remove_for_age = false;
-        if (mtime <= now) {
-            const long long age = std::chrono::duration_cast<std::chrono::seconds>(now - mtime).count();
-            if (age > max_age_seconds) {
-                remove_for_age = true;
-            }
-        }
-        if (remove_for_age) {
-            fs::remove(entry.path(), ec);
-            ec.clear();
-            continue;
-        }
-
-        keep_candidates.push_back({.path=entry.path(), .mtime=mtime});
-    }
-
-    if (keep_candidates.size() <= max_files_to_keep) {
-        return;
-    }
-
-    std::ranges::sort(keep_candidates, [](const CacheFileInfo& a, const CacheFileInfo& b) {
-        return a.mtime > b.mtime;
-    });
-
-    for (size_t i = max_files_to_keep; i < keep_candidates.size(); ++i) {
-        fs::remove(keep_candidates[i].path, ec);
-        ec.clear();
-    }
-}
-
-void prune_cache_family(const fs::path& base_cache_path,
-                        long long max_age_seconds,
-                        size_t max_layout_files_to_keep,
-                        size_t max_seed_files_to_keep) {
-    prune_cache_family_group(base_cache_path, ".layout.", max_age_seconds, max_layout_files_to_keep);
-    prune_cache_family_group(base_cache_path, ".seed.", max_age_seconds, max_seed_files_to_keep);
-}
-
-void prune_all_spratlayout_cache_families(long long max_age_seconds,
-                                          size_t max_layout_files_to_keep,
-                                          size_t max_seed_files_to_keep) {
-    if (max_age_seconds < 0 || max_age_seconds > k_max_cache_age_seconds_limit) {
-        max_age_seconds = k_default_cache_age_seconds;
-    }
-    const fs::path parent = cache_root_dir();
-    std::error_code ec;
-    if (!fs::exists(parent, ec) || ec || !fs::is_directory(parent, ec)) {
-        return;
-    }
-
-    std::unordered_set<std::string> base_paths;
-    for (fs::directory_iterator it(parent, ec), end; it != end; it.increment(ec)) {
-        if (ec) {
-            ec.clear();
-            continue;
-        }
-        const auto& entry = *it;
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const std::string name = entry.path().filename().string();
-        if (!name.starts_with("spratlayout_")) {
-            continue;
-        }
-
-        size_t marker = name.find(".cache.layout.");
-        if (marker == std::string::npos) {
-            marker = name.find(".cache.seed.");
-        }
-        if (marker == std::string::npos) {
-            continue;
-        }
-
-        const std::string base_name = name.substr(0, marker + std::string(".cache").size());
-        base_paths.insert((parent / base_name).string());
-    }
-
-    for (const std::string& base_path : base_paths) {
-        prune_cache_family(base_path, max_age_seconds, max_layout_files_to_keep, max_seed_files_to_keep);
-    }
-}
-
-void remove_legacy_top_level_cache_files() {
-    const fs::path parent = default_temp_dir();
-    const fs::path active_root = cache_root_dir();
-    if (parent == active_root) {
-        return;
-    }
-
-    std::error_code ec;
-    if (!fs::exists(parent, ec) || ec || !fs::is_directory(parent, ec)) {
-        return;
-    }
-
-    for (fs::directory_iterator it(parent, ec), end; it != end; it.increment(ec)) {
-        if (ec) {
-            ec.clear();
-            continue;
-        }
-        const auto& entry = *it;
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const std::string name = entry.path().filename().string();
-        if (!name.starts_with("spratlayout_")) {
-            continue;
-        }
-        if (name.find(".cache") == std::string::npos) {
-            continue;
-        }
-        fs::remove(entry.path(), ec);
-        ec.clear();
-    }
-}
-
-bool try_apply_layout_seed(const LayoutSeedCache& seed,
-                           int padding,
-                           int width_upper_bound,
-                           int height_upper_bound,
-                           const std::vector<Sprite>& source_sprites,
-                           std::vector<Sprite>& out_sprites,
-                           int& out_atlas_width,
-                           int& out_atlas_height) {
-    if (seed.entries.size() != source_sprites.size()) {
-        return false;
-    }
-
-    std::unordered_map<std::string, const LayoutSeedEntry*> seed_by_path;
-    seed_by_path.reserve(seed.entries.size());
-    for (const auto& entry : seed.entries) {
-        auto inserted = seed_by_path.emplace(entry.path, &entry);
-        if (!inserted.second) {
-            return false;
-        }
-    }
-
-    std::unordered_set<std::string> seen_paths;
-    seen_paths.reserve(source_sprites.size());
-
-    struct Rect {
-        int x0 = 0;
-        int y0 = 0;
-        int x1 = 0;
-        int y1 = 0;
-    };
-    std::vector<Rect> rects;
-    rects.reserve(source_sprites.size());
-
-    out_sprites.clear();
-    out_sprites.reserve(source_sprites.size());
-    out_atlas_width = 0;
-    out_atlas_height = 0;
-
-    for (const auto& src : source_sprites) {
-        if (!seen_paths.emplace(src.path).second) {
-            return false;
-        }
-        auto it = seed_by_path.find(src.path);
-        if (it == seed_by_path.end()) {
-            return false;
-        }
-        const LayoutSeedEntry& entry = *it->second;
-        const int expected_w = entry.rotated ? src.h : src.w;
-        const int expected_h = entry.rotated ? src.w : src.h;
-        if (entry.x < 0 || entry.y < 0 ||
-            entry.w != expected_w || entry.h != expected_h ||
-            entry.trim_left != src.trim_left || entry.trim_top != src.trim_top ||
-            entry.trim_right != src.trim_right || entry.trim_bottom != src.trim_bottom) {
-            return false;
-        }
-
-        int padded_w = 0;
-        int padded_h = 0;
-        int x1 = 0;
-        int y1 = 0;
-        if (!checked_add_int(src.w, padding, padded_w) ||
-            !checked_add_int(src.h, padding, padded_h) ||
-            !checked_add_int(entry.x, padded_w, x1) ||
-            !checked_add_int(entry.y, padded_h, y1)) {
-            return false;
-        }
-        if (padded_w <= 0 || padded_h <= 0 || x1 > width_upper_bound || y1 > height_upper_bound) {
-            return false;
-        }
-
-        Sprite placed = src;
-        placed.x = entry.x;
-        placed.y = entry.y;
-        placed.rotated = entry.rotated;
-        if (placed.rotated) {
-            std::swap(placed.w, placed.h);
-        }
-        out_sprites.push_back(std::move(placed));
-        rects.push_back({.x0=entry.x, .y0=entry.y, .x1=x1, .y1=y1});
-        out_atlas_width = std::max(out_atlas_width, x1);
-        out_atlas_height = std::max(out_atlas_height, y1);
-    }
-    if (out_atlas_width <= 0 || out_atlas_height <= 0) {
-        return false;
-    }
-
-    std::vector<size_t> order(rects.size());
-    for (size_t i = 0; i < order.size(); ++i) {
-        order[i] = i;
-    }
-    std::ranges::sort(order, [&](size_t a, size_t b) {
-        return rects[a].x0 < rects[b].x0;
-    });
-
-    for (size_t i = 0; i < order.size(); ++i) {
-        const Rect& a = rects[order[i]];
-        for (size_t j = i + 1; j < order.size(); ++j) {
-            const Rect& b = rects[order[j]];
-            if (b.x0 >= a.x1) {
-                break;
-            }
-            if (a.y0 < b.y1 && b.y0 < a.y1) {
-                return false;
-            }
-        }
-    }
-
-    return true;
-}
-
-std::string build_layout_output_text(const std::vector<Atlas>& atlases,
-                                     double scale,
-                                     int extrude,
-                                     bool trim_transparent,
-                                     bool multipack,
-                                     const std::vector<Sprite>& sprites,
-                                     const std::vector<std::pair<std::string, std::string>>& aliases,
-                                     bool debug,
-                                     const fs::path& root) {
-    std::ostringstream output;
-    if (debug) {
-        output << "# Sprat Layout Debug Info\n";
-        output << "# Scale: " << scale << "\n";
-        output << "# Atlases: " << atlases.size() << "\n";
-        output << "# Total Sprites: " << sprites.size() << "\n";
-        output << "# Aliases: " << aliases.size() << "\n";
-        output << "# Multipack: " << (multipack ? "true" : "false") << "\n";
-    }
-    output << "root " << to_quoted(root.string()) << "\n";
-    output << "scale " << std::setprecision(k_output_precision) << scale << "\n";
-    if (extrude > 0) {
-        output << "extrude " << extrude << "\n";
-    }
-    if (multipack) {
-        output << "multipack true\n";
-    }
-    // Pre-group sprite indices by atlas_index to avoid O(sprites * atlases) scan.
-    std::vector<std::vector<size_t>> sprites_by_atlas(atlases.size());
-    for (size_t si = 0; si < sprites.size(); ++si) {
-        int ai = sprites[si].atlas_index;
-        if (ai >= 0 && static_cast<size_t>(ai) < atlases.size()) {
-            sprites_by_atlas[static_cast<size_t>(ai)].push_back(si);
-        }
-    }
-    for (size_t i = 0; i < atlases.size(); ++i) {
-        output << "atlas " << atlases[i].width << "," << atlases[i].height << "\n";
-        for (size_t si : sprites_by_atlas[i]) {
-            const auto& s = sprites[si];
-            fs::path sprite_path(s.path);
-            fs::path relative_path = fs::relative(sprite_path, root);
-            std::string path = relative_path.string();
-            // Standardize path separators to forward slashes for output consistency
-            std::replace(path.begin(), path.end(), '\\', '/');
-            output << "sprite " << to_quoted(path) << " "
-                   << s.x << "," << s.y << " "
-                   << s.w << "," << s.h;
-            if (s.trim_left || s.trim_top || s.trim_right || s.trim_bottom) {
-                output << " " << s.trim_left << "," << s.trim_top
-                       << " " << s.trim_right << "," << s.trim_bottom;
-            }
-            if (s.rotated) {
-                output << " rotated";
-            }
-            if (s.has_slice) {
-                output << " slice=" << s.slice_left << "," << s.slice_top
-                       << "," << s.slice_right << "," << s.slice_bottom;
-            }
-            output << "\n";
-        }
-    }
-    for (const auto& alias_pair : aliases) {
-        fs::path alias_fs_path(alias_pair.first);
-        fs::path relative_alias_path = fs::relative(alias_fs_path, root);
-        std::string alias_str = relative_alias_path.string();
-        std::replace(alias_str.begin(), alias_str.end(), '\\', '/');
-
-        fs::path canonical_fs_path(alias_pair.second);
-        fs::path relative_canonical_path = fs::relative(canonical_fs_path, root);
-        std::string canonical_str = relative_canonical_path.string();
-        std::replace(canonical_str.begin(), canonical_str.end(), '\\', '/');
-
-        output << "alias " << to_quoted(alias_str) << " " << to_quoted(canonical_str) << "\n";
-    }
-    return output.str();
-}
-
-bool scale_dimension(int input, double scale, int& output) {
-    if (input <= 0 || scale <= 0.0) {
-        return false;
-    }
-    long double scaled = static_cast<long double>(input) * static_cast<long double>(scale);
-    if (scaled > static_cast<long double>(std::numeric_limits<int>::max())) {
-        return false;
-    }
-    int rounded = static_cast<int>(std::lround(scaled));
-    if (rounded <= 0) {
-        rounded = 1;
-    }
-    output = rounded;
-    return true;
-}
-
-Node* insert(Node* node, Sprite& sprite, int w, int h, bool allow_rotate, bool* used_rotated = nullptr) {
-    if (node->used) {
-        if (node->right) {
-            if (Node* r = insert(node->right.get(), sprite, w, h, allow_rotate, used_rotated)) {
-                return r;
-            }
-        }
-        if (node->down) {
-            return insert(node->down.get(), sprite, w, h, allow_rotate, used_rotated);
-        }
-        return nullptr;
-    }
-
-    bool fits_normal = (w <= node->w && h <= node->h);
-    bool fits_rotated = allow_rotate && (h <= node->w && w <= node->h);
-    if (!fits_normal && !fits_rotated) {
-        return nullptr;
-    }
-
-    int place_w = w;
-    int place_h = h;
-    bool rotate = false;
-    if (allow_rotate) {
-        if (!fits_normal && fits_rotated) {
-            place_w = h;
-            place_h = w;
-            rotate = true;
-        } else if (fits_normal && fits_rotated) {
-            const int normal_short = std::min(node->w - w, node->h - h);
-            const int rotated_short = std::min(node->w - h, node->h - w);
-            if (rotated_short < normal_short) {
-                place_w = h;
-                place_h = w;
-                rotate = true;
-            }
-        }
-    }
-
-    if (place_w == node->w && place_h == node->h) {
-        node->used = true;
-        if (used_rotated != nullptr) {
-            *used_rotated = rotate;
-        }
-        return node;
-    }
-    node->used = true;
-    node->down = std::make_unique<Node>(node->x, node->y + place_h, node->w, node->h - place_h);
-    node->right = std::make_unique<Node>(node->x + place_w, node->y, node->w - place_w, place_h);
-    if (used_rotated != nullptr) {
-        *used_rotated = rotate;
-    }
-    return node;
-}
-
-bool try_pack(std::unique_ptr<Node>& root, std::vector<Sprite>& sprites, int padding = 0, bool allow_rotate = false) {
-    root->used = false;
-    root->right.reset();
-    root->down.reset();
-    for (auto& sprite : sprites) {
-        int w = 0;
-        int h = 0;
-        if (
-            !checked_add_int(sprite.w, padding, w)
-            || !checked_add_int(sprite.h, padding, h)
-        ) {
-            return false;
-        }
-        bool rotated = false;
-        Node* node = insert(root.get(), sprite, w, h, allow_rotate, &rotated);
-        if (node == nullptr) {
-            return false;
-        }
-        if (rotated) {
-            std::swap(sprite.w, sprite.h);
-        }
-        sprite.rotated = rotated;
-        sprite.x = node->x;
-        sprite.y = node->y;
-    }
-    return true;
-}
-
-enum class FrameSort : std::uint8_t { Name, None, Stable };
-
-enum class StableMetric : std::uint8_t {
-    Area,
-    MaxSide,
-    Height,
-    Width,
-    Perimeter
-};
-
-bool parse_frame_sort_from_string(const std::string& value, FrameSort& out, StableMetric& out_metric) {
-    std::string lower = to_lower_copy(value);
-    if (lower == "name") {
-        out = FrameSort::Name;
-        return true;
-    }
-    if (lower == "none") {
-        out = FrameSort::None;
-        return true;
-    }
-    if (lower == "stable" || lower.starts_with("stable:")) {
-        out = FrameSort::Stable;
-        const std::string metric_str = lower.size() > 7 ? lower.substr(7) : "area";
-        if (metric_str == "area")      { out_metric = StableMetric::Area;      return true; }
-        if (metric_str == "maxside")   { out_metric = StableMetric::MaxSide;   return true; }
-        if (metric_str == "height")    { out_metric = StableMetric::Height;    return true; }
-        if (metric_str == "width")     { out_metric = StableMetric::Width;     return true; }
-        if (metric_str == "perimeter") { out_metric = StableMetric::Perimeter; return true; }
-        return false;
-    }
-    return false;
-}
-
-enum class SortMode : std::uint8_t {
-    Height,
-    Width,
-    Area,
-    MaxSide,
-    Perimeter,
-    None
-};
-
-bool sort_sprites_by_mode(std::vector<Sprite>& sprites, SortMode mode) {
-    auto cmp_height = [](const Sprite& a, const Sprite& b) {
-        if (a.h != b.h) { return a.h > b.h;
-}
-        return a.w > b.w;
-    };
-    auto cmp_width = [](const Sprite& a, const Sprite& b) {
-        if (a.w != b.w) { return a.w > b.w;
-}
-        return a.h > b.h;
-    };
-    auto cmp_area = [](const Sprite& a, const Sprite& b) {
-        long long area_a = static_cast<long long>(a.w) * static_cast<long long>(a.h);
-        long long area_b = static_cast<long long>(b.w) * static_cast<long long>(b.h);
-        if (area_a != area_b) { return area_a > area_b;
-}
-        if (a.h != b.h) { return a.h > b.h;
-}
-        return a.w > b.w;
-    };
-    auto cmp_max_side = [](const Sprite& a, const Sprite& b) {
-        int max_a = std::max(a.w, a.h);
-        int max_b = std::max(b.w, b.h);
-        if (max_a != max_b) { return max_a > max_b;
-}
-        long long area_a = static_cast<long long>(a.w) * static_cast<long long>(a.h);
-        long long area_b = static_cast<long long>(b.w) * static_cast<long long>(b.h);
-        return area_a > area_b;
-    };
-    auto cmp_perimeter = [](const Sprite& a, const Sprite& b) {
-        int p_a = a.w + a.h;
-        int p_b = b.w + b.h;
-        if (p_a != p_b) { return p_a > p_b;
-}
-        long long area_a = static_cast<long long>(a.w) * static_cast<long long>(a.h);
-        long long area_b = static_cast<long long>(b.w) * static_cast<long long>(b.h);
-        return area_a > area_b;
-    };
-
-    switch (mode) {
-        case SortMode::Height:
-            std::ranges::sort(sprites, cmp_height);
-            return true;
-        case SortMode::Width:
-            std::ranges::sort(sprites, cmp_width);
-            return true;
-        case SortMode::Area:
-            std::ranges::sort(sprites, cmp_area);
-            return true;
-        case SortMode::MaxSide:
-            std::ranges::sort(sprites, cmp_max_side);
-            return true;
-        case SortMode::Perimeter:
-            std::ranges::sort(sprites, cmp_perimeter);
-            return true;
-        case SortMode::None:
-            return true;
-    }
-    return false;
-}
-
-void sort_sprites_stable(std::vector<Sprite>& sprites, StableMetric metric) {
-    auto path_cmp = [](const Sprite& a, const Sprite& b) {
-        return sprat::core::compare_natural(a.path, b.path) < 0;
-    };
-    switch (metric) {
-        case StableMetric::Area:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
-                const long long area_a = static_cast<long long>(a.w) * a.h;
-                const long long area_b = static_cast<long long>(b.w) * b.h;
-                if (area_a != area_b) { return area_a > area_b; }
-                if (a.h != b.h) { return a.h > b.h; }
-                if (a.w != b.w) { return a.w > b.w; }
-                return path_cmp(a, b);
-            });
-            break;
-        case StableMetric::MaxSide:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
-                const int max_a = std::max(a.w, a.h);
-                const int max_b = std::max(b.w, b.h);
-                if (max_a != max_b) { return max_a > max_b; }
-                const long long area_a = static_cast<long long>(a.w) * a.h;
-                const long long area_b = static_cast<long long>(b.w) * b.h;
-                if (area_a != area_b) { return area_a > area_b; }
-                return path_cmp(a, b);
-            });
-            break;
-        case StableMetric::Height:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
-                if (a.h != b.h) { return a.h > b.h; }
-                if (a.w != b.w) { return a.w > b.w; }
-                return path_cmp(a, b);
-            });
-            break;
-        case StableMetric::Width:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
-                if (a.w != b.w) { return a.w > b.w; }
-                if (a.h != b.h) { return a.h > b.h; }
-                return path_cmp(a, b);
-            });
-            break;
-        case StableMetric::Perimeter:
-            std::ranges::sort(sprites, [&](const Sprite& a, const Sprite& b) {
-                const int p_a = a.w + a.h;
-                const int p_b = b.w + b.h;
-                if (p_a != p_b) { return p_a > p_b; }
-                const long long area_a = static_cast<long long>(a.w) * a.h;
-                const long long area_b = static_cast<long long>(b.w) * b.h;
-                if (area_a != area_b) { return area_a > area_b; }
-                return path_cmp(a, b);
-            });
-            break;
-    }
-}
-
-struct Rect {
-    int x = 0;
-    int y = 0;
-    int w = 0;
-    int h = 0;
-};
-
-bool rects_intersect(const Rect& a, const Rect& b) {
-    return a.x + a.w > b.x && b.x + b.w > a.x &&
-             a.y + a.h > b.y && b.y + b.h > a.y;
-}
-
-bool rect_contains(const Rect& a, const Rect& b) {
-    return b.x >= a.x && b.y >= a.y &&
-           b.x + b.w <= a.x + a.w &&
-           b.y + b.h <= a.y + a.h;
-}
-
-void append_pruned_free_rect(std::vector<Rect>& out, const Rect& candidate) {
-    if (candidate.w <= 0 || candidate.h <= 0) {
-        return;
-    }
-
-    for (const Rect& existing : out) {
-        if (rect_contains(existing, candidate)) {
-            return;
-        }
-    }
-
-    size_t write = 0;
-    for (size_t i = 0; i < out.size(); ++i) {
-        if (!rect_contains(candidate, out[i])) {
-            if (write != i) {
-                out[write] = out[i];
-            }
-            ++write;
-        }
-    }
-    out.resize(write);
-    out.push_back(candidate);
-}
-
-bool split_free_rect(const Rect& free_rect, const Rect& used_rect, std::vector<Rect>& out) {
-    if (!rects_intersect(free_rect, used_rect)) {
-        append_pruned_free_rect(out, free_rect);
-        return true;
-    }
-
-    int free_right = free_rect.x + free_rect.w;
-    int free_bottom = free_rect.y + free_rect.h;
-    int used_right = used_rect.x + used_rect.w;
-    int used_bottom = used_rect.y + used_rect.h;
-
-    if (used_rect.x > free_rect.x) {
-        append_pruned_free_rect(out, {free_rect.x, free_rect.y, used_rect.x - free_rect.x, free_rect.h});
-    }
-    if (used_right < free_right) {
-        append_pruned_free_rect(out, {used_right, free_rect.y, free_right - used_right, free_rect.h});
-    }
-    if (used_rect.y > free_rect.y) {
-        int x0 = std::max(free_rect.x, used_rect.x);
-        int x1 = std::min(free_right, used_right);
-        if (x1 > x0) {
-            append_pruned_free_rect(out, {x0, free_rect.y, x1 - x0, used_rect.y - free_rect.y});
-        }
-    }
-    if (used_bottom < free_bottom) {
-        int x0 = std::max(free_rect.x, used_rect.x);
-        int x1 = std::min(free_right, used_right);
-        if (x1 > x0) {
-            append_pruned_free_rect(out, {x0, used_bottom, x1 - x0, free_bottom - used_bottom});
-        }
-    }
-    return true;
-}
-
-bool pack_compact_maxrects(
-    std::vector<Sprite>& sprites,
-    int width_limit,
-    int padding,
-    int max_height,
-    RectHeuristic heuristic,
-    bool allow_rotate,
-    int& out_width,
-    int& out_height
-) {
-    if (width_limit <= 0 || max_height <= 0) {
-        return false;
-    }
-
-    std::vector<Rect> free_rects;
-    free_rects.push_back({0, 0, width_limit, max_height});
-
-    int used_w = 0;
-    int used_h = 0;
-    std::vector<Rect> next_free;
-
-    for (auto& s : sprites) {
-        int rw = 0;
-        int rh = 0;
-        if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
-            return false;
-        }
-        int rrw = rh;
-        int rrh = rw;
-        if (rw <= 0 || rh <= 0 || rw > width_limit || rh > max_height) {
-            if (!(allow_rotate && rrw > 0 && rrh > 0 && rrw <= width_limit && rrh <= max_height)) {
-                return false;
-            }
-        }
-
-        int best_index = -1;
-        int best_short_fit = std::numeric_limits<int>::max();
-        int best_long_fit = std::numeric_limits<int>::max();
-        int best_area_fit = std::numeric_limits<int>::max();
-        int best_top = std::numeric_limits<int>::max();
-        int best_left = std::numeric_limits<int>::max();
-        bool best_rotated = false;
-
-        for (size_t i = 0; i < free_rects.size(); ++i) {
-            const Rect& fr = free_rects[i];
-            auto consider_orientation = [&](int cand_w, int cand_h, bool rotated) {
-                if (cand_w > fr.w || cand_h > fr.h) {
-                    return;
-                }
-                int leftover_h = fr.h - cand_h;
-                int leftover_w = fr.w - cand_w;
-                int short_fit = std::min(leftover_h, leftover_w);
-                int long_fit = std::max(leftover_h, leftover_w);
-                int area_fit = leftover_h * leftover_w;
-
-                bool better = false;
-                switch (heuristic) {
-                    case RectHeuristic::BestShortSideFit:
-                        better = short_fit < best_short_fit ||
-                                 (short_fit == best_short_fit && long_fit < best_long_fit) ||
-                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
-                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
-                        break;
-                    case RectHeuristic::BestAreaFit:
-                        better = area_fit < best_area_fit ||
-                                 (area_fit == best_area_fit && short_fit < best_short_fit) ||
-                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y < best_top) ||
-                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y == best_top && fr.x < best_left);
-                        break;
-                    case RectHeuristic::BottomLeft:
-                        better = fr.y < best_top || (fr.y == best_top && fr.x < best_left) ||
-                                 (fr.y == best_top && fr.x == best_left && short_fit < best_short_fit);
-                        break;
-                }
-
-                if (!better) {
-                    return;
-                }
-                best_index = static_cast<int>(i);
-                best_short_fit = short_fit;
-                best_long_fit = long_fit;
-                best_area_fit = area_fit;
-                best_top = fr.y;
-                best_left = fr.x;
-                best_rotated = rotated;
-            };
-
-            consider_orientation(rw, rh, false);
-            if (allow_rotate && s.w != s.h) {
-                consider_orientation(rrw, rrh, true);
-            }
-        }
-
-        if (best_index < 0) {
-            return false;
-        }
-
-        int used_w_dim = rw;
-        int used_h_dim = rh;
-        if (best_rotated) {
-            std::swap(s.w, s.h);
-            std::swap(used_w_dim, used_h_dim);
-        }
-        s.rotated = best_rotated;
-
-        Rect used = {.x=free_rects[static_cast<size_t>(best_index)].x,
-                     .y=free_rects[static_cast<size_t>(best_index)].y,
-                     .w=used_w_dim, .h=used_h_dim};
-        s.x = used.x;
-        s.y = used.y;
-
-        used_w = std::max(used.x + used.w, used_w);
-        used_h = std::max(used.y + used.h, used_h);
-
-        next_free.clear();
-        for (const auto& fr : free_rects) {
-            if (!split_free_rect(fr, used, next_free)) {
-                return false;
-            }
-        }
-
-        std::swap(free_rects, next_free);
-    }
-
-    out_width = used_w;
-    out_height = used_h;
-    return out_width > 0 && out_height > 0;
-}
-
-bool pack_incremental_maxrects(
-    const LayoutSeedCache& seed,
-    int padding,
-    int width_upper_bound,
-    int height_upper_bound,
-    const std::vector<Sprite>& source_sprites,
-    bool allow_rotate,
-    std::vector<Sprite>& out_sprites,
-    int& out_atlas_width,
-    int& out_atlas_height) {
-
-    // Build lookup of seed entries by path
-    std::unordered_map<std::string, const LayoutSeedEntry*> seed_by_path;
-    seed_by_path.reserve(seed.entries.size());
-    for (const auto& entry : seed.entries) {
-        seed_by_path.emplace(entry.path, &entry);
-    }
-
-    // Classify each sprite as pinned or new
-    std::vector<Sprite> pinned_sprites;
-    std::vector<Sprite> new_sprites;
-    pinned_sprites.reserve(source_sprites.size());
-    new_sprites.reserve(source_sprites.size());
-
-    for (const auto& src : source_sprites) {
-        auto it = seed_by_path.find(src.path);
-        if (it != seed_by_path.end()) {
-            const LayoutSeedEntry& entry = *it->second;
-            const int expected_w = entry.rotated ? src.h : src.w;
-            const int expected_h = entry.rotated ? src.w : src.h;
-            if (entry.x >= 0 && entry.y >= 0 &&
-                entry.w == expected_w && entry.h == expected_h &&
-                entry.trim_left == src.trim_left && entry.trim_top == src.trim_top &&
-                entry.trim_right == src.trim_right && entry.trim_bottom == src.trim_bottom) {
-                Sprite placed = src;
-                placed.x = entry.x;
-                placed.y = entry.y;
-                placed.rotated = entry.rotated;
-                if (placed.rotated) {
-                    std::swap(placed.w, placed.h);
-                }
-                pinned_sprites.push_back(std::move(placed));
-                continue;
-            }
-        }
-        new_sprites.push_back(src);
-    }
-
-    // No benefit from incremental if nothing is pinned
-    if (pinned_sprites.empty()) {
-        return false;
-    }
-
-    // Validate pinned sprites fit within bounds and don't overlap (sweep-line check)
-    {
-        struct PinnedRect {
-            int x0 = 0;
-            int y0 = 0;
-            int x1 = 0;
-            int y1 = 0;
-        };
-        std::vector<PinnedRect> prects;
-        prects.reserve(pinned_sprites.size());
-        for (const auto& s : pinned_sprites) {
-            int padded_w = 0;
-            int padded_h = 0;
-            int x1 = 0;
-            int y1 = 0;
-            if (!checked_add_int(s.w, padding, padded_w) ||
-                !checked_add_int(s.h, padding, padded_h) ||
-                !checked_add_int(s.x, padded_w, x1) ||
-                !checked_add_int(s.y, padded_h, y1)) {
-                return false;
-            }
-            if (padded_w <= 0 || padded_h <= 0 || x1 > width_upper_bound || y1 > height_upper_bound) {
-                return false;
-            }
-            prects.push_back({.x0=s.x, .y0=s.y, .x1=x1, .y1=y1});
-        }
-
-        std::vector<size_t> order(prects.size());
-        for (size_t i = 0; i < order.size(); ++i) {
-            order[i] = i;
-        }
-        std::ranges::sort(order, [&](size_t a, size_t b) {
-            return prects[a].x0 < prects[b].x0;
-        });
-        for (size_t i = 0; i < order.size(); ++i) {
-            const PinnedRect& a = prects[order[i]];
-            for (size_t j = i + 1; j < order.size(); ++j) {
-                const PinnedRect& b = prects[order[j]];
-                if (b.x0 >= a.x1) {
-                    break;
-                }
-                if (a.y0 < b.y1 && b.y0 < a.y1) {
-                    return false;
-                }
-            }
-        }
-    }
-
-    // Build MaxRects free_rects: start with full area, split around each pinned sprite
-    std::vector<Rect> free_rects;
-    free_rects.push_back({0, 0, width_upper_bound, height_upper_bound});
-
-    for (const auto& s : pinned_sprites) {
-        int padded_w = 0;
-        int padded_h = 0;
-        checked_add_int(s.w, padding, padded_w);
-        checked_add_int(s.h, padding, padded_h);
-        Rect used = {.x=s.x, .y=s.y, .w=padded_w, .h=padded_h};
-
-        std::vector<Rect> next_free;
-        for (const auto& fr : free_rects) {
-            if (!split_free_rect(fr, used, next_free)) {
-                return false;
-            }
-        }
-        std::swap(free_rects, next_free);
-    }
-
-    // Sort new sprites by area descending
-    std::ranges::sort(new_sprites, [](const Sprite& a, const Sprite& b) {
-        return (a.w * a.h) > (b.w * b.h);
-    });
-
-    // Place each new sprite using BestShortSideFit heuristic
-    for (auto& s : new_sprites) {
-        int rw = 0;
-        int rh = 0;
-        if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
-            return false;
-        }
-        int rrw = rh;
-        int rrh = rw;
-        if (rw <= 0 || rh <= 0 || rw > width_upper_bound || rh > height_upper_bound) {
-            if (!(allow_rotate && rrw > 0 && rrh > 0 && rrw <= width_upper_bound && rrh <= height_upper_bound)) {
-                return false;
-            }
-        }
-
-        int best_index = -1;
-        int best_short_fit = std::numeric_limits<int>::max();
-        int best_long_fit = std::numeric_limits<int>::max();
-        int best_top = std::numeric_limits<int>::max();
-        int best_left = std::numeric_limits<int>::max();
-        bool best_rotated = false;
-
-        for (size_t i = 0; i < free_rects.size(); ++i) {
-            const Rect& fr = free_rects[i];
-            auto consider_orientation = [&](int cand_w, int cand_h, bool rotated) {
-                if (cand_w > fr.w || cand_h > fr.h) {
-                    return;
-                }
-                int leftover_h = fr.h - cand_h;
-                int leftover_w = fr.w - cand_w;
-                int short_fit = std::min(leftover_h, leftover_w);
-                int long_fit = std::max(leftover_h, leftover_w);
-
-                bool better = short_fit < best_short_fit ||
-                              (short_fit == best_short_fit && long_fit < best_long_fit) ||
-                              (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
-                              (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
-
-                if (!better) {
-                    return;
-                }
-                best_index = static_cast<int>(i);
-                best_short_fit = short_fit;
-                best_long_fit = long_fit;
-                best_top = fr.y;
-                best_left = fr.x;
-                best_rotated = rotated;
-            };
-
-            consider_orientation(rw, rh, false);
-            if (allow_rotate && s.w != s.h) {
-                consider_orientation(rrw, rrh, true);
-            }
-        }
-
-        if (best_index < 0) {
-            return false;
-        }
-
-        int used_w_dim = rw;
-        int used_h_dim = rh;
-        if (best_rotated) {
-            std::swap(s.w, s.h);
-            std::swap(used_w_dim, used_h_dim);
-        }
-        s.rotated = best_rotated;
-
-        Rect used = {.x=free_rects[static_cast<size_t>(best_index)].x,
-                     .y=free_rects[static_cast<size_t>(best_index)].y,
-                     .w=used_w_dim, .h=used_h_dim};
-        s.x = used.x;
-        s.y = used.y;
-
-        std::vector<Rect> next_free;
-        for (const auto& fr : free_rects) {
-            if (!split_free_rect(fr, used, next_free)) {
-                return false;
-            }
-        }
-        std::swap(free_rects, next_free);
-    }
-
-    // Combine pinned + newly placed sprites
-    out_sprites.clear();
-    out_sprites.reserve(pinned_sprites.size() + new_sprites.size());
-    for (auto& s : pinned_sprites) {
-        out_sprites.push_back(std::move(s));
-    }
-    for (auto& s : new_sprites) {
-        out_sprites.push_back(std::move(s));
-    }
-
-    // Compute tight atlas bounds
-    out_atlas_width = 0;
-    out_atlas_height = 0;
-    for (const auto& s : out_sprites) {
-        int padded_w = 0;
-        int padded_h = 0;
-        checked_add_int(s.w, padding, padded_w);
-        checked_add_int(s.h, padding, padded_h);
-        out_atlas_width = std::max(out_atlas_width, s.x + padded_w);
-        out_atlas_height = std::max(out_atlas_height, s.y + padded_h);
-    }
-
-    return out_atlas_width > 0 && out_atlas_height > 0;
-}
-
-struct PartialPackResult {
-    std::vector<Sprite> packed;
-    std::vector<Sprite> remaining;
-    int used_w = 0;
-    int used_h = 0;
-    size_t packed_area = 0;
-};
-
-bool pack_compact_maxrects_partial(
-    const std::vector<Sprite>& sprites,
-    int width_limit,
-    int max_height,
-    int padding,
-    RectHeuristic heuristic,
-    bool allow_rotate,
-    PartialPackResult& out
-) {
-    out = {};
-    if (width_limit <= 0 || max_height <= 0) {
-        return false;
-    }
-
-    std::vector<Rect> free_rects;
-    free_rects.push_back({0, 0, width_limit, max_height});
-    std::vector<Rect> next_free;
-
-    for (const auto& src : sprites) {
-        Sprite s = src;
-        int rw = 0;
-        int rh = 0;
-        if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
-            return false;
-        }
-        const int rrw = rh;
-        const int rrh = rw;
-        if (rw <= 0 || rh <= 0) {
-            out.remaining.push_back(src);
-            continue;
-        }
-
-        int best_index = -1;
-        int best_short_fit = std::numeric_limits<int>::max();
-        int best_long_fit = std::numeric_limits<int>::max();
-        int best_area_fit = std::numeric_limits<int>::max();
-        int best_top = std::numeric_limits<int>::max();
-        int best_left = std::numeric_limits<int>::max();
-        bool best_rotated = false;
-
-        for (size_t i = 0; i < free_rects.size(); ++i) {
-            const Rect& fr = free_rects[i];
-            auto consider_orientation = [&](int cand_w, int cand_h, bool rotated) {
-                if (cand_w <= 0 || cand_h <= 0 || cand_w > fr.w || cand_h > fr.h) {
-                    return;
-                }
-                int leftover_h = fr.h - cand_h;
-                int leftover_w = fr.w - cand_w;
-                int short_fit = std::min(leftover_h, leftover_w);
-                int long_fit = std::max(leftover_h, leftover_w);
-                int area_fit = leftover_h * leftover_w;
-
-                bool better = false;
-                switch (heuristic) {
-                    case RectHeuristic::BestShortSideFit:
-                        better = short_fit < best_short_fit ||
-                                 (short_fit == best_short_fit && long_fit < best_long_fit) ||
-                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y < best_top) ||
-                                 (short_fit == best_short_fit && long_fit == best_long_fit && fr.y == best_top && fr.x < best_left);
-                        break;
-                    case RectHeuristic::BestAreaFit:
-                        better = area_fit < best_area_fit ||
-                                 (area_fit == best_area_fit && short_fit < best_short_fit) ||
-                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y < best_top) ||
-                                 (area_fit == best_area_fit && short_fit == best_short_fit && fr.y == best_top && fr.x < best_left);
-                        break;
-                    case RectHeuristic::BottomLeft:
-                        better = fr.y < best_top || (fr.y == best_top && fr.x < best_left) ||
-                                 (fr.y == best_top && fr.x == best_left && short_fit < best_short_fit);
-                        break;
-                }
-                if (!better) {
-                    return;
-                }
-                best_index = static_cast<int>(i);
-                best_short_fit = short_fit;
-                best_long_fit = long_fit;
-                best_area_fit = area_fit;
-                best_top = fr.y;
-                best_left = fr.x;
-                best_rotated = rotated;
-            };
-
-            consider_orientation(rw, rh, false);
-            if (allow_rotate && s.w != s.h) {
-                consider_orientation(rrw, rrh, true);
-            }
-        }
-
-        if (best_index < 0) {
-            out.remaining.push_back(src);
-            continue;
-        }
-
-        int used_w_dim = rw;
-        int used_h_dim = rh;
-        if (best_rotated) {
-            std::swap(s.w, s.h);
-            std::swap(used_w_dim, used_h_dim);
-        }
-        s.rotated = best_rotated;
-
-        Rect used = {.x=free_rects[static_cast<size_t>(best_index)].x,
-                     .y=free_rects[static_cast<size_t>(best_index)].y,
-                     .w=used_w_dim, .h=used_h_dim};
-        s.x = used.x;
-        s.y = used.y;
-
-        out.used_w = std::max(out.used_w, used.x + used.w);
-        out.used_h = std::max(out.used_h, used.y + used.h);
-
-        size_t sprite_area = 0;
-        if (!checked_mul_size_t(static_cast<size_t>(s.w), static_cast<size_t>(s.h), sprite_area) ||
-            sprite_area > std::numeric_limits<size_t>::max() - out.packed_area) {
-            return false;
-        }
-        out.packed_area += sprite_area;
-
-        next_free.clear();
-        for (const auto& fr : free_rects) {
-            if (!split_free_rect(fr, used, next_free)) {
-                return false;
-            }
-        }
-        std::swap(free_rects, next_free);
-        out.packed.push_back(s);
-    }
-
-    return !out.packed.empty() && out.used_w > 0 && out.used_h > 0;
-}
-
-bool pack_fast_shelf(
-    std::vector<Sprite>& sprites,
-    int max_row_width,
-    int padding,
-    bool allow_rotate,
-    int& out_width,
-    int& out_height
-) {
-    int x = 0;
-    int y = 0;
-    int row_height = 0;
-    int atlas_width = 0;
-    if (max_row_width <= 0) {
-        return false;
-    }
-
-    for (auto& s : sprites) {
-        int w = 0;
-        int h = 0;
-        if (!checked_add_int(s.w, padding, w) || !checked_add_int(s.h, padding, h)) {
-            return false;
-        }
-
-        auto score_orientation = [&](int place_w, int place_h, bool new_row_needed) -> long long {
-            const int row_h = new_row_needed ? place_h : std::max(row_height, place_h);
-            const int row_y = new_row_needed ? (y + row_height) : y;
-            return (static_cast<long long>(row_y) << 32) + static_cast<long long>(row_h);
-        };
-
-        const bool can_rotate = allow_rotate && s.w != s.h;
-        int best_place_w = w;
-        int best_place_h = h;
-        bool best_rotated = false;
-
-        auto choose_better = [&](int cand_w, int cand_h, bool cand_rotated) {
-            if (cand_w <= 0 || cand_h <= 0 || cand_w > max_row_width) {
-                return;
-            }
-            const bool cand_new_row = (x > 0 && x + cand_w > max_row_width);
-            if (cand_new_row && cand_w > max_row_width) {
-                return;
-            }
-            const bool best_new_row = (x > 0 && x + best_place_w > max_row_width);
-            const long long cand_score = score_orientation(cand_w, cand_h, cand_new_row);
-            const long long best_score = score_orientation(best_place_w, best_place_h, best_new_row);
-            if (cand_score < best_score) {
-                best_place_w = cand_w;
-                best_place_h = cand_h;
-                best_rotated = cand_rotated;
-            }
-        };
-
-        if (can_rotate) {
-            choose_better(h, w, true);
-        }
-
-        int candidate_x = x + best_place_w;
-        int next_y = 0;
-        if (x > 0 && candidate_x > max_row_width) {
-            if (!checked_add_int(y, row_height, next_y)) {
-                return false;
-            }
-            y = next_y;
-            x = 0;
-            row_height = 0;
-            candidate_x = best_place_w;
-        }
-        if (candidate_x > max_row_width) {
-            return false;
-        }
-        if (best_rotated) {
-            std::swap(s.w, s.h);
-        }
-        s.rotated = best_rotated;
-
-        s.x = x;
-        s.y = y;
-        x = candidate_x;
-        row_height = std::max(best_place_h, row_height);
-        atlas_width = std::max(x, atlas_width);
-    }
-
-    int total_height = 0;
-    if (!checked_add_int(y, row_height, total_height)) {
-        return false;
-    }
-    out_width = atlas_width;
-    out_height = total_height;
-    return out_width > 0 && out_height > 0;
-}
-
-// Pack sprites into a uniform grid where every cell is max_sprite_width x max_sprite_height.
-// Sprites are placed left-to-right, top-to-bottom.  The number of columns is chosen to make
-// the atlas as square as possible, subject to width_limit / height_limit (0 = no limit).
-bool pack_grid(
-    std::vector<Sprite>& sprites,
-    int padding,
-    int width_limit,
-    int height_limit,
-    int& out_width,
-    int& out_height
-) {
-    if (sprites.empty()) {
-        return false;
-    }
-
-    const int ref_w = sprites[0].w;
-    const int ref_h = sprites[0].h;
-    for (const auto& s : sprites) {
-        if (s.w != ref_w || s.h != ref_h) {
-            std::cerr << tr("Error: grid mode requires all sprites to be the same size; ")
-                      << s.path << " is " << s.w << "x" << s.h
-                      << tr(", expected ") << ref_w << "x" << ref_h << '\n';
-            return false;
-        }
-    }
-
-    int cell_w = 0;
-    int cell_h = 0;
-    if (!checked_add_int(ref_w, padding, cell_w) || !checked_add_int(ref_h, padding, cell_h)) {
-        return false;
-    }
-    if (cell_w <= 0 || cell_h <= 0) {
-        return false;
-    }
-    if ((width_limit > 0 && cell_w > width_limit) || (height_limit > 0 && cell_h > height_limit)) {
-        return false;
-    }
-
-    int n = static_cast<int>(sprites.size());
-    int max_cols = (width_limit > 0) ? (width_limit / cell_w) : n;
-    if (max_cols <= 0) {
-        return false;
-    }
-
-    int cols = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(n))));
-    if (cols <= 0) {
-        cols = 1;
-    }
-    cols = std::min(cols, max_cols);
-
-    // Widen if height limit is exceeded
-    if (height_limit > 0) {
-        while (cols < max_cols) {
-            int rows_needed = (n + cols - 1) / cols;
-            if (static_cast<long long>(rows_needed) * cell_h <= static_cast<long long>(height_limit)) {
-                break;
-            }
-            ++cols;
-        }
-        int rows_needed = (n + cols - 1) / cols;
-        if (static_cast<long long>(rows_needed) * cell_h > static_cast<long long>(height_limit)) {
-            return false;
-        }
-    }
-
-    for (int i = 0; i < n; ++i) {
-        int col = i % cols;
-        int row = i / cols;
-        long long x_ll = static_cast<long long>(col) * cell_w;
-        long long y_ll = static_cast<long long>(row) * cell_h;
-        if (x_ll > std::numeric_limits<int>::max() || y_ll > std::numeric_limits<int>::max()) {
-            return false;
-        }
-        sprites[i].x = static_cast<int>(x_ll);
-        sprites[i].y = static_cast<int>(y_ll);
-    }
-
-    int rows = (n + cols - 1) / cols;
-    long long total_w_ll = static_cast<long long>(cols) * cell_w;
-    long long total_h_ll = static_cast<long long>(rows) * cell_h;
-    if (total_w_ll > std::numeric_limits<int>::max() || total_h_ll > std::numeric_limits<int>::max()) {
-        return false;
-    }
-    out_width = static_cast<int>(total_w_ll);
-    out_height = static_cast<int>(total_h_ll);
-    return true;
-}
-
-bool compute_tight_atlas_bounds(const std::vector<Sprite>& sprites, int& out_width, int& out_height) {
-    out_width = 0;
-    out_height = 0;
-    for (const auto& s : sprites) {
-        int x1 = 0;
-        int y1 = 0;
-        if (!checked_add_int(s.x, s.w, x1) || !checked_add_int(s.y, s.h, y1)) {
-            return false;
-        }
-        out_width = std::max(x1, out_width);
-        out_height = std::max(y1, out_height);
-    }
-    return out_width > 0 && out_height > 0;
-}
-
-int next_power_of_two(int v) {
-    if (v <= 1) {
-        return 1;
-    }
-
-    int p = 1;
-    while (p < v) {
-        if (p > std::numeric_limits<int>::max() / 2) {
-            return -1;
-        }
-        p <<= 1;
-    }
-    return p;
-}
-
-bool pick_better_layout_candidate(
-    size_t candidate_area,
-    int candidate_w,
-    int candidate_h,
-    bool have_best,
-    size_t best_area,
-    int best_w,
-    int best_h,
-    OptimizeTarget optimize_target
-) {
-    if (!have_best) {
-        return true;
-    }
-
-    int candidate_max_side = std::max(candidate_w, candidate_h);
-    int best_max_side = std::max(best_w, best_h);
-    int candidate_aspect_delta = std::abs(candidate_w - candidate_h);
-    int best_aspect_delta = std::abs(best_w - best_h);
-
-    if (optimize_target == OptimizeTarget::GPU) {
-        if (candidate_max_side != best_max_side) {
-            return candidate_max_side < best_max_side;
-        }
-        if (candidate_area != best_area) {
-            return candidate_area < best_area;
-        }
-        if (candidate_aspect_delta != best_aspect_delta) {
-            return candidate_aspect_delta < best_aspect_delta;
-        }
-        return candidate_w < best_w;
-    }
-
-    if (candidate_area != best_area) {
-        return candidate_area < best_area;
-    }
-
-    if (candidate_max_side != best_max_side) {
-        return candidate_max_side < best_max_side;
-    }
-
-    if (candidate_aspect_delta != best_aspect_delta) {
-        return candidate_aspect_delta < best_aspect_delta;
-    }
-
-    return candidate_w < best_w;
-}
-
-} // namespace
-
-bool pack_atlases(
-    std::vector<Sprite>& sprites,
-    int max_w,
-    int max_h,
-    int padding,
-    Mode mode,
-    OptimizeTarget optimize_target,
-    bool allow_rotate,
-    bool enforce_sort_order,
-    std::vector<Atlas>& out_atlases
-) {
-    if (sprites.empty()) {
-        return true;
-    }
-
-    // Grid mode: uniform-cell layout, split into equal-capacity atlases when needed.
-    if (mode == Mode::GRID) {
-        const int ref_w = sprites[0].w;
-        const int ref_h = sprites[0].h;
-        for (const auto& s : sprites) {
-            if (s.w != ref_w || s.h != ref_h) {
-                std::cerr << tr("Error: grid mode requires all sprites to be the same size; ")
-                          << s.path << " is " << s.w << "x" << s.h
-                          << tr(", expected ") << ref_w << "x" << ref_h << '\n';
-                return false;
-            }
-        }
-        int cell_w = 0;
-        int cell_h = 0;
-        if (!checked_add_int(ref_w, padding, cell_w) || !checked_add_int(ref_h, padding, cell_h)) {
-            return false;
-        }
-        if (cell_w <= 0 || cell_h <= 0 || cell_w > max_w || cell_h > max_h) {
-            return false;
-        }
-        int cols = max_w / cell_w;
-        int rows_per_atlas = max_h / cell_h;
-        if (cols <= 0 || rows_per_atlas <= 0) {
-            return false;
-        }
-        int capacity = cols * rows_per_atlas;
-        int n = static_cast<int>(sprites.size());
-        int atlas_idx = 0;
-        for (int base = 0; base < n; base += capacity, ++atlas_idx) {
-            int count = std::min(capacity, n - base);
-            int atlas_rows = (count + cols - 1) / cols;
-            long long aw = static_cast<long long>(cols) * cell_w;
-            long long ah = static_cast<long long>(atlas_rows) * cell_h;
-            if (aw > std::numeric_limits<int>::max() || ah > std::numeric_limits<int>::max()) {
-                return false;
-            }
-            out_atlases.push_back({static_cast<int>(aw), static_cast<int>(ah)});
-            for (int i = 0; i < count; ++i) {
-                int col = i % cols;
-                int row = i / cols;
-                long long x_ll = static_cast<long long>(col) * cell_w;
-                long long y_ll = static_cast<long long>(row) * cell_h;
-                if (x_ll > std::numeric_limits<int>::max() || y_ll > std::numeric_limits<int>::max()) {
-                    return false;
-                }
-                sprites[base + i].x = static_cast<int>(x_ll);
-                sprites[base + i].y = static_cast<int>(y_ll);
-                sprites[base + i].atlas_index = atlas_idx;
-            }
-        }
-        return true;
-    }
-
-    std::vector<Sprite> remaining = sprites;
-    std::vector<Sprite> all_packed;
-    int atlas_index = 0;
-    const std::array<SortMode, k_sort_mode_count> sort_modes = {
-        SortMode::Area,
-        SortMode::MaxSide,
-        SortMode::Height,
-        SortMode::Width,
-        SortMode::Perimeter,
-        SortMode::None
-    };
-    const std::array<RectHeuristic, k_rect_heuristic_count> rect_heuristics = {
-        RectHeuristic::BestShortSideFit,
-        RectHeuristic::BestAreaFit,
-        RectHeuristic::BottomLeft
-    };
-
-    while (!remaining.empty()) {
-        int min_width = std::numeric_limits<int>::max();
-        size_t remaining_area = 0;
-        for (const auto& s : remaining) {
-            int rw = 0;
-            int rh = 0;
-            if (!checked_add_int(s.w, padding, rw) || !checked_add_int(s.h, padding, rh)) {
-                return false;
-            }
-            min_width = std::min(min_width, rw);
-            size_t sprite_area = 0;
-            if (!checked_mul_size_t(static_cast<size_t>(s.w), static_cast<size_t>(s.h), sprite_area) ||
-                sprite_area > std::numeric_limits<size_t>::max() - remaining_area) {
-                return false;
-            }
-            remaining_area += sprite_area;
-        }
-        if (min_width <= 0 || min_width > max_w) {
-            return false;
-        }
-
-        std::unordered_set<int> seen_widths;
-        std::vector<int> width_candidates;
-        auto add_width_candidate = [&](int width) {
-            if (width < min_width || width > max_w) {
-                return;
-            }
-            if (mode == Mode::POT) {
-                width = next_power_of_two(width);
-                if (width <= 0 || width < min_width || width > max_w) {
-                    return;
-                }
-            }
-            if (seen_widths.insert(width).second) {
-                width_candidates.push_back(width);
-            }
-        };
-        add_width_candidate(min_width);
-        add_width_candidate(max_w);
-        if (remaining_area > 0) {
-            const long double root = std::sqrt(static_cast<long double>(remaining_area));
-            if (root <= static_cast<long double>(std::numeric_limits<int>::max())) {
-                add_width_candidate(static_cast<int>(std::ceil(root)));
-            }
-        }
-        const int range = std::max(0, max_w - min_width);
-        const int step = std::max(k_search_step_min, range / k_search_step_divisor);
-        for (int mul : k_guided_search_offsets) {
-            const long long w_ll =
-                static_cast<long long>(min_width) +
-                (static_cast<long long>(mul) * static_cast<long long>(step));
-            if (w_ll < static_cast<long long>(std::numeric_limits<int>::min()) ||
-                w_ll > static_cast<long long>(std::numeric_limits<int>::max())) {
-                continue;
-            }
-            add_width_candidate(static_cast<int>(w_ll));
-        }
-        std::ranges::sort(width_candidates);
-
-        struct MultipackCandidate {
-            bool valid = false;
-            int used_w = 0;
-            int used_h = 0;
-            size_t area = 0;
-            size_t packed_area = 0;
-            int packed_count = 0;
-            std::vector<Sprite> packed;
-            std::vector<Sprite> left;
-        };
-        auto better_multipack_candidate = [&](const MultipackCandidate& candidate,
-                                              const MultipackCandidate& best) {
-            if (!best.valid) {
-                return true;
-            }
-            if (optimize_target == OptimizeTarget::GPU) {
-                if (candidate.packed_count != best.packed_count) {
-                    return candidate.packed_count > best.packed_count;
-                }
-                if (candidate.packed_area != best.packed_area) {
-                    return candidate.packed_area > best.packed_area;
-                }
-                return pick_better_layout_candidate(
-                    candidate.area, candidate.used_w, candidate.used_h, true,
-                    best.area, best.used_w, best.used_h,
-                    OptimizeTarget::GPU);
-            }
-
-            // For SPACE in multipack, avoid over-fragmenting into tiny dense atlases:
-            // prioritize packing more content this round, then prefer lower area.
-            if (candidate.packed_area != best.packed_area) {
-                return candidate.packed_area > best.packed_area;
-            }
-            if (candidate.packed_count != best.packed_count) {
-                return candidate.packed_count > best.packed_count;
-            }
-            if (candidate.area != best.area) {
-                return candidate.area < best.area;
-            }
-            return pick_better_layout_candidate(
-                candidate.area, candidate.used_w, candidate.used_h, true,
-                best.area, best.used_w, best.used_h,
-                OptimizeTarget::SPACE);
-        };
-
-        MultipackCandidate best_candidate;
-        for (SortMode sort_mode : sort_modes) {
-            if (enforce_sort_order && sort_mode != SortMode::None) {
-                continue;
-            }
-            std::vector<Sprite> sorted = remaining;
-            if (!sort_sprites_by_mode(sorted, sort_mode)) {
-                continue;
-            }
-            for (int width : width_candidates) {
-                for (RectHeuristic heuristic : rect_heuristics) {
-                    PartialPackResult trial;
-                    if (!pack_compact_maxrects_partial(
-                            sorted, width, max_h, padding, heuristic, allow_rotate, trial)) {
-                        continue;
-                    }
-                    int final_w = trial.used_w;
-                    int final_h = trial.used_h;
-                    if (mode == Mode::POT) {
-                        final_w = next_power_of_two(final_w);
-                        final_h = next_power_of_two(final_h);
-                        if (final_w <= 0 || final_h <= 0 || final_w > max_w || final_h > max_h) {
-                            continue;
-                        }
-                    }
-                    size_t final_area = 0;
-                    if (!checked_mul_size_t(static_cast<size_t>(final_w), static_cast<size_t>(final_h), final_area)) {
-                        continue;
-                    }
-                    MultipackCandidate candidate;
-                    candidate.valid = true;
-                    candidate.used_w = final_w;
-                    candidate.used_h = final_h;
-                    candidate.area = final_area;
-                    candidate.packed_area = trial.packed_area;
-                    candidate.packed_count = static_cast<int>(trial.packed.size());
-                    candidate.packed = std::move(trial.packed);
-                    candidate.left = std::move(trial.remaining);
-                    if (better_multipack_candidate(candidate, best_candidate)) {
-                        best_candidate = std::move(candidate);
-                    }
-                }
-            }
-        }
-
-        if (!best_candidate.valid || best_candidate.packed.empty()) {
-            return false;
-        }
-        for (auto& s : best_candidate.packed) {
-            s.atlas_index = atlas_index;
-        }
-        out_atlases.push_back({best_candidate.used_w, best_candidate.used_h});
-        all_packed.insert(all_packed.end(), best_candidate.packed.begin(), best_candidate.packed.end());
-        remaining = std::move(best_candidate.left);
-        atlas_index++;
-    }
-
-    sprites = all_packed;
-    return true;
-}
-
-// Default maximum Hamming distance between two dHashes to consider sprites perceptually equal.
-static constexpr int k_default_dhash_threshold = 5;
-
-// Compute a 64-bit dHash for an RGBA pixel buffer.
-// Algorithm: sample a 9x8 greyscale grid (nearest-neighbor), then for each of the 8 rows
-// compare 8 adjacent column pairs; bit=1 if left < right. Returns 64-bit hash.
-// Alpha-premultiplied luma: grey = (0.299*R + 0.587*G + 0.114*B) * (A/255.0)
-static uint64_t compute_dhash(const unsigned char* rgba, int w, int h) {
-    if (rgba == nullptr || w <= 0 || h <= 0) {
-        return 0;
-    }
-    // Sample a 9x8 grid (9 cols, 8 rows)
-    double grid[8][9];
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 9; ++col) {
-            int px = (col * (w - 1)) / 8;
-            int py = (row * (h - 1)) / 7;
-            if (px < 0) px = 0;
-            if (px >= w) px = w - 1;
-            if (py < 0) py = 0;
-            if (py >= h) py = h - 1;
-            const unsigned char* p = rgba + (static_cast<size_t>(py) * static_cast<size_t>(w) + static_cast<size_t>(px)) * 4;
-            double a = p[3] / 255.0;
-            grid[row][col] = (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * a;
-        }
-    }
-    uint64_t hash = 0;
-    int bit = 0;
-    for (int row = 0; row < 8; ++row) {
-        for (int col = 0; col < 8; ++col) {
-            if (grid[row][col] < grid[row][col + 1]) {
-                hash |= (uint64_t(1) << bit);
-            }
-            ++bit;
-        }
-    }
-    return hash;
-}
 
 // All settings derived from parsing argv.  Fields that express an override
 // (has_*_override == true) indicate that the corresponding value was
@@ -3675,12 +172,15 @@ struct LayoutArgs {
     bool has_trim_override = false;
     bool allow_rotate = false;
     bool has_rotate_override = false;
+    bool rotate_ccw = false;
+    bool has_rotate_direction_override = false;
     bool multipack = false;
     bool has_multipack_override = false;
     std::string deduplicateMode = "none";
     bool has_deduplicate_override = false;
-    int dedup_threshold = k_default_dhash_threshold;
+    int dedup_threshold = sprat::core::k_default_dedup_hash_threshold;
     bool has_dedup_threshold_override = false;
+    int dedup_tolerance = sprat::core::k_default_dedup_pixel_tolerance;
     FrameSort frame_sort = FrameSort::Name;
     StableMetric stable_metric = StableMetric::Area;
     bool has_frame_sort_override = false;
@@ -3831,6 +331,19 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
                 return 1;
             }
             args.has_dedup_threshold_override = true;
+        } else if (arg == "--dedup-tolerance" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (!parse_non_negative_int(value, args.dedup_tolerance) || args.dedup_tolerance > 255) {
+                std::cerr << tr("Invalid dedup tolerance: ") << value << tr(" (must be 0-255)\n");
+                return 1;
+            }
+        } else if (arg == "--rotate-direction" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (!parse_rotate_direction(value, args.rotate_ccw)) {
+                std::cerr << tr("Invalid rotate direction: ") << value << tr(" (must be cw or ccw)\n");
+                return 1;
+            }
+            args.has_rotate_direction_override = true;
         } else if (arg == "--sort" && i + 1 < argc) {
             const std::string value = argv[++i];
             if (!parse_frame_sort_from_string(value, args.frame_sort, args.stable_metric)) {
@@ -3879,106 +392,45 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
     return -1; // continue
 }
 
-int run_spratlayout(int argc, char** argv) {
-#ifdef _WIN32
-    // Set stdout to binary mode to avoid \r\n translation in layout output.
-    // Suppress failure: when running as a subprocess of a GUI application the
-    // pipe handle may not support _setmode; this is non-fatal.
-    _setmode(_fileno(stdout), _O_BINARY);
-#endif
-    LayoutArgs args;
-    const int early_exit = try_parse_args(argc, argv, args);
-    if (early_exit >= 0) {
-        return early_exit;
+// Effective settings: command-line options, then the selected profile, then defaults.
+struct LayoutSettings {
+    std::string profile_name = k_default_profile_name;
+    Mode mode = k_default_mode;
+    OptimizeTarget optimize_target = k_default_optimize_target;
+    int max_width_limit = 0;   // 0 = no limit
+    int max_height_limit = 0;  // 0 = no limit
+    int padding = k_default_padding;
+    int extrude = k_default_extrude;
+    double scale = k_default_scale;  // includes the resolution scale
+    bool trim_transparent = k_default_trim_transparent;
+    bool allow_rotate = false;
+    bool rotate_ccw = false;
+    bool multipack = false;
+    unsigned int thread_limit = k_default_threads;
+    bool incremental = false;
+    // Profiles of the loaded config file, by name.
+    std::unordered_map<std::string, ProfileDefinition> profiles;
+};
+
+const char* mode_name(Mode mode) {
+    switch (mode) {
+        case Mode::FAST: return "fast";
+        case Mode::COMPACT: return "compact";
+        case Mode::GRID: return "grid";
+        case Mode::POT: return "pot";
     }
-#ifdef _WIN32
-    // Set stdin to binary mode only when --stdin-list is active so path data
-    // read from stdin is not corrupted by \r\n translation.
-    if (args.stdin_list) {
-        _setmode(_fileno(stdin), _O_BINARY);
-    }
-#endif
+    return "pot";
+}
 
-    if (args.show_profiles_config) {
-        const fs::path exec_dir_local = sprat::core::get_executable_dir(argv[0]);
-        const auto candidates = build_default_profiles_config_candidates(exec_dir_local);
-        for (const fs::path& candidate : candidates) {
-            std::error_code ec;
-            if (fs::exists(candidate, ec) && !ec) {
-                std::cout << candidate.string() << "\n";
-                return 0;
-            }
-        }
-        std::cout << k_global_profiles_config_path << "\n";
-        return 0;
-    }
-
-    if (args.folder.empty() && !args.stdin_list) {
-        print_usage();
-        return 1;
-    }
-
-    // Unpack parsed args into named locals so the rest of the function is
-    // unchanged.  Fields with has_*_override flags are resolved to their
-    // effective values here; profile loading may still override them below.
-    bool debug = args.debug;
-    fs::path folder = std::move(args.folder);
-    const std::string requested_profile_name = std::move(args.requested_profile_name);
-    const std::string profiles_config_path = std::move(args.profiles_config_path);
-    const bool has_mode_override = args.has_mode_override;
-    const bool has_optimize_override = args.has_optimize_override;
-    Mode mode = args.has_mode_override ? args.mode_override : k_default_mode;
-    OptimizeTarget optimize_target = args.has_optimize_override ? args.optimize_override : k_default_optimize_target;
-    int max_width_limit = args.max_width_limit;
-    int max_height_limit = args.max_height_limit;
-    bool has_max_width_limit = args.has_max_width_limit;
-    bool has_max_height_limit = args.has_max_height_limit;
-    int padding = args.has_padding_override ? args.padding : k_default_padding;
-    bool has_padding_override = args.has_padding_override;
-    int extrude = args.has_extrude_override ? args.extrude : k_default_extrude;
-    bool has_extrude_override = args.has_extrude_override;
-    int source_resolution_width = args.source_resolution_width;
-    int source_resolution_height = args.source_resolution_height;
-    int target_resolution_width = args.target_resolution_width;
-    int target_resolution_height = args.target_resolution_height;
-    bool has_source_resolution = args.has_source_resolution;
-    bool has_target_resolution = args.has_target_resolution;
-    ResolutionReference resolution_reference = args.resolution_reference;
-    bool has_resolution_reference_override = args.has_resolution_reference_override;
-    double scale = args.has_scale_override ? args.scale : k_default_scale;
-    bool has_scale_override = args.has_scale_override;
-    bool trim_transparent = args.has_trim_override ? args.trim_transparent : k_default_trim_transparent;
-    bool has_trim_override = args.has_trim_override;
-    bool allow_rotate = args.has_rotate_override ? args.allow_rotate : false;
-    bool has_rotate_override = args.has_rotate_override;
-    bool multipack = args.has_multipack_override ? args.multipack : false;
-    bool has_multipack_override = args.has_multipack_override;
-    const std::string deduplicateMode = std::move(args.deduplicateMode);
-    const int dedup_threshold = args.dedup_threshold;
-    const FrameSort frame_sort = args.frame_sort;
-    const StableMetric stable_metric = args.stable_metric;
-    const bool has_frame_sort_override = args.has_frame_sort_override;
-    unsigned int thread_limit = args.has_threads_override ? args.thread_limit : k_default_threads;
-    bool has_threads_override = args.has_threads_override;
-    bool incremental = args.has_incremental_override ? args.incremental : false;
-    bool has_incremental_override = args.has_incremental_override;
-    const bool stdin_list = args.stdin_list;
-
-    std::vector<ProfileDefinition> profile_definitions;
-    std::unordered_map<std::string, ProfileDefinition> profile_map;
-    std::string selected_profile_name = k_default_profile_name;
-    const bool has_requested_profile = !requested_profile_name.empty();
-    if (has_requested_profile) {
-        selected_profile_name = requested_profile_name;
-    }
-
-    fs::path cwd = fs::current_path();
-    fs::path exec_dir = sprat::core::get_executable_dir(argv[0]);
-
-    std::string config_error;
+// Loads the first readable profiles config: --profiles-config, or the default candidates.
+// Fails only when a profile was requested.
+bool load_profiles(const LayoutArgs& args, const fs::path& cwd, const fs::path& exec_dir,
+                   std::vector<ProfileDefinition>& profile_definitions,
+                   bool& loaded_profile_file, fs::path& loaded_profile_path) {
+    const bool has_requested_profile = !args.requested_profile_name.empty();
     std::vector<fs::path> config_candidates;
-    if (!profiles_config_path.empty()) {
-        fs::path config_candidate(profiles_config_path);
+    if (!args.profiles_config_path.empty()) {
+        fs::path config_candidate(args.profiles_config_path);
         if (config_candidate.is_relative() && !cwd.empty()) {
             config_candidate = cwd / config_candidate;
         }
@@ -3987,8 +439,8 @@ int run_spratlayout(int argc, char** argv) {
         config_candidates = build_default_profiles_config_candidates(exec_dir);
     }
 
-    bool loaded_profile_file = false;
-    fs::path loaded_profile_path;
+    loaded_profile_file = false;
+    std::string config_error;
     std::vector<std::string> tried_candidates;
     std::vector<std::string> candidate_access_errors;
     for (const fs::path& candidate : config_candidates) {
@@ -4000,7 +452,7 @@ int run_spratlayout(int argc, char** argv) {
             }
             if (has_requested_profile) {
                 std::cerr << tr("Failed to load profile config (") << to_quoted(candidate) << tr("): ") << config_error << "\n";
-                return 1;
+                return false;
             }
             tried_candidates.push_back(candidate.string());
             continue;
@@ -4022,28 +474,132 @@ int run_spratlayout(int argc, char** argv) {
                 std::cerr << tr("  - ") << to_quoted(error) << "\n";
             }
         }
-        return 1;
+        return false;
+    }
+    return true;
+}
+
+// Fills in every setting the command line left unset from the profile.
+void apply_profile(const ProfileDefinition& profile, const LayoutArgs& args, LayoutSettings& s,
+                   bool& has_source_resolution, int& source_w, int& source_h,
+                   bool& has_target_resolution, int& target_w, int& target_h,
+                   ResolutionReference& resolution_reference) {
+    if (!args.has_mode_override) {
+        s.mode = profile.mode;
+    }
+    if (!args.has_optimize_override) {
+        s.optimize_target = profile.optimize_target;
+    }
+    if (!args.has_max_width_limit && profile.max_width) {
+        s.max_width_limit = *profile.max_width;
+    }
+    if (!args.has_max_height_limit && profile.max_height) {
+        s.max_height_limit = *profile.max_height;
+    }
+    if (!args.has_padding_override && profile.padding) {
+        s.padding = *profile.padding;
+    }
+    if (!args.has_extrude_override && profile.extrude) {
+        s.extrude = *profile.extrude;
+    }
+    if (!args.has_scale_override && profile.scale) {
+        s.scale = *profile.scale;
+    }
+    if (!args.has_trim_override && profile.trim_transparent) {
+        s.trim_transparent = *profile.trim_transparent;
+    }
+    if (!args.has_rotate_override && profile.rotate) {
+        s.allow_rotate = *profile.rotate;
+    }
+    if (!args.has_rotate_direction_override && profile.rotate_ccw) {
+        s.rotate_ccw = *profile.rotate_ccw;
+    }
+    if (!args.has_multipack_override && profile.multipack) {
+        s.multipack = *profile.multipack;
+    }
+    if (!args.has_threads_override && profile.threads) {
+        s.thread_limit = *profile.threads;
+    }
+    if (!args.has_incremental_override && profile.incremental) {
+        s.incremental = *profile.incremental;
+    }
+    if (!has_source_resolution && profile.source_resolution) {
+        source_w = profile.source_resolution->first;
+        source_h = profile.source_resolution->second;
+        has_source_resolution = true;
+    }
+    if (!has_target_resolution && profile.target_resolution) {
+        if (profile.target_resolution->first == -1 && profile.target_resolution->second == -1) {
+            if (has_source_resolution) {
+                target_w = source_w;
+                target_h = source_h;
+                has_target_resolution = true;
+            }
+        } else {
+            target_w = profile.target_resolution->first;
+            target_h = profile.target_resolution->second;
+            has_target_resolution = true;
+        }
+    }
+    if (!args.has_resolution_reference_override && profile.resolution_reference) {
+        resolution_reference = *profile.resolution_reference;
+    }
+}
+
+bool resolve_settings(const LayoutArgs& args, const fs::path& cwd, const fs::path& exec_dir,
+                      LayoutSettings& s) {
+    s.mode = args.has_mode_override ? args.mode_override : k_default_mode;
+    s.optimize_target = args.has_optimize_override ? args.optimize_override : k_default_optimize_target;
+    s.max_width_limit = args.max_width_limit;
+    s.max_height_limit = args.max_height_limit;
+    s.padding = args.has_padding_override ? args.padding : k_default_padding;
+    s.extrude = args.has_extrude_override ? args.extrude : k_default_extrude;
+    s.scale = args.has_scale_override ? args.scale : k_default_scale;
+    s.trim_transparent = args.has_trim_override ? args.trim_transparent : k_default_trim_transparent;
+    s.allow_rotate = args.has_rotate_override ? args.allow_rotate : false;
+    s.rotate_ccw = args.has_rotate_direction_override ? args.rotate_ccw : false;
+    s.multipack = args.has_multipack_override ? args.multipack : false;
+    s.thread_limit = args.has_threads_override ? args.thread_limit : k_default_threads;
+    s.incremental = args.has_incremental_override ? args.incremental : false;
+    int source_w = args.source_resolution_width;
+    int source_h = args.source_resolution_height;
+    int target_w = args.target_resolution_width;
+    int target_h = args.target_resolution_height;
+    bool has_source_resolution = args.has_source_resolution;
+    bool has_target_resolution = args.has_target_resolution;
+    ResolutionReference resolution_reference = args.resolution_reference;
+
+    const bool has_requested_profile = !args.requested_profile_name.empty();
+    if (has_requested_profile) {
+        s.profile_name = args.requested_profile_name;
     }
 
+    std::vector<ProfileDefinition> profile_definitions;
+    bool loaded_profile_file = false;
+    fs::path loaded_profile_path;
+    if (!load_profiles(args, cwd, exec_dir, profile_definitions, loaded_profile_file, loaded_profile_path)) {
+        return false;
+    }
     if (loaded_profile_file) {
         for (const auto& def : profile_definitions) {
-            profile_map.emplace(def.name, def);
+            s.profiles.emplace(def.name, def);
         }
     }
 
+    // Without --profile, the default profile applies only if the config defines it.
     const bool should_apply_profile =
-        has_requested_profile || (loaded_profile_file && profile_map.contains(selected_profile_name));
+        has_requested_profile || (loaded_profile_file && s.profiles.contains(s.profile_name));
     const bool profile_debug = env_flag_enabled("SPRAT_PROFILE_DEBUG");
     if (profile_debug) {
         std::cerr << "[profile-debug] requested_profile="
-                  << (has_requested_profile ? selected_profile_name : "<none>") << "\n";
+                  << (has_requested_profile ? s.profile_name : "<none>") << "\n";
         std::cerr << "[profile-debug] loaded_config="
                   << (loaded_profile_file ? loaded_profile_path.string() : "<none>") << "\n";
         std::cerr << "[profile-debug] profile_count=" << profile_definitions.size() << "\n";
     }
     if (should_apply_profile) {
-        auto profile_it = profile_map.find(selected_profile_name);
-        if (profile_it == profile_map.end()) {
+        auto profile_it = s.profiles.find(s.profile_name);
+        if (profile_it == s.profiles.end()) {
             std::string available;
             for (size_t idx = 0; idx < profile_definitions.size(); ++idx) {
                 if (idx > 0) {
@@ -4051,80 +607,25 @@ int run_spratlayout(int argc, char** argv) {
                 }
                 available += profile_definitions[idx].name;
             }
-            std::cerr << tr("Invalid profile '") << selected_profile_name << tr("'. Available profiles: ")
+            std::cerr << tr("Invalid profile '") << s.profile_name << tr("'. Available profiles: ")
                       << available << "\n";
-            return 1;
+            return false;
         }
 
         const ProfileDefinition& selected_profile = profile_it->second;
-        if (!has_mode_override) {
-            mode = selected_profile.mode;
-        }
-        if (!has_optimize_override) {
-            optimize_target = selected_profile.optimize_target;
-        }
-        if (!has_max_width_limit && selected_profile.max_width) {
-            max_width_limit = *selected_profile.max_width;
-        }
-        if (!has_max_height_limit && selected_profile.max_height) {
-            max_height_limit = *selected_profile.max_height;
-        }
-        if (!has_padding_override && selected_profile.padding) {
-            padding = *selected_profile.padding;
-        }
-        if (!has_extrude_override && selected_profile.extrude) {
-            extrude = *selected_profile.extrude;
-        }
-        if (!has_scale_override && selected_profile.scale) {
-            scale = *selected_profile.scale;
-        }
-        if (!has_trim_override && selected_profile.trim_transparent) {
-            trim_transparent = *selected_profile.trim_transparent;
-        }
-        if (!has_rotate_override && selected_profile.rotate) {
-            allow_rotate = *selected_profile.rotate;
-        }
-        if (!has_multipack_override && selected_profile.multipack) {
-            multipack = *selected_profile.multipack;
-        }
-        if (!has_threads_override && selected_profile.threads) {
-            thread_limit = *selected_profile.threads;
-        }
-        if (!has_incremental_override && selected_profile.incremental) {
-            incremental = *selected_profile.incremental;
-        }
-        if (!has_source_resolution && selected_profile.source_resolution) {
-            source_resolution_width = selected_profile.source_resolution->first;
-            source_resolution_height = selected_profile.source_resolution->second;
-            has_source_resolution = true;
-        }
-        if (!has_target_resolution && selected_profile.target_resolution) {
-            if (selected_profile.target_resolution->first == -1 &&
-                selected_profile.target_resolution->second == -1) {
-                if (has_source_resolution) {
-                    target_resolution_width = source_resolution_width;
-                    target_resolution_height = source_resolution_height;
-                    has_target_resolution = true;
-                }
-            } else {
-                target_resolution_width = selected_profile.target_resolution->first;
-                target_resolution_height = selected_profile.target_resolution->second;
-                has_target_resolution = true;
-            }
-        }
-        if (!has_resolution_reference_override && selected_profile.resolution_reference) {
-            resolution_reference = *selected_profile.resolution_reference;
-        }
+        apply_profile(selected_profile, args, s,
+                      has_source_resolution, source_w, source_h,
+                      has_target_resolution, target_w, target_h,
+                      resolution_reference);
         if (profile_debug) {
             std::cerr << "[profile-debug] applied_profile=" << selected_profile.name << "\n";
-            std::cerr << "[profile-debug] mode="
-                      << (mode == Mode::FAST ? "fast" : (mode == Mode::COMPACT ? "compact" : (mode == Mode::GRID ? "grid" : "pot")))
+            std::cerr << "[profile-debug] mode=" << mode_name(s.mode)
                       << " optimize="
-                      << (optimize_target == OptimizeTarget::GPU ? "gpu" : "space")
-                      << " padding=" << padding
-                      << " trim_transparent=" << (trim_transparent ? "true" : "false")
-                      << " rotate=" << (allow_rotate ? "true" : "false")
-                      << " scale=" << scale << "\n";
+                      << (s.optimize_target == OptimizeTarget::GPU ? "gpu" : "space")
+                      << " padding=" << s.padding
+                      << " trim_transparent=" << (s.trim_transparent ? "true" : "false")
+                      << " rotate=" << (s.allow_rotate ? "true" : "false")
+                      << " scale=" << s.scale << "\n";
         }
     } else if (profile_debug) {
         std::cerr << "[profile-debug] applied_profile=<none>\n";
@@ -4133,290 +634,420 @@ int run_spratlayout(int argc, char** argv) {
 
     if (has_source_resolution != has_target_resolution) {
         std::cerr << tr("Error: --source-resolution and --target-resolution must be provided together\n");
-        return 1;
+        return false;
     }
     if (has_source_resolution) {
-        const double scale_x =
-            static_cast<double>(target_resolution_width) / static_cast<double>(source_resolution_width);
-        const double scale_y =
-            static_cast<double>(target_resolution_height) / static_cast<double>(source_resolution_height);
+        const double scale_x = static_cast<double>(target_w) / static_cast<double>(source_w);
+        const double scale_y = static_cast<double>(target_h) / static_cast<double>(source_h);
         const double resolution_scale =
             (resolution_reference == ResolutionReference::Largest)
                 ? std::max(scale_x, scale_y)
                 : std::min(scale_x, scale_y);
-        scale *= resolution_scale;
+        s.scale *= resolution_scale;
     }
 
-    if (padding < extrude * 2) {
-        padding = extrude * 2;
+    // Extruded edges live in the padding.
+    if (s.padding < s.extrude * 2) {
+        s.padding = s.extrude * 2;
     }
+    return true;
+}
 
-    InputContext input_context;
-
-    if (stdin_list) {
+bool open_input(const LayoutArgs& args, const fs::path& cwd, InputContext& input) {
+    if (args.stdin_list) {
 #ifdef _WIN32
         _setmode(_fileno(stdin), _O_TEXT);
 #endif
-        if (!load_list_from_stdin(input_context, cwd)) {
-            std::cerr << tr("Error: Failed to initialize stdin list mode\n");
-            return 1;
-        }
-    } else if (folder == "-") {
-        if (!load_content_from_stdin(input_context)) {
+        open_stdin_list_input(input, cwd);
+        return true;
+    }
+    if (args.folder == "-") {
+        if (!open_stdin_archive_input(input)) {
             std::cerr << tr("Error: Failed to load content from stdin\n");
-            return 1;
+            return false;
         }
-    } else {
-        if (!detect_and_extract_tar_content(folder, input_context)) {
-            return 1;
+        return true;
+    }
+    return open_path_input(args.folder, input);
+}
+
+// Scales the packed (trimmed) size of each sprite. Trims stay in original-image pixels, and
+// exporters scale them separately (sprat::core::metadata_trim). Rounding the content and the
+// margins separately lets their sum drift from the scaled original size, so frames of one
+// animation would get different canvas sizes. The content size is therefore whatever is left
+// of the rounded canvas once the rounded margins are taken off.
+bool scale_sprites(std::vector<Sprite>& sprites, double scale) {
+    if (scale == 1.0) {
+        return true;
+    }
+    for (auto& s : sprites) {
+        int scaled_w = 0;
+        int scaled_h = 0;
+        if (!scale_dimension(s.w, scale, scaled_w) || !scale_dimension(s.h, scale, scaled_h)) {
+            std::cerr << tr("Error: scaled sprite dimensions are invalid\n");
+            return false;
+        }
+        sprat::core::Sprite trimmed;  // the layout's view of this sprite, for the shared trim rule
+        trimmed.path = s.path;
+        trimmed.src_x = s.trim_left;
+        trimmed.src_y = s.trim_top;
+        trimmed.trim_right = s.trim_right;
+        trimmed.trim_bottom = s.trim_bottom;
+        const sprat::core::MetadataTrim margins = sprat::core::metadata_trim(trimmed, 1.0);
+        const sprat::core::MetadataTrim scaled_margins = sprat::core::metadata_trim(trimmed, scale);
+        int canvas_w = 0;
+        int canvas_h = 0;
+        if (scale_dimension(s.w + margins.left + margins.right, scale, canvas_w) &&
+            scale_dimension(s.h + margins.top + margins.bottom, scale, canvas_h)) {
+            scaled_w = std::max(1, canvas_w - scaled_margins.left - scaled_margins.right);
+            scaled_h = std::max(1, canvas_h - scaled_margins.top - scaled_margins.bottom);
+        }
+        s.w = scaled_w;
+        s.h = scaled_h;
+    }
+    return true;
+}
+
+// Fills the sprite sizes and atlas bounds of the search request.
+bool measure_sprites(const std::vector<Sprite>& sprites, const LayoutSettings& settings,
+                     SearchRequest& request) {
+    const int padding = settings.padding;
+    int max_width = 0;
+    int max_height = 0;
+    int sum_width = 0;
+    int sum_height = 0;
+    size_t total_area = 0;
+    for (const auto& s : sprites) {
+        int padded_w = 0;
+        int padded_h = 0;
+        if (!checked_add_int(s.w, padding, padded_w) || !checked_add_int(s.h, padding, padded_h)) {
+            std::cerr << tr("Error: dimensions are too large\n");
+            return false;
+        }
+
+        size_t sprite_area = 0;
+        if (!checked_mul_size_t(static_cast<size_t>(padded_w), static_cast<size_t>(padded_h), sprite_area) ||
+            sprite_area > std::numeric_limits<size_t>::max() - total_area) {
+            std::cerr << tr("Error: total area is too large\n");
+            return false;
+        }
+        total_area += sprite_area;
+
+        max_width = std::max(max_width, padded_w);
+        max_height = std::max(max_height, padded_h);
+        if (!checked_add_int(sum_width, padded_w, sum_width) ||
+            !checked_add_int(sum_height, padded_h, sum_height)) {
+            std::cerr << tr("Error: dimensions are too large\n");
+            return false;
         }
     }
 
-    const fs::path cache_path = build_cache_path(input_context.working_folder);
+    int width_upper_bound = sum_width;
+    int height_upper_bound = sum_height;
+    if (settings.max_width_limit > 0) {
+        width_upper_bound = std::min(width_upper_bound, settings.max_width_limit);
+    }
+    if (settings.max_height_limit > 0) {
+        height_upper_bound = std::min(height_upper_bound, settings.max_height_limit);
+    }
+    // POT atlases can only be as large as the largest power of two within each limit.
+    const auto effective_limit = [&](int limit) {
+        return settings.mode == Mode::POT ? pot_limit(limit) : limit;
+    };
+    const int width_limit = settings.max_width_limit > 0 ? effective_limit(settings.max_width_limit) : 0;
+    const int height_limit = settings.max_height_limit > 0 ? effective_limit(settings.max_height_limit) : 0;
+    if ((width_limit > 0 && max_width > width_limit) || (height_limit > 0 && max_height > height_limit) ||
+        max_width > width_upper_bound || max_height > height_upper_bound) {
+        std::cerr << tr("Error: sprites (up to ") << max_width << tr(" wide and ") << max_height
+                  << tr(" high, with padding) exceed the atlas limit");
+        if (width_limit > 0 || height_limit > 0) {
+            std::cerr << " (" << (width_limit > 0 ? std::to_string(width_limit) : std::string("-")) << "x"
+                      << (height_limit > 0 ? std::to_string(height_limit) : std::string("-"));
+            if (settings.mode == Mode::POT) {
+                std::cerr << tr(", the largest power of two within --max-width/--max-height");
+            }
+            std::cerr << ")";
+        }
+        std::cerr << "\n";
+        return false;
+    }
+
+    request.max_sprite_width = max_width;
+    request.max_sprite_height = max_height;
+    request.sum_width = sum_width;
+    request.sum_height = sum_height;
+    request.total_area = total_area;
+    request.max_width_limit = settings.max_width_limit;
+    request.max_height_limit = settings.max_height_limit;
+    request.width_upper_bound = width_upper_bound;
+    request.height_upper_bound = height_upper_bound;
+    return true;
+}
+
+// The output options of a run, shared with prewarmed layouts so they match a real run.
+LayoutOutputOptions make_output_options(const LayoutArgs& args, const LayoutSettings& settings,
+                                        const fs::path& root) {
+    LayoutOutputOptions options;
+    options.scale = settings.scale;
+    options.extrude = settings.extrude;
+    options.multipack = settings.multipack;
+    options.rotate_ccw = settings.rotate_ccw;
+    options.debug = args.debug;
+    options.root = root;
+    return options;
+}
+
+// The layout cache files of this run.
+struct CacheFiles {
+    fs::path base;
+    std::string layout_signature;
+    fs::path layout;
+    std::string seed_signature;
+    fs::path seed;
+    std::string incremental_signature;  // empty unless --incremental applies
+    fs::path incremental;
+};
+
+// A compact search finds the best layouts for both optimize targets, so the
+// compact profiles that differ from this run only in the optimize target (and
+// name) can be cached too.
+void prewarm_compact_profiles(const LayoutArgs& args, const LayoutSettings& settings,
+                              const LayoutCacheKey& key, const CacheFiles& cache,
+                              const std::vector<ImageSource>& sources,
+                              const std::vector<sprat::core::Alias>& aliases,
+                              const CompactSearchResult& result, const fs::path& root) {
+    for (const char* profile_name : k_compact_prewarm_profiles) {
+        auto prewarm_it = settings.profiles.find(profile_name);
+        if (prewarm_it == settings.profiles.end()) {
+            continue;
+        }
+        const ProfileDefinition& compact_profile = prewarm_it->second;
+        const Mode prewarm_mode =
+            args.has_mode_override ? args.mode_override : compact_profile.mode;
+        const OptimizeTarget prewarm_optimize_target =
+            args.has_optimize_override ? args.optimize_override : compact_profile.optimize_target;
+        if (prewarm_mode != Mode::COMPACT) {
+            continue;
+        }
+        const int prewarm_max_width =
+            args.has_max_width_limit ? settings.max_width_limit : compact_profile.max_width.value_or(0);
+        const int prewarm_max_height =
+            args.has_max_height_limit ? settings.max_height_limit : compact_profile.max_height.value_or(0);
+        const int prewarm_padding =
+            args.has_padding_override ? settings.padding : compact_profile.padding.value_or(0);
+        const double prewarm_scale =
+            args.has_scale_override ? settings.scale : compact_profile.scale.value_or(1.0);
+        const bool prewarm_trim_transparent =
+            args.has_trim_override ? settings.trim_transparent : compact_profile.trim_transparent.value_or(false);
+        const int prewarm_extrude =
+            args.has_extrude_override ? settings.extrude : compact_profile.extrude.value_or(k_default_extrude);
+        const bool prewarm_rotate =
+            args.has_rotate_override ? settings.allow_rotate : compact_profile.rotate.value_or(false);
+        const bool prewarm_rotate_ccw =
+            args.has_rotate_direction_override ? settings.rotate_ccw : compact_profile.rotate_ccw.value_or(false);
+        const bool prewarm_uses_resolution =
+            (!args.has_source_resolution && compact_profile.source_resolution)
+            || (!args.has_target_resolution && compact_profile.target_resolution);
+        // The candidates were packed with this run's inputs; they are only valid
+        // for a profile that differs in nothing but the optimize target.
+        if (prewarm_max_width != settings.max_width_limit || prewarm_max_height != settings.max_height_limit
+            || prewarm_padding != settings.padding || prewarm_scale != settings.scale
+            || prewarm_trim_transparent != settings.trim_transparent || prewarm_extrude != settings.extrude
+            || prewarm_rotate != settings.allow_rotate || prewarm_rotate_ccw != settings.rotate_ccw
+            || prewarm_uses_resolution) {
+            continue;
+        }
+        LayoutCacheKey prewarm_key = key;
+        prewarm_key.profile_name = compact_profile.name;
+        prewarm_key.mode = prewarm_mode;
+        prewarm_key.optimize_target = prewarm_optimize_target;
+        prewarm_key.multipack = false;
+        const std::string prewarm_signature = build_layout_signature(prewarm_key, sources);
+        if (prewarm_signature == cache.layout_signature) {
+            continue;
+        }
+
+        const LayoutCandidate& prewarm_candidate =
+            prewarm_optimize_target == OptimizeTarget::GPU ? result.best_gpu : result.best_space;
+        // Same final bounds as a run of that profile (see tighten_atlas_bounds).
+        int prewarm_width = prewarm_candidate.w;
+        int prewarm_height = prewarm_candidate.h;
+        if (settings.padding > 0 &&
+            !compute_tight_atlas_bounds(prewarm_candidate.sprites, prewarm_width, prewarm_height)) {
+            continue;
+        }
+        const std::vector<Atlas> prewarm_atlases = {{prewarm_width, prewarm_height}};
+        LayoutOutputOptions prewarm_options = make_output_options(args, settings, root);
+        prewarm_options.debug = false;  // cached layouts never carry the debug header
+        // Deduplication ran with the same settings and trimming, so the aliases are the same.
+        const std::string prewarm_output = build_layout_output_text(
+            prewarm_atlases, prewarm_candidate.sprites, aliases, prewarm_options);
+        save_output_cache(build_output_cache_path(cache.base, prewarm_signature), prewarm_signature, prewarm_output);
+    }
+}
+
+// Packs all sprites into one atlas with the selected mode.
+bool pack_single_atlas(const LayoutArgs& args, const LayoutSettings& settings,
+                       const SearchRequest& request, const LayoutCacheKey& key,
+                       const CacheFiles& cache, const std::vector<ImageSource>& sources,
+                       const std::vector<sprat::core::Alias>& aliases,
+                       const fs::path& root, std::vector<Sprite>& sprites,
+                       int& atlas_width, int& atlas_height) {
+    switch (settings.mode) {
+        case Mode::POT:
+            return search_pot_layout(request, sprites, atlas_width, atlas_height);
+        case Mode::GRID:
+            return search_grid_layout(request, sprites, atlas_width, atlas_height);
+        case Mode::FAST:
+            return search_fast_layout(request, sprites, atlas_width, atlas_height);
+        case Mode::COMPACT:
+            break;
+    }
+
+    CompactSearchResult result;
+    if (!search_compact_layout(request, sprites, result)) {
+        return false;
+    }
+    const LayoutCandidate* selected = select_compact_candidate(result, settings.optimize_target);
+    if (selected == nullptr || !selected->valid) {
+        std::cerr << tr("Error: failed to compute compact layout\n");
+        return false;
+    }
+    sprites = selected->sprites;
+    atlas_width = selected->w;
+    atlas_height = selected->h;
+    if (result.best_gpu.valid && result.best_space.valid) {
+        prewarm_compact_profiles(args, settings, key, cache, sources, aliases, result, root);
+    }
+    return true;
+}
+
+// Reused positions (layout seed or --incremental) only give the extent of the sprites. A pot
+// atlas still needs power-of-two sides within the limits, as search_pot_layout picks them;
+// returns false when the reused positions can't give one, so the layout is searched again.
+bool fit_reused_atlas(const LayoutSettings& settings, int& width, int& height) {
+    if (settings.mode != Mode::POT) {
+        return true;
+    }
+    const int pot_width = next_power_of_two(width);
+    const int pot_height = next_power_of_two(height);
+    if (pot_width <= 0 || pot_height <= 0 ||
+        (settings.max_width_limit > 0 && pot_width > pot_limit(settings.max_width_limit)) ||
+        (settings.max_height_limit > 0 && pot_height > pot_limit(settings.max_height_limit))) {
+        return false;
+    }
+    width = pot_width;
+    height = pot_height;
+    return true;
+}
+
+// Packing reserves padding after the last sprite of each row and column; drop it.
+bool tighten_atlas_bounds(const std::vector<Sprite>& sprites, bool multipack,
+                          std::vector<Atlas>& atlases, int& atlas_width, int& atlas_height) {
+    if (multipack) {
+        for (size_t ai = 0; ai < atlases.size(); ++ai) {
+            int tight_w = 0;
+            int tight_h = 0;
+            for (const auto& s : sprites) {
+                if (s.atlas_index != static_cast<int>(ai)) {
+                    continue;
+                }
+                int x1 = 0;
+                int y1 = 0;
+                if (!checked_add_int(s.x, s.w, x1) || !checked_add_int(s.y, s.h, y1)) {
+                    std::cerr << tr("Error: failed to compute final atlas bounds\n");
+                    return false;
+                }
+                tight_w = std::max(x1, tight_w);
+                tight_h = std::max(y1, tight_h);
+            }
+            if (tight_w > 0 && tight_h > 0) {
+                atlases[ai].width = tight_w;
+                atlases[ai].height = tight_h;
+            }
+        }
+        return true;
+    }
+    if (!compute_tight_atlas_bounds(sprites, atlas_width, atlas_height)) {
+        std::cerr << tr("Error: failed to compute final atlas bounds\n");
+        return false;
+    }
+    if (!atlases.empty()) {
+        atlases[0].width = atlas_width;
+        atlases[0].height = atlas_height;
+    }
+    return true;
+}
+
+} // namespace
+
+int run_spratlayout(int argc, char** argv) {
+#ifdef _WIN32
+    // Set stdout to binary mode to avoid \r\n translation in layout output.
+    // Suppress failure: when running as a subprocess of a GUI application the
+    // pipe handle may not support _setmode; this is non-fatal.
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    LayoutArgs args;
+    const int early_exit = try_parse_args(argc, argv, args);
+    if (early_exit >= 0) {
+        return early_exit;
+    }
+#ifdef _WIN32
+    // Set stdin to binary mode only when --stdin-list is active so path data
+    // read from stdin is not corrupted by \r\n translation.
+    if (args.stdin_list) {
+        _setmode(_fileno(stdin), _O_BINARY);
+    }
+#endif
+
+    const fs::path exec_dir = sprat::core::get_executable_dir(argv[0]);
+    if (args.show_profiles_config) {
+        for (const fs::path& candidate : build_default_profiles_config_candidates(exec_dir)) {
+            std::error_code ec;
+            if (fs::exists(candidate, ec) && !ec) {
+                std::cout << candidate.string() << "\n";
+                return 0;
+            }
+        }
+        std::cout << k_global_profiles_config_path << "\n";
+        return 0;
+    }
+
+    if (args.folder.empty() && !args.stdin_list) {
+        print_usage();
+        return 1;
+    }
+
+    const fs::path cwd = fs::current_path();
+    LayoutSettings settings;
+    if (!resolve_settings(args, cwd, exec_dir, settings)) {
+        return 1;
+    }
+
+    InputContext input_context;
+    if (!open_input(args, cwd, input_context)) {
+        return 1;
+    }
+    const fs::path root = layout_root(input_context);
+
+    CacheFiles cache;
+    // Archives are extracted to a new folder on every run, so their layouts are not cached.
+    if (input_context.type != InputType::Archive) {
+        cache.base = build_cache_path(input_context.working_folder);
+    }
     const long long now_unix = now_unix_seconds();
-    remove_legacy_top_level_cache_files();
-    prune_all_spratlayout_cache_families(k_cache_max_age_seconds, k_cache_max_layout_files, k_cache_max_seed_files);
-    prune_cache_family(cache_path, k_cache_max_age_seconds, k_cache_max_layout_files, k_cache_max_seed_files);
+    prune_all_caches();
+    prune_cache_family(cache.base);
 
     std::vector<ImageSource> sources;
-    std::unordered_set<std::string> excluded_source_paths;
-    auto add_excluded_source = [&](const fs::path& path, const std::string* relative_key = nullptr) {
-        excluded_source_paths.insert(normalize_path_key(path));
-        if (relative_key != nullptr && !relative_key->empty()) {
-            excluded_source_paths.insert(*relative_key);
-        }
-    };
-    auto is_excluded_source = [&](const fs::path& path, const fs::path* root) {
-        if (excluded_source_paths.contains(normalize_path_key(path))) {
-            return true;
-        }
-        if (root != nullptr) {
-            std::error_code ec;
-            fs::path relative = fs::relative(path, *root, ec);
-            if (!ec && excluded_source_paths.contains(relative.lexically_normal().string())) {
-                return true;
-            }
-        }
-        return false;
-    };
-    auto load_exclusion_file = [&](const fs::path& file_path, const fs::path& base_root, bool strict) -> bool {
-        std::ifstream in(file_path);
-        if (!in) {
-            return !strict;
-        }
-        std::string line;
-        size_t line_number = 0;
-        while (std::getline(in, line)) {
-            ++line_number;
-            std::string trimmed = trim_copy(line);
-            if (trimmed.empty() || trimmed.front() == '#') {
-                continue;
-            }
-
-            std::string path_text;
-            if (trimmed.size() >= 7 && trimmed.compare(0, 7, "exclude") == 0 &&
-                (trimmed.size() == 7 || std::isspace(static_cast<unsigned char>(trimmed[7])))) {
-                size_t pos = 7;
-                while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos])) != 0) {
-                    ++pos;
-                }
-                if (pos < trimmed.size() && trimmed[pos] == '"') {
-                    if (!parse_quoted_path_argument(trimmed, pos, path_text)) {
-                        if (strict) {
-                            std::cerr << tr("Invalid exclude path at line ") << line_number
-                                      << tr(": ") << to_quoted(trimmed) << "\n";
-                            return false;
-                        }
-                        continue;
-                    }
-                } else if (pos < trimmed.size()) {
-                    path_text = trimmed.substr(pos);
-                }
-            } else {
-                path_text = trimmed;
-            }
-
-            if (path_text.empty()) {
-                if (strict) {
-                    std::cerr << tr("Invalid exclude path at line ") << line_number
-                              << tr(": ") << to_quoted(trimmed) << "\n";
-                    return false;
-                }
-                continue;
-            }
-
-            fs::path excluded_path(path_text);
-            std::optional<std::string> relative_key;
-            if (excluded_path.is_relative()) {
-                relative_key = excluded_path.lexically_normal().string();
-                excluded_path = base_root / excluded_path;
-            }
-            add_excluded_source(excluded_path, relative_key ? &*relative_key : nullptr);
-        }
-        return true;
-    };
-    auto add_source = [&](const fs::path& image_path, bool strict) -> bool {
-        if (!is_supported_image_extension(image_path)) {
-            if (strict) {
-                std::cerr << tr("Invalid extension in list input: ") << to_quoted(image_path) << "\n";
-                return false;
-            }
-            return true;
-        }
-        const fs::path* exclusion_root =
-            input_context.type == InputType::Directory ? &input_context.working_folder : nullptr;
-        if (is_excluded_source(image_path, exclusion_root)) {
-            return true;
-        }
-        ImageMeta meta;
-        if (!read_image_meta(image_path, meta)) {
-            if (strict) {
-                std::cerr << tr("Failed to stat image: ") << to_quoted(image_path) << "\n";
-                return false;
-            }
-            return true;
-        }
-        ImageSource source;
-        source.file_path = image_path;
-        source.path = image_path.string();
-        source.meta = meta;
-        sources.push_back(std::move(source));
-        return true;
-    };
-
-    if (input_context.type == InputType::Directory) {
-        load_exclusion_file(input_context.working_folder / ".spratlayoutignore", input_context.working_folder, false);
-        for (const auto& entry : fs::recursive_directory_iterator(input_context.working_folder)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            if (!add_source(entry.path(), false)) {
-                continue;
-            }
-        }
-    } else if (input_context.type == InputType::TarFile) {
-        // Tar files are already extracted to working_folder - search recursively
-        for (const auto& entry : fs::recursive_directory_iterator(input_context.working_folder)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            if (!add_source(entry.path(), false)) {
-                continue;
-            }
-        }
-    } else if (input_context.type == InputType::StdinTar) {
-        // Stdin tar files are already extracted to working_folder - search recursively
-        for (const auto& entry : fs::recursive_directory_iterator(input_context.working_folder)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            if (!add_source(entry.path(), false)) {
-                continue;
-            }
-        }
-    } else {
-        // Parse a list-format stream (used for both ListFile and StdinList).
-        // base_dir is used to resolve relative paths when no "root" directive is present.
-        auto parse_list_stream = [&](std::istream& stream, const fs::path& base_dir) -> bool {
-            std::string line;
-            size_t line_number = 0;
-            fs::path list_root; // optional root override from "root" directive
-            while (std::getline(stream, line)) {
-                ++line_number;
-                std::string trimmed = trim_copy(line);
-                if (trimmed.empty() || trimmed.front() == '#') {
-                    continue;
-                }
-                if (trimmed.size() >= 7 && trimmed.compare(0, 7, "exclude") == 0 &&
-                    (trimmed.size() == 7 || std::isspace(static_cast<unsigned char>(trimmed[7])))) {
-                    size_t pos = 7;
-                    while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos])) != 0) {
-                        ++pos;
-                    }
-                    std::string excluded_path_text;
-                    if (pos < trimmed.size() && trimmed[pos] == '"') {
-                        std::string error;
-                        if (!sprat::core::parse_quoted(trimmed, pos, excluded_path_text, error)) {
-                            std::cerr << tr("Invalid exclude path at line ") << line_number << tr(": ") << error << "\n";
-                            return false;
-                        }
-                    } else if (pos < trimmed.size()) {
-                        excluded_path_text = trimmed.substr(pos);
-                    }
-                    if (excluded_path_text.empty()) {
-                        std::cerr << tr("Invalid exclude path at line ") << line_number << tr(": ") << to_quoted(trimmed) << "\n";
-                        return false;
-                    }
-                    fs::path excluded_path(excluded_path_text);
-                    if (excluded_path.is_relative()) {
-                        const fs::path& base = !list_root.empty() ? list_root : base_dir;
-                        excluded_path = base / excluded_path;
-                    }
-                    add_excluded_source(excluded_path);
-                    continue;
-                }
-                // "root <path>" directive: sets the base directory for resolving relative paths
-                if (trimmed.size() >= 4 && trimmed.compare(0, 4, "root") == 0 &&
-                    (trimmed.size() == 4 || std::isspace(static_cast<unsigned char>(trimmed[4])))) {
-                    size_t pos = 4;
-                    while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) ++pos;
-                    std::string root_str;
-                    if (pos < trimmed.size() && trimmed[pos] == '"') {
-                        std::string error;
-                        sprat::core::parse_quoted(trimmed, pos, root_str, error);
-                    } else if (pos < trimmed.size()) {
-                        root_str = trimmed.substr(pos);
-                    }
-                    if (!root_str.empty()) {
-                        fs::path rp(root_str);
-                        if (rp.is_relative()) {
-                            rp = base_dir / rp;
-                        }
-                        list_root = rp;
-                    }
-                    continue;
-                }
-                fs::path entry_path(trimmed);
-                if (entry_path.is_relative()) {
-                    const fs::path& base = !list_root.empty() ? list_root : base_dir;
-                    entry_path = base / entry_path;
-                }
-                if (!fs::exists(entry_path) || !fs::is_regular_file(entry_path)) {
-                    std::cerr << tr("Invalid image path at line ") << line_number << tr(": ") << to_quoted(trimmed) << "\n";
-                    return false;
-                }
-                if (!add_source(entry_path, true)) {
-                    return false;
-                }
-            }
-            return true;
-        };
-
-        if (input_context.type == InputType::StdinList) {
-            if (!parse_list_stream(std::cin, input_context.working_folder)) {
-                return 1;
-            }
-        } else {
-            std::ifstream list_file(input_context.working_folder);
-            if (!list_file) {
-                std::cerr << tr("Failed to open list file: ") << input_context.working_folder << "\n";
-                return 1;
-            }
-            if (!parse_list_stream(list_file, input_context.working_folder.parent_path())) {
-                return 1;
-            }
-        }
+    if (!collect_image_sources(input_context, sources)) {
+        return 1;
     }
 
-    bool do_sort = false;
-    if (has_frame_sort_override) {
-        do_sort = (frame_sort == FrameSort::Name);
-    }
-
-    const bool enforce_name_order   = (has_frame_sort_override && frame_sort == FrameSort::Name);
-    const bool enforce_stable_order = (has_frame_sort_override && frame_sort == FrameSort::Stable);
-
-    if (do_sort || enforce_stable_order) {
+    const bool enforce_name_order   = (args.has_frame_sort_override && args.frame_sort == FrameSort::Name);
+    const bool enforce_stable_order = (args.has_frame_sort_override && args.frame_sort == FrameSort::Stable);
+    if (enforce_name_order || enforce_stable_order) {
         std::ranges::sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
             int cmp = sprat::core::compare_natural(lhs.path, rhs.path);
             if (cmp != 0) {
@@ -4434,1448 +1065,170 @@ int run_spratlayout(int argc, char** argv) {
         return 1;
     }
 
-    const bool is_file = !do_sort && !enforce_stable_order;
-    const std::string layout_signature = build_layout_signature(
-        selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        padding, extrude, scale, trim_transparent, allow_rotate, is_file, deduplicateMode, dedup_threshold, sources);
-    const std::string layout_seed_signature = build_layout_seed_signature(
-        selected_profile_name, mode, optimize_target, max_width_limit, max_height_limit,
-        extrude, scale, trim_transparent, allow_rotate, is_file, sources);
-    const fs::path output_cache_path = build_output_cache_path(cache_path, layout_signature);
-    const fs::path seed_cache_path = build_seed_cache_path(cache_path, layout_seed_signature);
-
-    std::string incremental_seed_signature;
-    fs::path incremental_seed_cache_path;
-    if (incremental && !multipack) {
-        incremental_seed_signature = build_incremental_seed_signature(
-            selected_profile_name, mode, optimize_target,
-            max_width_limit, max_height_limit, extrude, scale,
-            trim_transparent, allow_rotate,
-            input_context.working_folder);
-        incremental_seed_cache_path = build_incremental_seed_cache_path(
-            cache_path, incremental_seed_signature);
+    LayoutCacheKey key;
+    key.profile_name = settings.profile_name;
+    key.mode = settings.mode;
+    key.optimize_target = settings.optimize_target;
+    key.max_width_limit = settings.max_width_limit;
+    key.max_height_limit = settings.max_height_limit;
+    key.padding = settings.padding;
+    key.extrude = settings.extrude;
+    key.scale = settings.scale;
+    key.trim_transparent = settings.trim_transparent;
+    key.allow_rotate = settings.allow_rotate;
+    key.preserve_source_order = !enforce_name_order && !enforce_stable_order;
+    key.multipack = settings.multipack;
+    key.rotate_ccw = settings.rotate_ccw;
+    key.order_key = build_order_key(args.has_frame_sort_override, args.frame_sort, args.stable_metric);
+    key.deduplicate_mode = args.deduplicateMode;
+    key.dedup_threshold = args.dedup_threshold;
+    key.dedup_tolerance = args.dedup_tolerance;
+    cache.layout_signature = build_layout_signature(key, sources);
+    cache.seed_signature = build_layout_seed_signature(key, sources);
+    // --debug adds a comment header, so it neither reads nor writes the layout cache.
+    if (!args.debug) {
+        cache.layout = build_output_cache_path(cache.base, cache.layout_signature);
+    }
+    cache.seed = build_seed_cache_path(cache.base, cache.seed_signature);
+    // Grid cells come from the sprite order and size alone, so grid layouts are never pieced
+    // together from earlier positions (that would also skip the same-size check).
+    const bool reuse_positions = settings.mode != Mode::GRID;
+    if (settings.incremental && !reuse_positions) {
+        std::cerr << tr("Warning: --incremental is ignored in grid mode\n");
+    }
+    const bool use_incremental = settings.incremental && !settings.multipack && reuse_positions;
+    if (use_incremental) {
+        cache.incremental_signature = build_incremental_seed_signature(key, input_context.working_folder);
+        cache.incremental = build_incremental_seed_cache_path(cache.base, cache.incremental_signature);
     }
 
-    if (!is_file_older_than_seconds(output_cache_path, k_cache_max_age_seconds)) {
+    if (is_cache_file_fresh(cache.layout)) {
         std::string cached_output;
-        if (load_output_cache(output_cache_path, layout_signature, cached_output)) {
+        if (load_output_cache(cache.layout, cache.layout_signature, cached_output)) {
             std::cout << cached_output;
-            return 0;
+            return sprat::core::finish_stdout() ? 0 : 1;
         }
     }
 
-    // Returns true if path ends with ".9.png" (case-sensitive).
-    auto is_nine_patch_path = [](const std::string& p) -> bool {
-        constexpr std::string_view suffix = ".9.png";
-        return p.size() >= suffix.size() &&
-               p.compare(p.size() - suffix.size(), suffix.size(), suffix) == 0;
-    };
+    ImageCache cache_entries;
+    load_image_cache(cache.base, cache_entries);
+    prune_stale_cache_entries(cache_entries, now_unix);
+    SpriteLoadOptions load_options;
+    load_options.trim_transparent = settings.trim_transparent;
+    load_options.deduplicate_mode = args.deduplicateMode;
+    load_options.thread_limit = settings.thread_limit;
+    std::vector<Sprite> sprites = load_sprites(sources, load_options, cache_entries, now_unix);
+    save_image_cache(cache.base, cache_entries);
 
-    // Parses Android nine-patch markers from the 1px opaque border of a full image.
-    // rgba  : RGBA pixel data for the full fw x fh image (including the 1px border).
-    // On success, fills sl/st/sr/sb with content-space insets and returns true.
-    auto parse_nine_patch = [](const unsigned char* rgba, int fw, int fh,
-                                int& sl, int& st, int& sr, int& sb) -> bool {
-        if (fw < 3 || fh < 3) return false;
-        auto is_black = [&](int col, int row) -> bool {
-            const unsigned char* p =
-                rgba + (static_cast<size_t>(row) * static_cast<size_t>(fw) + static_cast<size_t>(col)) * 4;
-            return p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 255;
-        };
-        int first_col = -1, last_col = -1;
-        for (int c = 1; c < fw - 1; ++c) {
-            if (is_black(c, 0)) {
-                if (first_col < 0) first_col = c;
-                last_col = c;
-            }
-        }
-        int first_row = -1, last_row = -1;
-        for (int r = 1; r < fh - 1; ++r) {
-            if (is_black(0, r)) {
-                if (first_row < 0) first_row = r;
-                last_row = r;
-            }
-        }
-        if (first_col < 0 || first_row < 0) return false;
-        sl = first_col - 1;
-        sr = (fw - 2) - last_col;
-        st = first_row - 1;
-        sb = (fh - 2) - last_row;
-        return true;
-    };
-
-    std::unordered_map<std::string, ImageCacheEntry> cache_entries;
-    load_image_cache(cache_path, cache_entries);
-    prune_stale_cache_entries(cache_entries, now_unix, k_cache_max_age_seconds);
-
-    struct SpriteLoadResult {
-        bool ok = false;
-        bool from_cache = false;
-        bool failed = false;
-        std::string fail_reason;
-        Sprite sprite;
-        std::string cache_key;
-        ImageCacheEntry new_entry;
-    };
-
-    const size_t source_count = sources.size();
-    std::vector<SpriteLoadResult> load_results(source_count);
-
-    auto process_source = [&](size_t i) {
-        const auto& source = sources[i];
-        const std::string& path = source.path;
-        const ImageMeta& meta = source.meta;
-        SpriteLoadResult& result = load_results[i];
-
-        const std::string cache_key = path + (trim_transparent ? "|1" : "|0");
-        result.cache_key = cache_key;
-
-        // Step 4a: cache hit
-        auto cache_it = cache_entries.find(cache_key);
-        if (cache_it != cache_entries.end()) {
-            const ImageCacheEntry& cached = cache_it->second;
-            if (cached.trim_transparent == trim_transparent &&
-                cached.file_size == meta.file_size &&
-                cached.mtime_ticks == meta.mtime_ticks) {
-                // If deduplication is requested and the relevant hash is missing,
-                // fall through to reload so we can compute the hash.
-                bool need_hash = false;
-                if (deduplicateMode == "exact" && cached.content_hash == 0) {
-                    need_hash = true;
-                } else if (deduplicateMode == "perceptual" && cached.perceptual_hash == 0) {
-                    need_hash = true;
-                }
-                if (!need_hash) {
-                    Sprite s;
-                    s.path = path;
-                    s.w = cached.w;
-                    s.h = cached.h;
-                    s.trim_left = cached.trim_left;
-                    s.trim_top = cached.trim_top;
-                    s.trim_right = cached.trim_right;
-                    s.trim_bottom = cached.trim_bottom;
-                    s.has_slice = cached.has_slice;
-                    s.slice_left = cached.slice_left;
-                    s.slice_top = cached.slice_top;
-                    s.slice_right = cached.slice_right;
-                    s.slice_bottom = cached.slice_bottom;
-                    result.ok = true;
-                    result.from_cache = true;
-                    result.sprite = std::move(s);
-                    return;
-                }
-            }
-        }
-
-        Sprite loaded_sprite;
-        loaded_sprite.path = path;
-        if (!trim_transparent) {
-            // Step 4b: load pixel data if needed for hashing or nine-patch parsing.
-            const bool is_nine_patch = is_nine_patch_path(path);
-            uint64_t entry_content_hash = 0;
-            uint64_t entry_perceptual_hash = 0;
-            int w = 0;
-            int h = 0;
-            if (deduplicateMode != "none" || is_nine_patch) {
-                int channels = 0;
-                unsigned char* px = stbi_load(path.c_str(), &w, &h, &channels, 4);
-                if (px == nullptr) {
-                    result.failed = true;
-                    result.fail_reason = stbi_failure_reason();
-                    return;
-                }
-                if (is_nine_patch && w >= 3 && h >= 3) {
-                    int sl = 0, st_v = 0, sr = 0, sb = 0;
-                    if (parse_nine_patch(px, w, h, sl, st_v, sr, sb)) {
-                        loaded_sprite.has_slice = true;
-                        loaded_sprite.slice_left = sl;
-                        loaded_sprite.slice_top = st_v;
-                        loaded_sprite.slice_right = sr;
-                        loaded_sprite.slice_bottom = sb;
-                    }
-                    // Content dimensions exclude the 1px marker border on each side.
-                    w -= 2;
-                    h -= 2;
-                    // Trim of (1,1,1,1) tells spratpack to skip the border row/column
-                    // when blitting pixels from the source file into the atlas.
-                    loaded_sprite.trim_left = 1;
-                    loaded_sprite.trim_top = 1;
-                    loaded_sprite.trim_right = 1;
-                    loaded_sprite.trim_bottom = 1;
-                }
-                if (deduplicateMode != "none") {
-                    if (is_nine_patch) {
-                        // Hash the inner content region (skip the 1px nine-patch border).
-                        const int fw = w + 2;
-                        uint64_t fnv = 14695981039346656037ULL;
-                        for (int ry = 1; ry <= h; ++ry) {
-                            const unsigned char* row =
-                                px + (static_cast<size_t>(ry) * static_cast<size_t>(fw) + 1) * 4;
-                            for (int rx = 0; rx < w; ++rx) {
-                                for (int c = 0; c < 4; ++c) {
-                                    fnv ^= row[static_cast<size_t>(rx) * 4 + static_cast<size_t>(c)];
-                                    fnv *= 1099511628211ULL;
-                                }
-                            }
-                        }
-                        entry_content_hash = fnv;
-                        std::vector<unsigned char> inner(
-                            static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
-                        for (int ry = 0; ry < h; ++ry) {
-                            const unsigned char* src =
-                                px + (static_cast<size_t>(1 + ry) * static_cast<size_t>(fw) + 1) * 4;
-                            unsigned char* dst = inner.data() +
-                                static_cast<size_t>(ry) * static_cast<size_t>(w) * 4;
-                            std::memcpy(dst, src, static_cast<size_t>(w) * 4);
-                        }
-                        entry_perceptual_hash = compute_dhash(inner.data(), w, h);
-                    } else {
-                        // FNV-1a over the full RGBA buffer
-                        const size_t nbytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
-                        uint64_t fnv = 14695981039346656037ULL;
-                        for (size_t bi = 0; bi < nbytes; ++bi) {
-                            fnv ^= px[bi];
-                            fnv *= 1099511628211ULL;
-                        }
-                        entry_content_hash = fnv;
-                        entry_perceptual_hash = compute_dhash(px, w, h);
-                    }
-                }
-                stbi_image_free(px);
-            } else {
-                int channels = 0;
-                if (stbi_info(path.c_str(), &w, &h, &channels) == 0) {
-                    result.failed = true;
-                    result.fail_reason = stbi_failure_reason();
-                    return;
-                }
-            }
-            loaded_sprite.w = w;
-            loaded_sprite.h = h;
-            result.ok = true;
-            result.sprite = loaded_sprite;
-            result.new_entry = {
-                .trim_transparent=trim_transparent,
-                .file_size=meta.file_size,
-                .mtime_ticks=meta.mtime_ticks,
-                .w=loaded_sprite.w,
-                .h=loaded_sprite.h,
-                .trim_left=loaded_sprite.trim_left,
-                .trim_top=loaded_sprite.trim_top,
-                .trim_right=loaded_sprite.trim_right,
-                .trim_bottom=loaded_sprite.trim_bottom,
-                .cached_at_unix=now_unix,
-                .content_hash=entry_content_hash,
-                .perceptual_hash=entry_perceptual_hash,
-                .has_slice=loaded_sprite.has_slice,
-                .slice_left=loaded_sprite.slice_left,
-                .slice_top=loaded_sprite.slice_top,
-                .slice_right=loaded_sprite.slice_right,
-                .slice_bottom=loaded_sprite.slice_bottom
-            };
-            return;
-        }
-
-        int w = 0;
-        int h = 0;
-        int channels = 0;
-        unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
-        if (data == nullptr) {
-            result.failed = true;
-            result.fail_reason = stbi_failure_reason();
-            return;
-        }
-
-        // For nine-patch images, parse the marker border and work on the inner content.
-        const bool is_nine_patch = is_nine_patch_path(path);
-        std::vector<unsigned char> nine_patch_inner;
-        const unsigned char* content_data = data;
-        int content_w = w;
-        int content_h = h;
-        if (is_nine_patch && w >= 3 && h >= 3) {
-            int sl = 0, st_v = 0, sr = 0, sb = 0;
-            if (parse_nine_patch(data, w, h, sl, st_v, sr, sb)) {
-                loaded_sprite.has_slice = true;
-                loaded_sprite.slice_left = sl;
-                loaded_sprite.slice_top = st_v;
-                loaded_sprite.slice_right = sr;
-                loaded_sprite.slice_bottom = sb;
-            }
-            content_w = w - 2;
-            content_h = h - 2;
-            nine_patch_inner.resize(
-                static_cast<size_t>(content_w) * static_cast<size_t>(content_h) * 4);
-            for (int ry = 0; ry < content_h; ++ry) {
-                const unsigned char* src =
-                    data + (static_cast<size_t>(1 + ry) * static_cast<size_t>(w) + 1) * 4;
-                unsigned char* dst =
-                    nine_patch_inner.data() + static_cast<size_t>(ry) * static_cast<size_t>(content_w) * 4;
-                std::memcpy(dst, src, static_cast<size_t>(content_w) * 4);
-            }
-            content_data = nine_patch_inner.data();
-        }
-
-        int min_x = 0;
-        int min_y = 0;
-        int max_x = -1;
-        int max_y = -1;
-        // Step 4c: compute hashes over trimmed region before freeing pixel data.
-        uint64_t entry_content_hash = 0;
-        uint64_t entry_perceptual_hash = 0;
-        // For nine-patch files, all trim values are offset by 1 to account for the
-        // 1px marker border that exists in the source file but not in the content buffer.
-        const int np_border = (is_nine_patch && w >= 3 && h >= 3) ? 1 : 0;
-        if (compute_trim_bounds(content_data, content_w, content_h, min_x, min_y, max_x, max_y)) {
-            loaded_sprite.trim_left = np_border + min_x;
-            loaded_sprite.trim_top = np_border + min_y;
-            loaded_sprite.trim_right = np_border + (content_w - 1) - max_x;
-            loaded_sprite.trim_bottom = np_border + (content_h - 1) - max_y;
-            loaded_sprite.w = max_x - min_x + 1;
-            loaded_sprite.h = max_y - min_y + 1;
-
-            if (deduplicateMode != "none") {
-                // FNV-1a over the trimmed pixel region
-                uint64_t fnv = 14695981039346656037ULL;
-                for (int ry = min_y; ry <= max_y; ++ry) {
-                    const unsigned char* row = content_data +
-                        (static_cast<size_t>(ry) * static_cast<size_t>(content_w) +
-                         static_cast<size_t>(min_x)) * 4;
-                    for (int rx = 0; rx < (max_x - min_x + 1); ++rx) {
-                        for (int c = 0; c < 4; ++c) {
-                            fnv ^= row[static_cast<size_t>(rx) * 4 + static_cast<size_t>(c)];
-                            fnv *= 1099511628211ULL;
-                        }
-                    }
-                }
-                entry_content_hash = fnv;
-
-                // Extract trimmed region for dHash
-                const int tw = max_x - min_x + 1;
-                const int th = max_y - min_y + 1;
-                std::vector<unsigned char> trimmed(
-                    static_cast<size_t>(tw) * static_cast<size_t>(th) * 4);
-                for (int ry = 0; ry < th; ++ry) {
-                    const unsigned char* src = content_data +
-                        (static_cast<size_t>(min_y + ry) * static_cast<size_t>(content_w) +
-                         static_cast<size_t>(min_x)) * 4;
-                    unsigned char* dst = trimmed.data() +
-                        static_cast<size_t>(ry) * static_cast<size_t>(tw) * 4;
-                    std::memcpy(dst, src, static_cast<size_t>(tw) * 4);
-                }
-                entry_perceptual_hash = compute_dhash(trimmed.data(), tw, th);
-            }
-        } else {
-            // Fully transparent image: keep a 1x1 transparent region.
-            loaded_sprite.trim_left = np_border;
-            loaded_sprite.trim_top = np_border;
-            loaded_sprite.trim_right = np_border + std::max(0, content_w - 1);
-            loaded_sprite.trim_bottom = np_border + std::max(0, content_h - 1);
-            loaded_sprite.w = 1;
-            loaded_sprite.h = 1;
-
-            if (deduplicateMode != "none") {
-                // Sentinel: all fully-transparent sprites are equivalent.
-                entry_content_hash = 0xFFFFFFFFFFFFFFFFULL;
-                entry_perceptual_hash = 0xFFFFFFFFFFFFFFFFULL;
-            }
-        }
-
-        stbi_image_free(data);
-        result.ok = true;
-        result.sprite = loaded_sprite;
-        result.new_entry = {
-            .trim_transparent=trim_transparent,
-            .file_size=meta.file_size,
-            .mtime_ticks=meta.mtime_ticks,
-            .w=loaded_sprite.w,
-            .h=loaded_sprite.h,
-            .trim_left=loaded_sprite.trim_left,
-            .trim_top=loaded_sprite.trim_top,
-            .trim_right=loaded_sprite.trim_right,
-            .trim_bottom=loaded_sprite.trim_bottom,
-            .cached_at_unix=now_unix,
-            .content_hash=entry_content_hash,
-            .perceptual_hash=entry_perceptual_hash,
-            .has_slice=loaded_sprite.has_slice,
-            .slice_left=loaded_sprite.slice_left,
-            .slice_top=loaded_sprite.slice_top,
-            .slice_right=loaded_sprite.slice_right,
-            .slice_bottom=loaded_sprite.slice_bottom
-        };
-    };
-
-    unsigned int load_worker_count =
-        thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
-    if (load_worker_count == 0) load_worker_count = 1;
-#ifdef __EMSCRIPTEN__
-    load_worker_count = 1;
-#endif
-    load_worker_count = std::min<unsigned int>(
-        load_worker_count, static_cast<unsigned int>(source_count));
-
-    if (load_worker_count <= 1 || source_count <= 1) {
-        for (size_t i = 0; i < source_count; ++i) process_source(i);
-    } else {
-        std::vector<std::thread> workers;
-        workers.reserve(load_worker_count);
-        for (unsigned int wi = 0; wi < load_worker_count; ++wi) {
-            workers.emplace_back([&, wi]() {
-                const size_t begin = (source_count * wi) / load_worker_count;
-                const size_t end   = (source_count * (wi + 1)) / load_worker_count;
-                for (size_t i = begin; i < end; ++i) process_source(i);
-            });
-        }
-        for (auto& t : workers) t.join();
-    }
-
-    // Serial collection pass: merge results in source order.
-    // cache_entries writes are deferred here to avoid concurrent map mutations.
-    std::vector<Sprite> sprites;
-    sprites.reserve(source_count);
-    for (size_t i = 0; i < source_count; ++i) {
-        const SpriteLoadResult& r = load_results[i];
-        if (r.failed) {
-            std::cerr << tr("Warning: Failed to load sprite ")
-                      << to_quoted(sources[i].path)
-                      << tr(" (Reason: ") << r.fail_reason << tr(")\n");
-            continue;
-        }
-        if (!r.ok) continue;
-        sprites.push_back(r.sprite);
-        if (r.from_cache) {
-            auto it = cache_entries.find(r.cache_key);
-            if (it != cache_entries.end()) it->second.cached_at_unix = now_unix;
-        } else {
-            cache_entries[r.cache_key] = r.new_entry;
-        }
-    }
-
-    save_image_cache(cache_path, cache_entries);
-
-    // Step 5: Deduplication pass
-    std::vector<std::pair<std::string, std::string>> layout_aliases;
-    if (deduplicateMode == "exact") {
-        // O(N) hash-map dedup keyed by (content_hash, w, h)
-        struct DedupKey {
-            uint64_t hash;
-            int w;
-            int h;
-            bool operator==(const DedupKey& o) const {
-                return hash == o.hash && w == o.w && h == o.h;
-            }
-        };
-        struct DedupKeyHash {
-            size_t operator()(const DedupKey& k) const {
-                size_t h = std::hash<uint64_t>{}(k.hash);
-                h ^= std::hash<int>{}(k.w) + 0x9e3779b9u + (h << 6u) + (h >> 2u);
-                h ^= std::hash<int>{}(k.h) + 0x9e3779b9u + (h << 6u) + (h >> 2u);
-                return h;
-            }
-        };
-        std::unordered_map<DedupKey, std::string, DedupKeyHash> canonical_map;
-        std::vector<Sprite> deduped;
-        deduped.reserve(sprites.size());
-        for (const auto& s : sprites) {
-            const std::string ck = s.path + (trim_transparent ? "|1" : "|0");
-            const auto it = cache_entries.find(ck);
-            const uint64_t h = (it != cache_entries.end()) ? it->second.content_hash : 0;
-            if (h == 0) {
-                deduped.push_back(s);
-                continue;
-            }
-            DedupKey key{h, s.w, s.h};
-            auto [ins_it, inserted] = canonical_map.emplace(key, s.path);
-            if (inserted) {
-                deduped.push_back(s);
-            } else {
-                layout_aliases.push_back({s.path, ins_it->second});
-            }
-        }
-        sprites = std::move(deduped);
-    } else if (deduplicateMode == "perceptual") {
-        // O(N²) pairwise + union-find dedup
-        const size_t N = sprites.size();
-        // Gather hashes
-        std::vector<uint64_t> phash(N, 0);
-        for (size_t i = 0; i < N; ++i) {
-            const std::string ck = sprites[i].path + (trim_transparent ? "|1" : "|0");
-            const auto it = cache_entries.find(ck);
-            if (it != cache_entries.end()) {
-                phash[i] = it->second.perceptual_hash;
-            }
-        }
-        // Union-find
-        std::vector<size_t> parent(N);
-        std::iota(parent.begin(), parent.end(), 0);
-        std::function<size_t(size_t)> find = [&](size_t x) -> size_t {
-            while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
-            return x;
-        };
-        for (size_t i = 0; i < N; ++i) {
-            if (phash[i] == 0) continue;
-            for (size_t j = i + 1; j < N; ++j) {
-                if (phash[j] == 0) continue;
-                if (sprites[i].w != sprites[j].w || sprites[i].h != sprites[j].h) continue;
-                if (popcount64(phash[i] ^ phash[j]) <= dedup_threshold) {
-                    size_t ri = find(i), rj = find(j);
-                    if (ri != rj) parent[rj] = ri;
-                }
-            }
-        }
-        // Build deduped list
-        std::unordered_map<size_t, size_t> canonical_map; // root -> first sprite index
-        canonical_map.reserve(N);
-        std::vector<Sprite> deduped;
-        deduped.reserve(N);
-        for (size_t i = 0; i < N; ++i) {
-            size_t root = find(i);
-            auto [ins_it, inserted] = canonical_map.emplace(root, i);
-            if (inserted) {
-                deduped.push_back(sprites[i]);
-            } else {
-                layout_aliases.push_back({sprites[i].path, sprites[ins_it->second].path});
-            }
-        }
-        sprites = std::move(deduped);
-    }
+    std::vector<sprat::core::Alias> layout_aliases;
+    deduplicate_sprites(sprites, args.deduplicateMode, settings.trim_transparent,
+                        args.dedup_threshold, args.dedup_tolerance, cache_entries, layout_aliases);
 
     if (sprites.empty()) {
         std::cerr << tr("Error: no valid images found\n");
         return 1;
     }
-
-    if (scale != 1.0) {
-        for (auto& s : sprites) {
-            int scaled_w = 0;
-            int scaled_h = 0;
-            if (!scale_dimension(s.w, scale, scaled_w) || !scale_dimension(s.h, scale, scaled_h)) {
-                std::cerr << tr("Error: scaled sprite dimensions are invalid\n");
-                return 1;
-            }
-            s.w = scaled_w;
-            s.h = scaled_h;
-        }
-    }
-
-    int max_width = 0;
-    int max_height = 0;
-    int sum_width = 0;
-    int sum_height = 0;
-    size_t total_area = 0;
-    for (auto& s : sprites) {
-        int padded_w = 0;
-        int padded_h = 0;
-        if (!checked_add_int(s.w, padding, padded_w)) {
-            std::cerr << tr("Error: dimensions are too large\n");
-            return 1;
-        }
-        if (!checked_add_int(s.h, padding, padded_h)) {
-            std::cerr << tr("Error: dimensions are too large\n");
-            return 1;
-        }
-
-        size_t sprite_area = 0;
-        if (!checked_mul_size_t(static_cast<size_t>(padded_w), static_cast<size_t>(padded_h), sprite_area) ||
-            sprite_area > std::numeric_limits<size_t>::max() - total_area) {
-            std::cerr << tr("Error: total area is too large\n");
-            return 1;
-        }
-        total_area += sprite_area;
-
-        max_width = std::max(max_width, padded_w);
-        max_height = std::max(max_height, padded_h);
-        if (!checked_add_int(sum_width, padded_w, sum_width) ||
-            !checked_add_int(sum_height, padded_h, sum_height)) {
-            std::cerr << tr("Error: dimensions are too large\n");
-            return 1;
-        }
-    }
-
-    int atlas_width = 0;
-    int atlas_height = 0;
-    int width_upper_bound = sum_width;
-    int height_upper_bound = sum_height;
-    if (max_width_limit > 0) {
-        width_upper_bound = std::min(width_upper_bound, max_width_limit);
-    }
-    if (max_height_limit > 0) {
-        height_upper_bound = std::min(height_upper_bound, max_height_limit);
-    }
-    if (max_width > width_upper_bound || max_height > height_upper_bound) {
-        std::cerr << tr("Error: sprite dimensions exceed provided atlas limits\n");
+    if (!scale_sprites(sprites, settings.scale)) {
         return 1;
     }
 
+    SearchRequest request;
+    if (!measure_sprites(sprites, settings, request)) {
+        return 1;
+    }
+    request.padding = settings.padding;
+    request.allow_rotate = settings.allow_rotate;
+    request.optimize_target = settings.optimize_target;
+    request.enforce_sort_order = enforce_name_order || enforce_stable_order;
+    request.enforce_stable_order = enforce_stable_order;
+    request.stable_metric = args.stable_metric;
+    request.thread_limit = settings.thread_limit;
+
     if (enforce_stable_order) {
-        sort_sprites_stable(sprites, stable_metric);
+        sort_sprites_stable(sprites, args.stable_metric);
     }
 
+    // Reuse a previous layout when possible: first the incremental seed (keeps
+    // unchanged sprites in place), then the exact seed of the same sprites.
+    int atlas_width = 0;
+    int atlas_height = 0;
     bool reused_layout_seed = false;
-    bool have_layout_seed = false;
     LayoutSeedCache seed_cache;
+    bool have_layout_seed = false;
     std::vector<Sprite> seeded_sprites;
-
-    // Try incremental packing first (reuses positions for unchanged sprites)
-    if (incremental && !multipack) {
+    if (use_incremental) {
         LayoutSeedCache incremental_seed;
-        if (!is_file_older_than_seconds(incremental_seed_cache_path, k_cache_max_age_seconds) &&
-            load_layout_seed_cache(incremental_seed_cache_path, incremental_seed_signature, incremental_seed)) {
-            if (incremental_seed.padding == padding) {
-                if (pack_incremental_maxrects(incremental_seed, padding,
-                        width_upper_bound, height_upper_bound,
-                        sprites, allow_rotate,
-                        seeded_sprites, atlas_width, atlas_height)) {
-                    sprites = std::move(seeded_sprites);
-                    reused_layout_seed = true;
-                }
-            }
+        if (is_cache_file_fresh(cache.incremental) &&
+            load_layout_seed_cache(cache.incremental, cache.incremental_signature, incremental_seed) &&
+            incremental_seed.padding == settings.padding &&
+            pack_incremental_maxrects(incremental_seed, settings.padding,
+                                      request.width_upper_bound, request.height_upper_bound,
+                                      sprites, settings.allow_rotate,
+                                      seeded_sprites, atlas_width, atlas_height) &&
+            fit_reused_atlas(settings, atlas_width, atlas_height)) {
+            sprites = std::move(seeded_sprites);
+            reused_layout_seed = true;
         }
     }
-
-    if (!reused_layout_seed &&
-        !is_file_older_than_seconds(seed_cache_path, k_cache_max_age_seconds) &&
-        load_layout_seed_cache(seed_cache_path, layout_seed_signature, seed_cache)) {
-        if (seed_cache.padding == padding) {
-            have_layout_seed = true;
-            if (try_apply_layout_seed(seed_cache, padding, width_upper_bound, height_upper_bound,
-                                      sprites, seeded_sprites, atlas_width, atlas_height)) {
-                sprites = std::move(seeded_sprites);
-                reused_layout_seed = true;
-            }
+    if (!reused_layout_seed && reuse_positions &&
+        is_cache_file_fresh(cache.seed) &&
+        load_layout_seed_cache(cache.seed, cache.seed_signature, seed_cache) &&
+        seed_cache.padding == settings.padding) {
+        have_layout_seed = true;
+        if (try_apply_layout_seed(seed_cache, settings.padding,
+                                  request.width_upper_bound, request.height_upper_bound,
+                                  sprites, seeded_sprites, atlas_width, atlas_height) &&
+            fit_reused_atlas(settings, atlas_width, atlas_height)) {
+            sprites = std::move(seeded_sprites);
+            reused_layout_seed = true;
         }
     }
+    request.seed_hint = have_layout_seed ? &seed_cache : nullptr;
 
     std::vector<Atlas> atlases;
     if (reused_layout_seed) {
         atlases.push_back({atlas_width, atlas_height});
         for (auto& s : sprites) { s.atlas_index = 0; }
-    } else if (multipack) {
-        if (!pack_atlases(sprites, width_upper_bound, height_upper_bound, padding, mode, optimize_target, allow_rotate, enforce_name_order || enforce_stable_order, atlases)) {
+    } else if (settings.multipack) {
+        // The upper bounds are min(limit, sum of sprite sizes); pot atlases use pot_search_bound.
+        int multipack_w = request.width_upper_bound;
+        int multipack_h = request.height_upper_bound;
+        if (settings.mode == Mode::POT) {
+            multipack_w = pot_search_bound(request.sum_width, settings.max_width_limit);
+            multipack_h = pot_search_bound(request.sum_height, settings.max_height_limit);
+        }
+        if (!pack_atlases(sprites, multipack_w, multipack_h, settings.padding,
+                          settings.mode, settings.optimize_target, settings.allow_rotate,
+                          request.enforce_sort_order, atlases)) {
             std::cerr << tr("Error: failed to compute multipack layout\n");
             return 1;
         }
     } else {
-        std::unique_ptr<Node> root;
-        const std::array<SortMode, k_sort_mode_count> sort_modes = {
-            SortMode::Area,
-            SortMode::MaxSide,
-            SortMode::Height,
-            SortMode::Width,
-            SortMode::Perimeter,
-            SortMode::None
-        };
-        const std::array<RectHeuristic, k_rect_heuristic_count> rect_heuristics = {
-            RectHeuristic::BestShortSideFit,
-            RectHeuristic::BestAreaFit,
-            RectHeuristic::BottomLeft
-        };
-
-        if (mode == Mode::POT) {
-            int min_pot_width = next_power_of_two(max_width);
-            int min_pot_height = next_power_of_two(max_height);
-            if (min_pot_width <= 0 || min_pot_height <= 0) {
-                std::cerr << tr("Error: dimensions are too large\n");
-                return 1;
-            }
-
-            // Pre-build sorted sprite arrays for each sort mode.
-            const bool enforce_sort_order_pot = enforce_name_order || enforce_stable_order;
-            std::array<std::vector<Sprite>, k_sort_mode_count> pot_sorted;
-            pot_sorted[0] = sprites;
-            if (!(enforce_sort_order_pot && sort_modes[0] != SortMode::None)) {
-                sort_sprites_by_mode(pot_sorted[0], sort_modes[0]);
-            }
-            for (size_t si = 1; si < sort_modes.size(); ++si) {
-                pot_sorted[si] = pot_sorted[0]; // copy already-allocated vector
-                if (!(enforce_sort_order_pot && sort_modes[si] != SortMode::None)) {
-                    sort_sprites_by_mode(pot_sorted[si], sort_modes[si]);
-                }
-            }
-
-            // First, find an upper bound that can pack, then search all POT
-            // rectangles up to that area and pick the least wasteful successful fit.
-            int side = std::max(min_pot_width, min_pot_height);
-            int best_gpu_w = 0;
-            int best_gpu_h = 0;
-            size_t best_gpu_area = 0;
-            bool have_best_gpu = false;
-            std::vector<Sprite> best_gpu_sprites;
-
-            int best_space_w = 0;
-            int best_space_h = 0;
-            size_t best_space_area = 0;
-            bool have_best_space = false;
-            std::vector<Sprite> best_space_sprites;
-
-            size_t max_candidate_area = 0;
-            std::vector<Sprite> trial_sprites;
-
-            while (true) {
-                if (max_width_limit > 0 && side > max_width_limit) {
-                    std::cerr << tr("Error: no POT layout fits within max width\n");
-                    return 1;
-                }
-                if (max_height_limit > 0 && side > max_height_limit) {
-                    std::cerr << tr("Error: no POT layout fits within max height\n");
-                    return 1;
-                }
-                for (size_t si = 0; si < sort_modes.size(); ++si) {
-                    if (enforce_sort_order_pot && sort_modes[si] != SortMode::None) {
-                        continue;
-                    }
-                    trial_sprites.assign(pot_sorted[si].begin(), pot_sorted[si].end());
-                    root = std::make_unique<Node>(0, 0, side, side);
-                    if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
-                        continue;
-                    }
-                    size_t area = static_cast<size_t>(side) * static_cast<size_t>(side);
-                    best_gpu_sprites = trial_sprites;
-                    best_space_sprites = std::move(trial_sprites);
-                    best_gpu_w = best_space_w = side;
-                    best_gpu_h = best_space_h = side;
-                    best_gpu_area = best_space_area = area;
-                    max_candidate_area = area;
-                    have_best_gpu = have_best_space = true;
-                    break;
-                }
-                if (have_best_gpu) {
-                    break;
-                }
-                if (side > std::numeric_limits<int>::max() / 2) {
-                    std::cerr << tr("Error: atlas dimensions overflow\n");
-                    return 1;
-                }
-                side *= 2;
-            }
-
-            std::vector<int> pot_widths;
-            std::vector<int> pot_heights;
-            for (int w = min_pot_width; w > 0 && std::cmp_less_equal(w, max_candidate_area); w *= 2) {
-                pot_widths.push_back(w);
-                if (w > std::numeric_limits<int>::max() / 2) {
-                    break;
-                }
-            }
-            for (int h = min_pot_height; h > 0 && std::cmp_less_equal(h, max_candidate_area); h *= 2) {
-                pot_heights.push_back(h);
-                if (h > std::numeric_limits<int>::max() / 2) {
-                    break;
-                }
-            }
-
-            for (int w : pot_widths) {
-                for (int h : pot_heights) {
-                    size_t area = static_cast<size_t>(w) * static_cast<size_t>(h);
-                    if (area > max_candidate_area) {
-                        continue;
-                    }
-                    if (max_width_limit > 0 && w > max_width_limit) {
-                        continue;
-                    }
-                    if (max_height_limit > 0 && h > max_height_limit) {
-                        continue;
-                    }
-                    const bool could_beat_gpu = pick_better_layout_candidate(area, w, h, have_best_gpu, best_gpu_area, best_gpu_w, best_gpu_h, OptimizeTarget::GPU);
-                    const bool could_beat_space = pick_better_layout_candidate(area, w, h, have_best_space, best_space_area, best_space_w, best_space_h, OptimizeTarget::SPACE);
-                    if (!could_beat_gpu && !could_beat_space) {
-                        continue;
-                    }
-
-                    for (size_t si = 0; si < sort_modes.size(); ++si) {
-                        if (enforce_sort_order_pot && sort_modes[si] != SortMode::None) {
-                            continue;
-                        }
-                        trial_sprites.assign(pot_sorted[si].begin(), pot_sorted[si].end());
-                        root = std::make_unique<Node>(0, 0, w, h);
-                        if (!try_pack(root, trial_sprites, padding, allow_rotate)) {
-                            continue;
-                        }
-
-                        if (could_beat_gpu) {
-                            best_gpu_sprites = trial_sprites;
-                            best_gpu_w = w;
-                            best_gpu_h = h;
-                            best_gpu_area = area;
-                            have_best_gpu = true;
-                        }
-                        if (could_beat_space) {
-                            if (could_beat_gpu) {
-                                best_space_sprites = best_gpu_sprites;
-                            } else {
-                                best_space_sprites = std::move(trial_sprites);
-                            }
-                            best_space_w = w;
-                            best_space_h = h;
-                            best_space_area = area;
-                            have_best_space = true;
-                        }
-                        break;
-                    }
-                }
-            }
-
-            if (!have_best_gpu && !have_best_space) {
-                std::cerr << tr("Error: failed to compute pot layout\n");
-                return 1;
-            }
-
-            if (optimize_target == OptimizeTarget::GPU) {
-                if (have_best_gpu) {
-                    sprites = std::move(best_gpu_sprites);
-                    atlas_width = best_gpu_w;
-                    atlas_height = best_gpu_h;
-                } else {
-                    std::cerr << tr("Warning: no GPU-optimal POT layout found, using space-optimal fallback\n");
-                    sprites = std::move(best_space_sprites);
-                    atlas_width = best_space_w;
-                    atlas_height = best_space_h;
-                }
-            } else {
-                if (have_best_space) {
-                    sprites = std::move(best_space_sprites);
-                    atlas_width = best_space_w;
-                    atlas_height = best_space_h;
-                } else {
-                    std::cerr << tr("Warning: no space-optimal POT layout found, using GPU-optimal fallback\n");
-                    sprites = std::move(best_gpu_sprites);
-                    atlas_width = best_gpu_w;
-                    atlas_height = best_gpu_h;
-                }
-            }
-            atlases.push_back({atlas_width, atlas_height});
-            for (auto& s : sprites) { s.atlas_index = 0; }
-        } else if (mode == Mode::COMPACT) {
-        if (sum_width <= 0 || sum_height <= 0) {
-            std::cerr << tr("Error: compact bounds are invalid\n");
+        if (!pack_single_atlas(args, settings, request, key, cache, sources, layout_aliases, root,
+                               sprites, atlas_width, atlas_height)) {
             return 1;
         }
-        unsigned int worker_count = thread_limit > 0 ? thread_limit : std::thread::hardware_concurrency();
-        if (worker_count == 0) {
-            worker_count = 1;
-        }
-#ifdef __EMSCRIPTEN__
-        // Browser WASM builds typically lack pthreads; force single-threaded work.
-        worker_count = 1;
-#endif
+        atlases.push_back({atlas_width, atlas_height});
+        for (auto& s : sprites) { s.atlas_index = 0; }
+    }
 
-        const bool enforce_sort_order_compact = enforce_name_order || enforce_stable_order;
-        std::array<std::vector<Sprite>, k_sort_mode_count> sorted_sprites_by_mode;
-        sorted_sprites_by_mode[0] = sprites;
-        if (!(enforce_sort_order_compact && sort_modes[0] != SortMode::None)) {
-            sort_sprites_by_mode(sorted_sprites_by_mode[0], sort_modes[0]);
-        }
-        for (size_t sort_idx = 1; sort_idx < sort_modes.size(); ++sort_idx) {
-            sorted_sprites_by_mode[sort_idx] = sorted_sprites_by_mode[0];
-            if (!(enforce_sort_order_compact && sort_modes[sort_idx] != SortMode::None)) {
-                sort_sprites_by_mode(sorted_sprites_by_mode[sort_idx], sort_modes[sort_idx]);
-            }
-        }
+    // Grid cells and power-of-two sizes are the point of those modes; keep them.
+    if (settings.padding > 0 && settings.mode != Mode::GRID && settings.mode != Mode::POT &&
+        !tighten_atlas_bounds(sprites, settings.multipack, atlases, atlas_width, atlas_height)) {
+        return 1;
+    }
 
-        int seed_width = max_width;
-        if (total_area > 0) {
-            long double area_root = std::sqrt(static_cast<long double>(total_area));
-            if (area_root > static_cast<long double>(std::numeric_limits<int>::max())) {
-                std::cerr << tr("Error: compact width is too large\n");
-                return 1;
-            }
-            int root_width = static_cast<int>(std::ceil(area_root));
-            seed_width = std::max(root_width, seed_width);
-        }
-        seed_width = std::min(seed_width, width_upper_bound);
-        seed_width = std::max(seed_width, max_width);
-        if (have_layout_seed) {
-            int seed_hint_width = seed_cache.atlas_width;
-            if (padding > seed_cache.padding) {
-                int delta = 0;
-                if (checked_add_int(seed_hint_width, padding - seed_cache.padding, delta)) {
-                    seed_hint_width = delta;
-                }
-            }
-            if (seed_hint_width >= max_width && seed_hint_width <= width_upper_bound) {
-                seed_width = seed_hint_width;
-            }
-        }
-
-        LayoutCandidate best_gpu_candidate;
-        LayoutCandidate best_space_candidate;
-        auto consider_candidate = [&](LayoutCandidate&& candidate) {
-            if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
-                return;
-            }
-            const bool better_gpu =
-                !best_gpu_candidate.valid ||
-                pick_better_layout_candidate(
-                    candidate.area, candidate.w, candidate.h, true,
-                    best_gpu_candidate.area, best_gpu_candidate.w, best_gpu_candidate.h,
-                    OptimizeTarget::GPU);
-            const bool better_space =
-                !best_space_candidate.valid ||
-                pick_better_layout_candidate(
-                    candidate.area, candidate.w, candidate.h, true,
-                    best_space_candidate.area, best_space_candidate.w, best_space_candidate.h,
-                    OptimizeTarget::SPACE);
-
-            if (!better_gpu && !better_space) {
-                return;
-            }
-
-            if (better_gpu && better_space) {
-                best_gpu_candidate = std::move(candidate);
-                best_space_candidate = best_gpu_candidate;
-                return;
-            }
-            if (better_gpu) {
-                best_gpu_candidate = std::move(candidate);
-                return;
-            }
-            best_space_candidate = std::move(candidate);
-        };
-
-        std::vector<Sprite> seed_sprites;
-        for (size_t sort_idx = 0; sort_idx < sort_modes.size(); ++sort_idx) {
-            if (enforce_sort_order_compact && sort_modes[sort_idx] != SortMode::None) {
-                continue;
-            }
-            for (RectHeuristic rect_heuristic : rect_heuristics) {
-                seed_sprites.assign(sorted_sprites_by_mode[sort_idx].begin(), sorted_sprites_by_mode[sort_idx].end());
-                int seed_used_w = 0;
-                int seed_used_h = 0;
-                if (!pack_compact_maxrects(seed_sprites, seed_width, padding, height_upper_bound, rect_heuristic, allow_rotate, seed_used_w, seed_used_h)) {
-                    continue;
-                }
-                size_t seed_area = static_cast<size_t>(seed_used_w) * static_cast<size_t>(seed_used_h);
-                LayoutCandidate seed_candidate;
-                seed_candidate.valid = true;
-                seed_candidate.area = seed_area;
-                seed_candidate.w = seed_used_w;
-                seed_candidate.h = seed_used_h;
-                seed_candidate.sprites = std::move(seed_sprites);
-                consider_candidate(std::move(seed_candidate));
-            }
-        }
-
-            // Guided compact search (no brute-force width scan):
-            // start from fast/seed anchors, then probe a small nearby window.
-            // Keep searching even when the seed width fails, because other widths
-            // can still produce a valid compact layout under tight atlas limits.
-            int fast_target_width = max_width;
-            if (total_area > 0) {
-                long double area_root = std::sqrt(static_cast<long double>(total_area));
-                if (area_root <= static_cast<long double>(std::numeric_limits<int>::max())) {
-                    int candidate = static_cast<int>(std::ceil(area_root));
-                    fast_target_width = std::max(candidate, fast_target_width);
-                }
-            }
-            fast_target_width = std::min(fast_target_width, width_upper_bound);
-            fast_target_width = std::max(fast_target_width, max_width);
-
-            std::unordered_set<int> seen_widths;
-            std::vector<int> width_candidates;
-            auto add_width_candidate = [&](int width) {
-                if (width < max_width || width > width_upper_bound) {
-                    return;
-                }
-                if (seen_widths.insert(width).second) {
-                    width_candidates.push_back(width);
-                }
-            };
-
-            add_width_candidate(seed_width);
-            add_width_candidate(fast_target_width);
-            if (have_layout_seed) {
-                int seed_hint_width = seed_cache.atlas_width;
-                if (padding > seed_cache.padding) {
-                    int expanded = 0;
-                    if (checked_add_int(seed_hint_width, padding - seed_cache.padding, expanded)) {
-                        seed_hint_width = expanded;
-                    }
-                }
-                add_width_candidate(seed_hint_width);
-            }
-
-            const int range = std::max(0, width_upper_bound - fast_target_width);
-            const int step = std::max(k_search_step_min, range / k_search_step_divisor);
-            const std::array<int, k_guided_offsets_count> offsets = k_guided_search_offsets;
-            const std::array<int, k_guided_anchor_count> anchor_widths = {seed_width, fast_target_width, max_width, width_upper_bound};
-            for (int anchor : anchor_widths) {
-                for (int mul : offsets) {
-                    const long long width_ll =
-                        static_cast<long long>(anchor) +
-                        (static_cast<long long>(mul) * static_cast<long long>(step));
-                    if (width_ll < static_cast<long long>(std::numeric_limits<int>::min()) ||
-                        width_ll > static_cast<long long>(std::numeric_limits<int>::max())) {
-                        continue;
-                    }
-                    add_width_candidate(static_cast<int>(width_ll));
-                }
-            }
-            std::ranges::sort(width_candidates);
-
-            if (!width_candidates.empty()) {
-                worker_count = std::min<unsigned int>(worker_count, static_cast<unsigned int>(width_candidates.size()));
-                std::vector<LayoutCandidate> worker_gpu(worker_count);
-                std::vector<LayoutCandidate> worker_space(worker_count);
-                const int min_square_side =
-                    total_area > 0
-                        ? static_cast<int>(std::ceil(std::sqrt(static_cast<long double>(total_area))))
-                        : 0;
-                auto select_better_candidate = [&](const LayoutCandidate& local_best, const LayoutCandidate& shared_best, OptimizeTarget target) -> const LayoutCandidate* {
-                    if (!local_best.valid) {
-                        return shared_best.valid ? &shared_best : nullptr;
-                    }
-                    if (!shared_best.valid) {
-                        return &local_best;
-                    }
-                    if (pick_better_layout_candidate(
-                            local_best.area, local_best.w, local_best.h, true,
-                            shared_best.area, shared_best.w, shared_best.h,
-                            target)) {
-                        return &local_best;
-                    }
-                    return &shared_best;
-                };
-                auto width_could_beat_best = [&](int width, const LayoutCandidate& local_best, const LayoutCandidate& shared_best, OptimizeTarget target) {
-                    const LayoutCandidate* best = select_better_candidate(local_best, shared_best, target);
-                    if (best == nullptr || total_area == 0) {
-                        return true;
-                    }
-                    const size_t width_size = static_cast<size_t>(width);
-                    const size_t min_height_size = (total_area + width_size - 1) / width_size;
-                    if (min_height_size > static_cast<size_t>(std::numeric_limits<int>::max())) {
-                        return false;
-                    }
-                    const int min_height = static_cast<int>(min_height_size);
-                    const int min_max_side = std::max(min_square_side, min_height);
-                    const int optimistic_w = std::min(width, min_max_side);
-                    const int optimistic_h = min_max_side;
-                    return pick_better_layout_candidate(
-                        total_area, optimistic_w, optimistic_h, true,
-                        best->area, best->w, best->h,
-                        target);
-                };
-                auto run_guided_worker = [&](std::atomic<size_t>* next_width_index, size_t begin, size_t end, LayoutCandidate& out_gpu, LayoutCandidate& out_space) {
-                    LayoutCandidate local_best_gpu;
-                    LayoutCandidate local_best_space;
-                    auto consider_local = [&](LayoutCandidate&& candidate) {
-                        if (!candidate.valid || candidate.w <= 0 || candidate.h <= 0) {
-                            return;
-                        }
-                        const bool better_gpu =
-                            !local_best_gpu.valid ||
-                            pick_better_layout_candidate(
-                                candidate.area, candidate.w, candidate.h, true,
-                                local_best_gpu.area, local_best_gpu.w, local_best_gpu.h,
-                                OptimizeTarget::GPU);
-                        const bool better_space =
-                            !local_best_space.valid ||
-                            pick_better_layout_candidate(
-                                candidate.area, candidate.w, candidate.h, true,
-                                local_best_space.area, local_best_space.w, local_best_space.h,
-                                OptimizeTarget::SPACE);
-                        if (!better_gpu && !better_space) {
-                            return;
-                        }
-                        if (better_gpu && better_space) {
-                            local_best_gpu = std::move(candidate);
-                            local_best_space = local_best_gpu;
-                            return;
-                        }
-                        if (better_gpu) {
-                            local_best_gpu = std::move(candidate);
-                            return;
-                        }
-                        local_best_space = std::move(candidate);
-                    };
-
-                    std::vector<Sprite> trial_sprites;
-                    std::vector<Sprite> shelf_sprites;
-                    while (true) {
-                        size_t width_index = begin;
-                        if (next_width_index != nullptr) {
-                            width_index = next_width_index->fetch_add(1, std::memory_order_relaxed);
-                            if (width_index >= end) {
-                                break;
-                            }
-                        } else if (width_index < end) {
-                            ++begin;
-                        } else {
-                            break;
-                        }
-
-                        const int width = width_candidates[width_index];
-                        if (!width_could_beat_best(width, local_best_gpu, best_gpu_candidate, OptimizeTarget::GPU) &&
-                            !width_could_beat_best(width, local_best_space, best_space_candidate, OptimizeTarget::SPACE)) {
-                            continue;
-                        }
-
-                        bool continue_width_search = true;
-                        for (size_t sort_idx : k_guided_sort_indices) {
-                            if (enforce_sort_order_compact && sort_idx != k_sort_mode_index_none) {
-                                continue;
-                            }
-
-                            for (RectHeuristic rect_heuristic : k_guided_heuristics) {
-                                trial_sprites.assign(sorted_sprites_by_mode[sort_idx].begin(), sorted_sprites_by_mode[sort_idx].end());
-                                int used_w = 0;
-                                int used_h = 0;
-                                if (!pack_compact_maxrects(trial_sprites, width, padding, height_upper_bound, rect_heuristic, allow_rotate, used_w, used_h)) {
-                                    continue;
-                                }
-                                size_t area = static_cast<size_t>(used_w) * static_cast<size_t>(used_h);
-                                LayoutCandidate candidate;
-                                candidate.valid = true;
-                                candidate.area = area;
-                                candidate.w = used_w;
-                                candidate.h = used_h;
-                                candidate.sprites = std::move(trial_sprites);
-                                consider_local(std::move(candidate));
-                                if (!width_could_beat_best(width, local_best_gpu, best_gpu_candidate, OptimizeTarget::GPU) &&
-                                    !width_could_beat_best(width, local_best_space, best_space_candidate, OptimizeTarget::SPACE)) {
-                                    continue_width_search = false;
-                                    break;
-                                }
-                            }
-                            if (!continue_width_search) {
-                                break;
-                            }
-
-                            shelf_sprites.assign(sorted_sprites_by_mode[sort_idx].begin(), sorted_sprites_by_mode[sort_idx].end());
-                            int shelf_w = 0;
-                            int shelf_h = 0;
-                            if (!pack_fast_shelf(shelf_sprites, width, padding, allow_rotate, shelf_w, shelf_h)) {
-                                continue;
-                            }
-                            if (shelf_h > height_upper_bound) {
-                                continue;
-                            }
-                            size_t shelf_area = static_cast<size_t>(shelf_w) * static_cast<size_t>(shelf_h);
-                            LayoutCandidate shelf_candidate;
-                            shelf_candidate.valid = true;
-                            shelf_candidate.area = shelf_area;
-                            shelf_candidate.w = shelf_w;
-                            shelf_candidate.h = shelf_h;
-                            shelf_candidate.sprites = std::move(shelf_sprites);
-                            consider_local(std::move(shelf_candidate));
-                            if (!width_could_beat_best(width, local_best_gpu, best_gpu_candidate, OptimizeTarget::GPU) &&
-                                !width_could_beat_best(width, local_best_space, best_space_candidate, OptimizeTarget::SPACE)) {
-                                break;
-                            }
-                        }
-                    }
-
-                    out_gpu = std::move(local_best_gpu);
-                    out_space = std::move(local_best_space);
-                };
-
-                if (worker_count == 1) {
-                    run_guided_worker(nullptr, 0, width_candidates.size(), worker_gpu[0], worker_space[0]);
-                } else {
-                    std::atomic<size_t> next_width_index{0};
-                    std::vector<std::thread> workers;
-                    workers.reserve(worker_count);
-                    for (unsigned int worker_index = 0; worker_index < worker_count; ++worker_index) {
-                        workers.emplace_back([&, worker_index]() {
-                            run_guided_worker(&next_width_index, 0, width_candidates.size(), worker_gpu[worker_index], worker_space[worker_index]);
-                        });
-                    }
-                    for (auto& worker : workers) {
-                        worker.join();
-                    }
-                }
-                for (unsigned int i = 0; i < worker_count; ++i) {
-                    if (worker_gpu[i].valid) {
-                        consider_candidate(std::move(worker_gpu[i]));
-                    }
-                    if (worker_space[i].valid) {
-                        consider_candidate(std::move(worker_space[i]));
-                    }
-                }
-            }
-
-            const LayoutCandidate* selected_candidate = nullptr;
-            if (optimize_target == OptimizeTarget::GPU) {
-                if (best_gpu_candidate.valid) {
-                    selected_candidate = &best_gpu_candidate;
-                } else {
-                    std::cerr << tr("Warning: no GPU-optimal layout found, using space-optimal fallback\n");
-                    selected_candidate = &best_space_candidate;
-                }
-            } else {
-                if (best_space_candidate.valid) {
-                    selected_candidate = &best_space_candidate;
-                } else {
-                    std::cerr << tr("Warning: no space-optimal layout found, using GPU-optimal fallback\n");
-                    selected_candidate = &best_gpu_candidate;
-                }
-            }
-            if ((selected_candidate == nullptr) || !selected_candidate->valid) {
-                std::cerr << tr("Error: failed to compute compact layout\n");
-                return 1;
-            }
-
-            sprites = selected_candidate->sprites;
-            atlas_width = selected_candidate->w;
-            atlas_height = selected_candidate->h;
-
-            if (best_gpu_candidate.valid && best_space_candidate.valid) {
-                for (const char* profile_name : k_compact_prewarm_profiles) {
-                    auto prewarm_it = profile_map.find(profile_name);
-                    if (prewarm_it == profile_map.end()) {
-                        continue;
-                    }
-                    const ProfileDefinition& compact_profile = prewarm_it->second;
-                    const Mode prewarm_mode =
-                        has_mode_override ? args.mode_override : compact_profile.mode;
-                    const OptimizeTarget prewarm_optimize_target =
-                        has_optimize_override ? args.optimize_override : compact_profile.optimize_target;
-                    if (prewarm_mode != Mode::COMPACT) {
-                        continue;
-                    }
-                    const int prewarm_max_width =
-                        has_max_width_limit
-                            ? max_width_limit
-                            : (compact_profile.max_width ? *compact_profile.max_width : 0);
-                    const int prewarm_max_height =
-                        has_max_height_limit
-                            ? max_height_limit
-                            : (compact_profile.max_height ? *compact_profile.max_height : 0);
-                    const int prewarm_padding =
-                        has_padding_override
-                            ? padding
-                            : (compact_profile.padding ? *compact_profile.padding : 0);
-                    const double prewarm_scale =
-                        has_scale_override
-                            ? scale
-                            : (compact_profile.scale ? *compact_profile.scale : 1.0);
-                    const bool prewarm_trim_transparent =
-                        has_trim_override
-                            ? trim_transparent
-                            : (compact_profile.trim_transparent ? *compact_profile.trim_transparent : false);
-                    const std::string prewarm_signature = build_layout_signature(
-                        compact_profile.name,
-                        prewarm_mode,
-                        prewarm_optimize_target,
-                        prewarm_max_width,
-                        prewarm_max_height,
-                        prewarm_padding,
-                        extrude,
-                        prewarm_scale,
-                        prewarm_trim_transparent,
-                        allow_rotate,
-                        is_file,
-                        deduplicateMode,
-                        dedup_threshold,
-                        sources
-                    );
-                    if (prewarm_signature == layout_signature) {
-                        continue;
-                    }
-
-                    const LayoutCandidate& prewarm_candidate =
-                        prewarm_optimize_target == OptimizeTarget::GPU
-                            ? best_gpu_candidate
-                            : best_space_candidate;
-                    std::vector<Atlas> prewarm_atlases;
-                    prewarm_atlases.push_back({prewarm_candidate.w, prewarm_candidate.h});
-                    std::vector<std::pair<std::string, std::string>> empty_prewarm_aliases;
-                    const fs::path prewarm_root = (input_context.type == InputType::ListFile)
-                        ? input_context.working_folder.parent_path()
-                        : input_context.working_folder;
-                    const std::string prewarm_output = build_layout_output_text(
-                        prewarm_atlases,
-                        prewarm_scale,
-                        extrude,
-                        prewarm_trim_transparent,
-                        false,
-                        prewarm_candidate.sprites,
-                        empty_prewarm_aliases,
-                        false,
-                        prewarm_root
-                    );
-                    save_output_cache(
-                        build_output_cache_path(cache_path, prewarm_signature),
-                        prewarm_signature,
-                        prewarm_output
-                    );
-                }
-            }
-            atlases.push_back({atlas_width, atlas_height});
-            for (auto& s : sprites) { s.atlas_index = 0; }
-        } else if (mode == Mode::GRID) {
-            std::vector<Sprite> sorted_sprites = sprites;
-            if (enforce_name_order) {
-                sort_sprites_by_mode(sorted_sprites, SortMode::None);
-            } else if (enforce_stable_order) {
-                sort_sprites_stable(sorted_sprites, stable_metric);
-            }
-            int grid_width = 0;
-            int grid_height = 0;
-            if (!pack_grid(sorted_sprites, padding, width_upper_bound, height_upper_bound, grid_width, grid_height)) {
-                std::cerr << tr("Error: failed to compute grid layout\n");
-                return 1;
-            }
-            sprites = std::move(sorted_sprites);
-            atlas_width = grid_width;
-            atlas_height = grid_height;
-            atlases.push_back({atlas_width, atlas_height});
-            for (auto& s : sprites) { s.atlas_index = 0; }
-        } else {
-            int target_width = max_width;
-            if (total_area > 0) {
-                long double area_root = std::sqrt(static_cast<long double>(total_area));
-                if (area_root > static_cast<long double>(std::numeric_limits<int>::max())) {
-                    std::cerr << tr("Error: fast width is too large\n");
-                    return 1;
-                }
-                int candidate = static_cast<int>(std::ceil(area_root));
-                target_width = std::max(candidate, target_width);
-            }
-            target_width = std::min(target_width, width_upper_bound);
-            if (have_layout_seed) {
-                int seed_hint_width = seed_cache.atlas_width;
-                if (padding > seed_cache.padding) {
-                    int expanded = 0;
-                    if (checked_add_int(seed_hint_width, padding - seed_cache.padding, expanded)) {
-                        seed_hint_width = expanded;
-                    }
-                }
-                if (seed_hint_width > target_width && seed_hint_width <= width_upper_bound) {
-                    target_width = seed_hint_width;
-                }
-            }
-
-            std::vector<Sprite> sorted_sprites = sprites;
-            if (enforce_name_order) {
-                sort_sprites_by_mode(sorted_sprites, SortMode::None);
-            } else if (enforce_stable_order) {
-                sort_sprites_stable(sorted_sprites, stable_metric);
-            } else {
-                sort_sprites_by_mode(sorted_sprites, SortMode::Height);
-            }
-
-            bool packed = false;
-            for (int width = target_width; width <= width_upper_bound; ++width) {
-                std::vector<Sprite> trial_sprites = sorted_sprites;
-                int packed_width = 0;
-                int packed_height = 0;
-                if (!pack_fast_shelf(trial_sprites, width, padding, allow_rotate, packed_width, packed_height)) {
-                    continue;
-                }
-                if (packed_height > height_upper_bound) {
-                    continue;
-                }
-                sprites = std::move(trial_sprites);
-                atlas_width = packed_width;
-                atlas_height = packed_height;
-                packed = true;
-                break;
-            }
-            if (!packed) {
-                std::cerr << tr("Error: failed to compute fast layout\n");
-                return 1;
-            }
-            atlases.push_back({atlas_width, atlas_height});
-            for (auto& s : sprites) { s.atlas_index = 0; }
+    if (!settings.multipack) {
+        save_layout_seed_cache(cache.seed, make_layout_seed(
+            cache.seed_signature, settings.padding, atlas_width, atlas_height, sprites));
+        if (use_incremental) {
+            save_layout_seed_cache(cache.incremental, make_layout_seed(
+                cache.incremental_signature, settings.padding, atlas_width, atlas_height, sprites));
         }
     }
 
-    if (padding > 0 && mode != Mode::GRID) {
-        if (multipack) {
-            for (size_t ai = 0; ai < atlases.size(); ++ai) {
-                int tight_w = 0;
-                int tight_h = 0;
-                for (const auto& s : sprites) {
-                    if (s.atlas_index != static_cast<int>(ai)) {
-                        continue;
-                    }
-                    int x1 = 0;
-                    int y1 = 0;
-                    if (!checked_add_int(s.x, s.w, x1) || !checked_add_int(s.y, s.h, y1)) {
-                        std::cerr << tr("Error: failed to compute final atlas bounds\n");
-                        return 1;
-                    }
-                    tight_w = std::max(x1, tight_w);
-                    tight_h = std::max(y1, tight_h);
-                }
-                if (tight_w > 0 && tight_h > 0) {
-                    atlases[ai].width = tight_w;
-                    atlases[ai].height = tight_h;
-                }
-            }
-        } else {
-            if (!compute_tight_atlas_bounds(sprites, atlas_width, atlas_height)) {
-                std::cerr << tr("Error: failed to compute final atlas bounds\n");
-                return 1;
-            }
-            if (!atlases.empty()) {
-                atlases[0].width = atlas_width;
-                atlases[0].height = atlas_height;
-            }
-        }
-    }
-
-    if (!multipack) {
-        LayoutSeedCache next_seed;
-        next_seed.signature = layout_seed_signature;
-        next_seed.padding = padding;
-        next_seed.atlas_width = atlas_width;
-        next_seed.atlas_height = atlas_height;
-        next_seed.entries.reserve(sprites.size());
-        for (const auto& s : sprites) {
-            LayoutSeedEntry entry;
-            entry.path = s.path;
-            entry.x = s.x;
-            entry.y = s.y;
-            entry.w = s.w;
-            entry.h = s.h;
-            entry.trim_left = s.trim_left;
-            entry.trim_top = s.trim_top;
-            entry.trim_right = s.trim_right;
-            entry.trim_bottom = s.trim_bottom;
-            entry.rotated = s.rotated;
-            next_seed.entries.push_back(std::move(entry));
-        }
-        save_layout_seed_cache(seed_cache_path, next_seed);
-
-        if (incremental) {
-            LayoutSeedCache incremental_next;
-            incremental_next.signature = incremental_seed_signature;
-            incremental_next.padding = padding;
-            incremental_next.atlas_width = atlas_width;
-            incremental_next.atlas_height = atlas_height;
-            incremental_next.entries.reserve(sprites.size());
-            for (const auto& s : sprites) {
-                LayoutSeedEntry entry;
-                entry.path = s.path;
-                entry.x = s.x;
-                entry.y = s.y;
-                entry.w = s.w;
-                entry.h = s.h;
-                entry.trim_left = s.trim_left;
-                entry.trim_top = s.trim_top;
-                entry.trim_right = s.trim_right;
-                entry.trim_bottom = s.trim_bottom;
-                entry.rotated = s.rotated;
-                incremental_next.entries.push_back(std::move(entry));
-            }
-            save_layout_seed_cache(incremental_seed_cache_path, incremental_next);
-        }
-    }
-
-    const fs::path output_root = (input_context.type == InputType::ListFile)
-        ? input_context.working_folder.parent_path()
-        : input_context.working_folder;
     const std::string output_text = build_layout_output_text(
-        atlases,
-        scale,
-        extrude,
-        trim_transparent,
-        multipack,
-        sprites,
-        layout_aliases,
-        debug,
-        output_root
-    );
+        atlases, sprites, layout_aliases, make_output_options(args, settings, root));
 
 #ifdef _WIN32
     // Suppress failure: non-fatal when running embedded or as a GUI subprocess.
@@ -5883,16 +1236,9 @@ int run_spratlayout(int argc, char** argv) {
 #endif
 
     std::cout << output_text;
-    if (!multipack) {
-        save_output_cache(output_cache_path, layout_signature, output_text);
+    if (!settings.multipack) {
+        save_output_cache(cache.layout, cache.layout_signature, output_text);
     }
-    prune_cache_family(cache_path, k_cache_max_age_seconds, k_cache_max_layout_files, k_cache_max_seed_files);
-
-    // Cleanup temporary directories for tar files
-    for (const auto& dir : input_context.temp_dirs_to_cleanup) {
-        std::error_code ec;
-        fs::remove_all(dir, ec);
-    }
-
-    return 0;
+    prune_cache_family(cache.base);
+    return sprat::core::finish_stdout() ? 0 : 1;
 }

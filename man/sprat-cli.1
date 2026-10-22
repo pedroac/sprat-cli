@@ -18,8 +18,9 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-scale\fR \fIF\fR]
 [\fB\-\-trim\-transparent\fR]
 [\fB\-\-rotate\fR]
+[\fB\-\-rotate\-direction\fR \fIcw|ccw\fR]
 [\fB\-\-multipack\fR]
-[\fB\-\-sort\fR name|none]
+[\fB\-\-sort\fR name|none|stable[:\fImetric\fR]]
 [\fB\-\-threads\fR \fIN\fR]
 [\fB\-\-debug\fR]
 .PP
@@ -38,6 +39,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 .B spratconvert
 [\fB\-\-transform\fR \fINAME|PATH\fR]
 [\fB\-\-atlas\fR \fIPATTERN\fR]
+[\fB\-\-image\-path\fR \fIPATTERN\fR]
 [\fB\-\-output\-dir\fR \fIPATH\fR]
 [\fB\-\-list\-transforms\fR]
 [\fB\-\-markers\fR \fIPATH\fR]
@@ -87,7 +89,7 @@ sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR] [rotated] 
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
-If rotation is used for a sprite, the sprite line includes the \fBrotated\fR token.
+If rotation is used for a sprite, the sprite line includes the \fBrotated\fR token. Rotated sprites are turned 90 degrees clockwise, or counter-clockwise when the layout contains a \fBrotation ccw\fR line (written by \fB\-\-rotate\-direction ccw\fR).
 .PP
 The optional \fBslice=\fR token defines nine-slice insets and per-axis fill modes.
 The format is \fBslice=L,T,R,B[,H_MODE,V_MODE]\fR where \fBL\fR, \fBT\fR, \fBR\fR, \fBB\fR are
@@ -128,9 +130,9 @@ Profile values act as defaults; CLI options override them per run.
 .PP
 Performance cache:
 .IP "\(bu" 2
-Metadata and output caches are stored in the system temp directory.
+Metadata and output caches are stored in a private per-user directory in the system temp directory (\fB$TMPDIR/sprat-\fR\fIuid\fR on Linux/macOS, \fB%TEMP%\\sprat\fR on Windows). On Linux/macOS the cache is skipped if that directory is not owned by the user or is writable by others.
 .IP "\(bu" 2
-Unchanged inputs/options reuse cached results.
+Unchanged inputs/options reuse cached results; every option that affects the layout is part of the cache key. Archive inputs are extracted to a new temporary folder on every run, removed afterwards, and are not cached; \fB--debug\fR output is not cached either.
 .IP "\(bu" 2
 Entries older than one hour are pruned automatically.
 .SS spratpack
@@ -140,11 +142,17 @@ Layout accepts:
 .br
 atlas \fIwidth,height\fR (multiple sections supported for multipack)
 .br
+rotation \fBcw\fR|\fBccw\fR (direction of rotated sprites; default \fBcw\fR)
+.br
 scale \fIfactor\fR
 .br
 sprite lines in current or legacy numeric format
 .br
 current sprite lines may include \fBrotated\fR, \fBdither\fR, \fBcolors=N\fR, and \fBslice=L,T,R,B[,H,V]\fR tokens.
+.br
+\fBcolors=N\fR posterizes to N levels per RGB channel (2-256), i.e. at most N\(ha3 colors. Trim offsets must not be negative.
+.PP
+Unknown options, and options missing their value, are rejected with an error.
 .PP
 Output:
 .IP "\(bu" 2
@@ -165,7 +173,8 @@ Transform files are searched in the directory beside the executable, the user da
 .PP
 Optional \fB\-\-markers\fR and \fB\-\-animations\fR files can be loaded and referenced by transform placeholders.
 .PP
-If \fB\-\-auto\-animations\fR is enabled, frames are automatically grouped into animations based on common name prefixes and numeric suffixes.
+If \fB\-\-auto\-animations\fR is enabled, frames are automatically grouped into animations based on common name prefixes and numeric suffixes, ordered by name (\fBrun_2\fR before \fBrun_10\fR).
+Layout \fBalias\fR lines are expanded into frames that share the canonical sprite's atlas region; the \fB{{alias_of}}\fR sprite field holds the canonical path (empty for regular sprites).
 .PP
 Transform sections use explicit open/close tags (for example \fB[meta]\fR ... \fB[/meta]\fR) or the modern line-based DSL (for example \fBmeta\fR, \fBheader\fR, \fBsprites\fR, \fB- sprite\fR).
 .PP
@@ -191,11 +200,11 @@ Placeholders:
 .IP "\(bu" 2
 \fBTrim fields\fR: \fB{{trim_left}}\fR, \fB{{trim_top}}\fR, \fB{{trim_right}}\fR, \fB{{trim_bottom}}\fR (pixels removed from each edge), \fB{{src_x}}\fR/\fB{{src_y}}\fR (aliases for \fBtrim_left\fR/\fBtrim_top\fR), \fB{{has_trim}}\fR (\fBtrue\fR when any trim value is non-zero). Pre-computed plist helpers: \fB{{plist_frame}}\fR (\fB{x,y},{w,h}\fR), \fB{{plist_offset}}\fR (Cocos2d center offset), \fB{{plist_source_color_rect}}\fR (\fB{trim_left,trim_top},{w,h}\fR), \fB{{plist_source_size}}\fR (\fB{source_w,source_h}\fR). \fB{{rotated_plist}}\fR outputs \fB<true/>\fR or \fB<false/>\fR for use in XML/plist boolean elements. \fB{{plist_atlas_size}}\fR is a global field (\fB{atlas_width,atlas_height}\fR).
 .IP "\(bu" 2
-\fBPivot points\fR: \fB{{pivot_x}}\fR, \fB{{pivot_y}}\fR. These are resolved from markers named \fBpivot\fR of type \fBpoint\fR (either per-sprite or global). \fB{{pivot_x_norm}}\fR, \fB{{pivot_y_norm}}\fR provide normalized coordinates (0.0 to 1.0). \fB{{pivot_y_norm}}\fR is flipped for Unity's coordinate system (1.0 - py/source_h). \fB{{pivot_y_norm_raw}}\fR provides normalized Y without flipping.
+\fBPivot points\fR: \fB{{pivot_x}}\fR, \fB{{pivot_y}}\fR. These are resolved from markers named \fBpivot\fR of type \fBpoint\fR (either per-sprite or global). \fB{{pivot_x_norm}}\fR, \fB{{pivot_y_norm}}\fR provide normalized coordinates (0.0 to 1.0). \fB{{pivot_y_norm}}\fR is flipped for Unity's coordinate system (1.0 - py/source_h). \fB{{pivot_y_norm_raw}}\fR provides normalized Y without flipping. Marker files use original-image pixels; exported markers, pivots, trims and nine-slice insets are scaled by the layout's \fBscale\fR into atlas pixels. Jsonnet transforms also receive \fBhas_pivot\fR and \fBpivot_rect_x_norm\fR/\fBpivot_rect_y_norm\fR (relative to the trimmed rect).
 .IP "\(bu" 2
-\fBStable IDs\fR: \fB{{name_hash}}\fR, \fB{{name_hash_hex}}\fR \(em FNV-1a hash of the sprite name, useful for engine-specific internal IDs (such as Unity's spriteID).
+\fBStable IDs\fR: \fB{{name_hash}}\fR, \fB{{name_hash_hex}}\fR \(em FNV-1a hash of the sprite name, useful for engine-specific internal IDs (such as Unity's spriteID). Jsonnet transforms also receive \fBname_hash_signed\fR, the same hash as a signed 64-bit integer, for IDs stored as int64 (such as Unity's internalID).
 .IP "\(bu" 2
-\fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR).
+\fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR). Jsonnet transforms also receive \fBrotation_direction\fR (\fBcw\fR or \fBccw\fR) and \fBhas_rotated\fR.
 .IP "\(bu" 2
 \fBMarker fields\fR: \fB{{marker_name}}\fR, \fB{{marker_type}}\fR, \fB{{marker_sprite_index}}\fR, \fB{{marker_sprite_name}}\fR.
 .IP "\(bu" 2
@@ -212,30 +221,40 @@ The \fBGodot\fR transform produces a JSON file suitable for runtime loading in G
 .nf
 func make_sprite_frames(json_path: String) -> SpriteFrames:
     var data = JSON.parse_string(FileAccess.get_file_as_string(json_path))
-    var atlas = load("res://" + data.image)
+    # Multipack layouts list every atlas; a single atlas is named by "image".
+    var textures = []
+    if data.has("atlases"):
+        for at in data.atlases:
+            textures.append(load("res://" + at.image))
+    else:
+        textures.append(load("res://" + data.image))
     var sf = SpriteFrames.new()
     sf.remove_animation("default")
     for anim in data.animations:
         sf.add_animation(anim.name)
         sf.set_animation_speed(anim.name, anim.speed)
-        for i in range(anim.from, anim.to + 1):
-            var f = data.frames[i]
+        sf.set_animation_loop(anim.name, anim.loop)
+        for i in anim.frames:  # play order; may skip or repeat frames
+            var f = data.frames[int(i)]
             var tex = AtlasTexture.new()
-            tex.atlas = atlas
+            tex.atlas = textures[int(f.get("atlas", 0))]
             tex.region = Rect2(f.region.x, f.region.y, f.region.w, f.region.h)
+            # Offset of the trimmed pixels, and the trimmed space added back
             tex.margin = Rect2(f.margin.left, f.margin.top,
-                               f.margin.right, f.margin.bottom)
+                               f.margin.left + f.margin.right,
+                               f.margin.top + f.margin.bottom)
             sf.add_frame(anim.name, tex)
     return sf
 .fi
 .PP
-Each frame entry contains \fBregion\fR (atlas coordinates), \fBmargin\fR (trim offsets: left/top/right/bottom), \fBsource_size\fR, and \fBrotated\fR. Animation entries contain \fBfrom\fR/\fBto\fR frame indices, \fBspeed\fR (fps), and \fBloop: true\fR.
+Each frame entry contains \fBregion\fR (atlas coordinates), \fBmargin\fR (trim offsets: left/top/right/bottom), \fBsource_size\fR and \fBrotated\fR; multipack layouts add \fBatlas\fR, an index into the top-level \fBatlases\fR list, in place of the top-level \fBimage\fR. \fBAtlasTexture\fR cannot rotate a region, so pack without \fB\-\-rotate\fR for this loader. Animation entries contain \fBframes\fR (indices into \fBframes\fR, in play order), \fBspeed\fR (fps) and \fBloop: true\fR, plus \fBfrom\fR/\fBto\fR only when the frames form one ascending run.
 .PP
 The \fBLibGDX\fR transform produces a LibGDX \fBTextureAtlas\fR \fB.atlas\fR file. The \fBoffset\fR field uses LibGDX's y-up convention: \fBoffset: {{trim_left}}, {{trim_bottom}}\fR. Animations are not encoded in the \fB.atlas\fR format; use sprite name suffixes (e.g. \fBwalk_0\fR, \fBwalk_1\fR) and \fBAnimation<TextureRegion>\fR in code instead.
 .PP
 The \fBplist\fR transform produces a Cocos2d-x TextureAtlas property list (format 2). Per-sprite values use Cocos2d's \fB{x,y}\fR and \fB{x,y},{w,h}\fR notation inside \fB<string>\fR elements. The \fBoffset\fR is the center offset of the trimmed region from the original sprite center (y-up): \fB{(trim_left\-trim_right)/2, (trim_bottom\-trim_top)/2}\fR. These values are available as \fB{{plist_frame}}\fR, \fB{{plist_offset}}\fR, \fB{{plist_source_color_rect}}\fR, \fB{{plist_source_size}}\fR, and \fB{{plist_atlas_size}}\fR when writing custom transforms targeting this format.
 .SS spratframes
 Scans \fIinput_image\fR and detects sprite boundaries by finding non-transparent connected components or by detecting rectangles of a specific color.
+Pieces of one sprite are folded into one frame when one box mostly lies inside the other; sprites whose boxes merely clip each other stay separate, so frames may overlap slightly. Frames are listed in reading order (rows top to bottom, left to right). A solid background is assumed when one opaque color makes up at least half of the image edge, so sprites touching the edge or its corners do not hide it; only background pixels connected to the image edge are removed.
 Prints layout-compatible lines to stdout:
 .PP
 path \fIinput_image\fR
@@ -244,7 +263,7 @@ path \fIinput_image\fR
 .br
 sprite \fIx,y\fR \fIw,h\fR
 .SS spratunpack
-Extracts individual sprites from an \fIatlas.png\fR using a frames definition (\fB.json\fR or \fB.spratframes\fR).
+Extracts individual sprites from an \fIatlas.png\fR using a frames definition: TexturePacker-style JSON (Hash, Array or Phaser multi-atlas), a \fBspratlayout\fR layout, or \fB.spratframes\fR. Rotated sprites are turned back and trimmed sprites are restored to their original size, which may be at most 32768 pixels a side and 100 megapixels. All frames are validated before any output is written.
 .PP
 Atlas input:
 .IP "\(bu" 2
@@ -271,6 +290,7 @@ Use an explicit profile configuration file.
 \fB\-\-mode\fR compact|pot|fast|grid
 Override packing mode from selected profile.
 \fBgrid\fR places every sprite in a uniform cell (sized to the largest frame) arranged left-to-right, top-to-bottom, so any frame can be addressed by column and row index.
+\fBpot\fR atlases are always powers of two, with or without padding; \fB\-\-max\-width\fR/\fB\-\-max\-height\fR allow the largest power of two within them.
 .TP
 \fB\-\-optimize\fR gpu|space
 Override optimization target from selected profile.
@@ -303,7 +323,7 @@ Target output resolution (for example \fB800x600\fR). Must be used together with
 Choose which axis ratio drives source/target resolution scaling. Default: \fBlargest\fR.
 .TP
 \fB\-\-scale\fR \fIF\fR
-Pre-scale factor applied before source/target resolution mapping. Valid range: \fB0 < F <= 1\fR. Overrides profile value.
+Pre-scale factor applied before source/target resolution mapping. Valid range: \fB0 < F <= 1\fR. Overrides profile value. Trimmed sprites keep an original size of exactly round(width \(mu F) \(mu round(height \(mu F).
 .TP
 \fB\-\-trim\-transparent\fR
 Enable transparent-border trimming (overrides profile value).
@@ -311,11 +331,26 @@ Enable transparent-border trimming (overrides profile value).
 \fB\-\-rotate\fR
 Enable 90-degree sprite rotation during packing (overrides profile value).
 .TP
+\fB\-\-rotate\-direction\fR \fIcw|ccw\fR
+Direction rotated sprites are turned in the atlas (default \fBcw\fR). libGDX needs \fBccw\fR; TexturePacker-style formats (Phaser, Aseprite, plist, Godot, Unity JSON) need \fBcw\fR, and their transforms fail on the other direction. \fBunity.meta\fR refuses rotated sprites in either direction; a transform group writes no files when any member fails. Writes a \fBrotation ccw\fR layout line. Profile key: \fBrotate_direction\fR.
+.TP
 \fB\-\-multipack\fR
 Split into multiple atlases if they don't fit in the specified max dimensions.
 .TP
-\fB\-\-sort\fR name|none
-Order of sprites in layout. \fBname\fR sorts by filename using natural ordering and enforces that order in the output regardless of packing optimizations. \fBnone\fR allows the packer to reorder sprites for better packing efficiency. Default: \fBnone\fR.
+\fB\-\-incremental\fR
+Reuse positions of unchanged sprites from the previous run and pack only new or changed sprites into the remaining space, keeping coordinates stable across iterations. Single atlas only; falls back to a full repack if the incremental fit fails. In \fBpot\fR mode the atlas keeps power-of-two sides (a full repack runs when the reused positions cannot fit them within the limits); \fBgrid\fR mode ignores this option. Also available as profile key \fBincremental=true\fR.
+.TP
+\fB\-\-deduplicate\fR none|exact|perceptual
+Pack one copy of duplicate sprites and emit \fBalias\fR lines for the rest. \fBexact\fR merges pixel-identical sprites (content hash). \fBperceptual\fR merges near-identical sprites: a dHash selects candidate pairs, which are merged only if every RGBA channel of every pixel is within \fB\-\-dedup\-tolerance\fR (pixels fully transparent in both are ignored). Each duplicate is compared against its group's canonical sprite, so differences do not accumulate across chains. Sprites with different nine-slice insets are never merged. An alias whose trim offsets differ from its canonical sprite's keeps its own: \fBalias "b.png" "a.png" \fIleft\fB,\fItop right\fB,\fIbottom\fR. Default: \fBnone\fR.
+.TP
+\fB\-\-dedup\-threshold\fR \fIN\fR
+Maximum Hamming distance (0-64) between perceptual hashes for a pair to be compared by \fB\-\-deduplicate perceptual\fR. Higher values consider more pairs (slower) but never merge sprites that fail the pixel check. Default: \fB5\fR.
+.TP
+\fB\-\-dedup\-tolerance\fR \fIN\fR
+Maximum per-channel difference (0-255) between corresponding pixels for \fB\-\-deduplicate perceptual\fR to merge two sprites. \fB0\fR requires identical visible pixels. Default: \fB8\fR.
+.TP
+\fB\-\-sort\fR name|none|stable[:\fImetric\fR]
+Order of sprites in layout. \fBname\fR sorts by filename using natural ordering and enforces that order in the output regardless of packing optimizations. \fBnone\fR allows the packer to reorder sprites for better packing efficiency. \fBstable\fR is a deterministic sort by size then path; \fImetric\fR is \fBarea\fR (default), \fBmaxside\fR, \fBheight\fR, \fBwidth\fR or \fBperimeter\fR. Default: \fBnone\fR. Images of a folder or archive are always read in natural filename order, so a folder gives the same layout on every filesystem; list files and \fB\-\-stdin\-list\fR keep their own order.
 .TP
 \fB\-\-threads\fR \fIN\fR
 Number of worker threads used during compact-mode packing (\fB\-\-preset quality\fR or \fB\-\-preset small\fR).
@@ -337,22 +372,45 @@ Config keys available per profile section:
 \fBpadding\fR
 .IP "\(bu" 2
 \fBscale\fR (\fB0 < scale <= 1\fR), \fBtrim_transparent\fR, \fBthreads\fR, \fBmultipack\fR
+.IP "\(bu" 2
+\fBrotate=true|false\fR, \fBrotate_direction=cw|ccw\fR
 .SS spratpack
 .TP
-\fB\-a\fR, \fB\-\-atlas\fR \fIPATTERN\fR
+\fB\-a\fR, \fB\-\-atlas\fR, \fB\-o\fR, \fB\-\-output\fR \fIPATTERN\fR
 Output filename pattern (e.g. \fBatlas_%d.png\fR). Required for multipack layouts when not writing to stdout.
 .TP
 \fB\-\-atlas\-index\fR \fIN\fR
 Process only the specified atlas index from the layout.
 .TP
 \fB\-\-extrude\fR \fIN\fR
-Repeat edge pixels N times (overrides layout value).
+Repeat edge pixels N times (overrides layout value). Never writes inside another sprite's rectangle, so it is cut short where sprites are closer than 2 \(mu N.
+.TP
+\fB\-\-dilate\fR \fIN\fR
+Fill transparent pixels up to N pixels away from visible ones with their color, keeping alpha at 0, so GPU filtering does not pull in black at sprite edges. Never writes inside another sprite's rectangle.
 .TP
 \fB\-\-protect\fR
 Protect output PNG with basic XOR-based obfuscation.
 .TP
 \fB\-\-zopfli\fR
-Optimize output PNG using Zopfli (very slow, requires build-time support).
+Optimize output PNG using Zopfli (very slow). Only valid for PNG output; fails if zopflipng support was not compiled in.
+.TP
+\fB\-\-format\fR \fBpng\fR|\fBwebp\fR|\fBavif\fR
+Output image format. Default: \fBpng\fR. WebP and AVIF need libwebp/libavif at build time.
+.TP
+\fB\-\-quality\fR \fIN\fR
+WebP/AVIF quality 0\(en100. Default and \fB100\fR: lossless, keeping every pixel exactly, including the colour of transparent pixels.
+.TP
+\fB\-\-gpu\-compress\fR \fBdxt1\fR|\fBdxt5\fR
+Write a DXT1 or DXT5 DDS texture instead of an image (libsquish). The atlas is padded with transparent pixels to a multiple of 4. Atlases larger than about 23170x23170 are refused (libsquish's size limit; Direct3D supports up to 16384x16384).
+.TP
+\fB\-\-gpu\-quality\fR \fBfast\fR|\fBbest\fR
+DDS compression quality. Default: \fBfast\fR (range fit). \fBbest\fR (cluster fit) is slightly better and much slower.
+.TP
+\fB\-\-output\-scale\fR \fIFACTOR\fR
+Scale the output atlas dimensions and sprite positions by \fIFACTOR\fR (for example \fB0.5\fR for half size). Uses the filter selected by \fB\-\-scale\-filter\fR.
+.TP
+\fB\-\-path\-suffix\fR \fISUFFIX\fR
+Insert \fISUFFIX\fR before the extension when loading sprite images (for example \fB_n\fR loads \fBhero_n.png\fR instead of \fBhero.png\fR). Used to pack normal or collision maps with the same layout.
 .TP
 \fB\-\-frame\-lines\fR
 Draw rectangle outlines for each sprite.
@@ -374,7 +432,10 @@ Enable detailed error reporting and debug visualization.
 Transform name or path to a custom transform file. Default: \fBjson\fR.
 .TP
 \fB\-a\fR, \fB\-\-atlas\fR \fIPATTERN\fR
-Atlas path pattern used by \fB{{atlas_path}}\fR/\fB{{atlas_*}}\fR placeholders. Example: \fBatlas_%d.png\fR.
+Atlas path pattern used by \fB{{atlas_path}}\fR/\fB{{atlas_*}}\fR placeholders. Example: \fBatlas_%d.png\fR. It names the per-atlas output files and seeds stable IDs (such as Unity GUIDs), and by default it is also how the metadata refers to the atlas images.
+.TP
+\fB\-\-image\-path\fR \fIPATTERN\fR
+Path written into the metadata to refer to each atlas image, with the same \fB%d\fR syntax. Default: the \fB\-\-atlas\fR path as given. Engines usually resolve it relative to the metadata file, so use it when \fB\-\-atlas\fR includes a directory, e.g. \fB\-\-atlas out/atlas_%d.png \-\-image\-path atlas_%d.png \-\-output\-dir out\fR. Without \fB\-\-atlas\fR, it also names the atlas files. \fB\-\-normal\-atlas\fR and \fB\-\-collision\-atlas\fR are written as given.
 .TP
 \fB\-\-output\-dir\fR \fIPATH\fR
 Write transform output to \fIPATH/{variant}{extension}\fR instead of stdout.
@@ -405,16 +466,25 @@ In the output, alias entries carry an \fBalias\fR field in place of \fBfps\fR an
 .TP
 \fB\-\-auto\-animations\fR
 Automatically group frames into animations by name pattern.
+.TP
+\fB\-\-normal\-atlas\fR \fIPATTERN\fR
+Normal map atlas path pattern (same format as \fB\-\-atlas\fR). Exposed to transforms as \fBhas_normal_atlas\fR and \fBnormal_atlas_path\fR.
+.TP
+\fB\-\-collision\-atlas\fR \fIPATTERN\fR
+Collision map atlas path pattern (same format as \fB\-\-atlas\fR). Exposed to transforms as \fBhas_collision_atlas\fR and \fBcollision_atlas_path\fR.
+.TP
+\fB\-\-collision\-scale\fR \fIFACTOR\fR
+Scale used when packing the collision atlas (the \fBspratpack \-\-output\-scale\fR value). Exposed as \fBcollision_atlas_scale\fR. Default: \fB1\fR.
 .SS spratframes
 .TP
 \fB\-\-has\-rectangles\fR
-Instead of transparency-based detection, look for closed rectangles of a specific color.
+Instead of transparency-based detection, use the areas enclosed by lines of the rectangle color as frames: separate boxes or grids whose cells share lines, with any line width. Each whole cell is a frame; cells must be fully enclosed, and empty cells are skipped.
 .TP
 \fB\-\-rectangle\-color\fR \fICOLOR\fR
 Color of rectangle borders to detect. Formats: #RRGGBB, #RGB, RGB(r,g,b), r,g,b. Default: \fB255,0,255\fR (magenta).
 .TP
 \fB\-\-tolerance\fR \fIN\fR
-Distance tolerance in pixels for grouping non-transparent pixels into sprites. Default: \fB1\fR.
+Distance tolerance in pixels for grouping non-transparent pixels into sprites. Default: \fB1\fR. Use 3\(en5 for effect sheets made of separate particles; keep 1 for tightly packed characters. Frames always fit the sprite pixels exactly.
 .TP
 \fB\-\-min\-size\fR \fIN\fR
 Minimum width/height for a detected sprite to be included. Default: \fB4\fR.
@@ -423,7 +493,7 @@ Minimum width/height for a detected sprite to be included. Default: \fB4\fR.
 Limit the maximum number of sprites to detect. Default: \fB10000\fR.
 .TP
 \fB\-\-threads\fR \fIN\fR
-Number of worker threads. Default: auto.
+Accepted for compatibility; detection runs on one thread.
 .SS spratunpack
 .TP
 \fB\-f\fR, \fB\-\-frames\fR \fIPATH\fR
@@ -432,8 +502,14 @@ Path to frames definition file (\fB.json\fR or \fB.spratframes\fR).
 \fB\-o\fR, \fB\-\-output\fR \fIDIR\fR
 Directory where extracted sprites will be saved. If omitted, sprites are written as a TAR stream to stdout.
 .TP
+\fB\-\-keep\-trim\fR
+Write only the packed pixels instead of restoring each sprite's original size.
+.TP
+\fB\-\-atlas\-index\fR \fIN\fR
+For a multipack layout, the atlas the given image is. Default: the layout's only atlas, or the only one with the image's size. Deduplicated sprites (\fBalias\fR lines) are unpacked too.
+.TP
 \fB\-j\fR, \fB\-\-threads\fR \fIN\fR
-Number of worker threads for sprite extraction. Default: auto.
+Number of threads encoding the extracted PNGs. Default: all cores. The output does not depend on it.
 .TP
 \fB\-\-debug\fR
 Enable detailed error reporting.
@@ -456,6 +532,9 @@ Full pipeline (layout and pack in one step):
 .TP
 Multipack to multiple files:
 .B spratlayout ./frames --multipack --max-width 1024 --max-height 1024 | spratpack -a atlas_%d.png
+.TP
+Metadata for a multipack layout (formats that describe one texture, such as \fBplist\fR, \fBaseprite\fR, \fBunity.json\fR and \fBunity.meta\fR, write one file per atlas; \fBphaser-hash\fR and \fBphaser-array\fR write a Phaser multi-atlas JSON):
+.B spratconvert --transform plist -a atlas_%d.png --output-dir out < layout.txt
 .TP
 Convert layout to JSON:
 .B spratconvert --transform json < layout.txt > layout.json
@@ -505,6 +584,6 @@ All commands return:
 Success.
 .TP
 \fB1\fR
-Invalid arguments, invalid input data, image decode/encode failure, or packing failure.
+Invalid arguments, invalid input data, image decode/encode failure, or packing failure. \fBspratframes\fR also returns 1 when it finds no frames.
 .SH SEE ALSO
 \fBspratlayout\fR(1), \fBspratpack\fR(1), \fBspratconvert\fR(1), \fBspratframes\fR(1), \fBspratunpack\fR(1)

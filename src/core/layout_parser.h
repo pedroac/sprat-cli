@@ -45,6 +45,20 @@ struct Sprite {
     std::string alias_of;  // Non-empty if this is an alias of another sprite
 };
 
+// A duplicate sprite that reuses a canonical sprite's atlas region. The alias keeps
+// its own trim offsets: identical trimmed pixels can sit at different places in
+// their source images (e.g. a bobbing animation frame), so copying the canonical
+// trim would shift the alias when an engine restores the original canvas.
+struct Alias {
+    std::string path;
+    std::string canonical_path;
+    bool has_trim = false;  // false: inherit the canonical sprite's trim
+    int trim_left = 0;
+    int trim_top = 0;
+    int trim_right = 0;
+    int trim_bottom = 0;
+};
+
 struct Atlas {
     int width = 0;
     int height = 0;
@@ -60,9 +74,13 @@ struct Layout {
     bool has_extrude = false;
     bool multipack = false;
     bool has_multipack = false;
+    // Direction of the 90-degree rotation applied to sprites marked "rotated".
+    // Clockwise is the default; libGDX needs counter-clockwise.
+    bool rotate_ccw = false;
+    bool has_rotation = false;
     std::vector<Sprite> sprites;
     std::vector<Marker> global_markers;
-    std::vector<std::pair<std::string, std::string>> aliases;  // (alias_path, canonical_path) pairs
+    std::vector<Alias> aliases;
 };
 
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error);
@@ -70,7 +88,36 @@ bool parse_atlas_line(const std::string& line, int& width, int& height);
 bool parse_scale_line(const std::string& line, double& scale);
 bool parse_extrude_line(const std::string& line, int& extrude);
 bool parse_multipack_line(const std::string& line, bool& multipack);
-bool parse_alias_line(const std::string& line, std::string& alias_path, std::string& canonical_path, std::string& error);
+bool parse_rotation_line(const std::string& line, bool& rotate_ccw);
+bool parse_alias_line(const std::string& line, Alias& out, std::string& error);
 bool parse_layout(std::istream& in, Layout& out, std::string& error);
+// Appends one sprite per alias, sharing its canonical sprite's atlas region, and
+// clears layout.aliases. Fails if an alias names a canonical sprite that is missing.
+bool expand_layout_aliases(Layout& layout, std::string& error);
+
+// Android nine-patch images (".9.png") carry a 1px stretch-marker border around the
+// content. Layouts keep that border inside the trim offsets, since spratpack crops from
+// the whole file; slice insets are relative to the content.
+inline bool is_nine_patch_path(std::string_view path) {
+    constexpr std::string_view suffix = ".9.png";
+    return path.size() >= suffix.size() && path.substr(path.size() - suffix.size()) == suffix;
+}
+
+// Layout trims, slices and markers are in original-image pixels, while the packed size is
+// already scaled. Converts one such value into atlas pixels, rounding to the nearest pixel
+// and saturating instead of overflowing for absurd layout scales.
+int scale_to_atlas(int value, double scale);
+
+// Trim margins of the sprite as engines (and unpacked sprites) see it, in atlas pixels:
+// a nine-patch's 1px marker border is removed (it is not part of the image an engine
+// gets; spratlayout only strips it when all four sides have it), then the margins are
+// scaled like the packed size.
+struct MetadataTrim {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
+};
+MetadataTrim metadata_trim(const Sprite& s, double scale);
 
 } // namespace sprat::core

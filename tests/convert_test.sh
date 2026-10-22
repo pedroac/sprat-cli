@@ -416,6 +416,91 @@ assert p1['atlas_index'] == 1, 'p1 should be atlas_index 1, got ' + str(p1['atla
 " "$(fix_path "$tmp_dir/out.multipack.json")"
 fi
 
+# ── Animation/marker files with root + relative paths ─────────────────────────
+# Regression: on Windows the root was joined with '\', so suffix lookup failed and
+# frames were silently dropped. The backslash variant exercises that on all OSes.
+rootrel_layout="$tmp_dir/rootrel_layout.txt"
+cat > "$rootrel_layout" <<'RRLAYOUT'
+root "./frames"
+atlas 8,4
+sprite "a.png" 0,0 4,4
+sprite "b.png" 4,0 4,4
+RRLAYOUT
+rootrel_anims="$tmp_dir/rootrel_anims.txt"
+cat > "$rootrel_anims" <<'RRANIMS'
+root "./frames"
+animation "run" 12
+- frame "a.png"
+- frame b.png
+animation "back" 6
+- frame "frames\b.png"
+- frame ".\frames\a.png"
+RRANIMS
+rootrel_markers="$tmp_dir/rootrel_markers.txt"
+cat > "$rootrel_markers" <<'RRMARKERS'
+root "./frames"
+path "b.png"
+- marker "hit" point 1,2
+RRMARKERS
+"$convert_bin" --transform phaser-anims --atlas atlas.png --animations "$(fix_path "$rootrel_anims")" < "$rootrel_layout" > "$tmp_dir/out.rootrel.phaser.json"
+"$convert_bin" --transform json --animations "$(fix_path "$rootrel_anims")" --markers "$(fix_path "$rootrel_markers")" < "$rootrel_layout" > "$tmp_dir/out.rootrel.json"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "
+import json, sys
+p = json.load(open(sys.argv[1]))
+run = next(a for a in p['anims'] if a['key'] == 'run')
+assert run['frameRate'] == 12, run
+assert len(run['frames']) == 2, 'root-relative frames dropped: %r' % run
+d = json.load(open(sys.argv[2]))
+run = next(a for a in d['animations'] if a['name'] == 'run')
+assert run['sprite_indexes'] == [0, 1], run
+back = next(a for a in d['animations'] if a['name'] == 'back')
+assert back['sprite_indexes'] == [1, 0], 'backslash frame paths not resolved: %r' % back
+b_sp = next(s for s in d['sprites'] if s['name'] == 'b')
+assert any(m['name'] == 'hit' for m in b_sp['markers']), 'root-relative marker path not resolved'
+" "$(fix_path "$tmp_dir/out.rootrel.phaser.json")" "$(fix_path "$tmp_dir/out.rootrel.json")"
+fi
+
+# ── Layout aliases are expanded into frames ───────────────────────────────────
+alias_layout="$tmp_dir/alias_layout.txt"
+cat > "$alias_layout" <<'ALIASLAYOUT'
+atlas 8,8
+sprite "idle_10.png" 0,0 4,4 1,6 2,0
+sprite "idle_2.png" 4,0 4,4
+alias "idle_1.png" "idle_10.png"
+alias "idle_3.png" "idle_10.png" 1,0 2,6
+ALIASLAYOUT
+"$convert_bin" --transform phaser-hash --atlas atlas.png < "$alias_layout" > "$tmp_dir/out.alias.phaser.json"
+"$convert_bin" --transform json --auto-animations < "$alias_layout" > "$tmp_dir/out.alias_sprites.json"
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "
+import json, sys
+frames = json.load(open(sys.argv[1]))['frames']
+assert sorted(frames) == ['idle_1', 'idle_10', 'idle_2', 'idle_3'], sorted(frames)
+canonical = frames['idle_10']
+for name in ('idle_1', 'idle_3'):
+    assert frames[name]['frame'] == canonical['frame'], name
+    assert frames[name]['sourceSize'] == canonical['sourceSize'], name
+# idle_1 shares the canonical placement; idle_3 keeps its own (6px higher)
+assert frames['idle_1']['spriteSourceSize'] == canonical['spriteSourceSize']
+assert frames['idle_3']['spriteSourceSize']['y'] == 0, frames['idle_3']
+assert canonical['spriteSourceSize']['y'] == 6, canonical
+d = json.load(open(sys.argv[2]))
+by_name = {s['name']: s for s in d['sprites']}
+assert by_name['idle_1']['alias_of'] == 'idle_10.png', by_name['idle_1']
+assert 'alias_of' not in by_name['idle_2'], by_name['idle_2']
+# auto-detected frames play in natural name order, not layout order
+idle = next(a for a in d['animations'] if a['name'] == 'idle')
+assert idle['sprite_names'] == ['idle_1', 'idle_2', 'idle_3', 'idle_10'], idle
+" "$(fix_path "$tmp_dir/out.alias.phaser.json")" "$(fix_path "$tmp_dir/out.alias_sprites.json")"
+fi
+printf 'atlas 4,4\nsprite "a.png" 0,0 4,4\nalias "b.png" "missing.png"\n' > "$tmp_dir/alias_missing.txt"
+if "$convert_bin" --transform json < "$tmp_dir/alias_missing.txt" > /dev/null 2> "$tmp_dir/alias_missing.err"; then
+  echo "alias to an unknown sprite should fail" >&2
+  exit 1
+fi
+grep -q 'missing.png' "$tmp_dir/alias_missing.err"
+
 # ── Empty animations file ─────────────────────────────────────────────────────
 empty_anims_file="$tmp_dir/empty_anims.txt"
 cat > "$empty_anims_file" <<'EMPTYANIMS'
@@ -608,6 +693,202 @@ d = json.load(open(sys.argv[1]))
 name = d['sprites'][0]['name']
 assert name == 'button', 'expected name \"button\", got \"' + name + '\"'
 " "$(fix_path "$tmp_dir/ninepatch_name.json")"
+fi
+
+# libgdx: pages are separated by a blank line and rotated regions use the unrotated size
+cat > "$tmp_dir/libgdx_multi.txt" <<'EOF'
+multipack true
+rotation ccw
+atlas 100,50
+sprite "rot.png" 0,0 30,50 rotated
+atlas 10,10
+sprite "plain.png" 0,0 10,10
+EOF
+"$convert_bin" --transform libgdx -a 'atlas_%d.png' < "$tmp_dir/libgdx_multi.txt" | tr -d '\r' > "$tmp_dir/out.multi.atlas"
+if [ -n "$(grep -B1 '^atlas_1.png$' "$tmp_dir/out.multi.atlas" | head -n1 | grep -v '^atlas_1.png$')" ]; then
+  echo "libgdx pages must be separated by a blank line" >&2
+  cat "$tmp_dir/out.multi.atlas" >&2
+  exit 1
+fi
+grep -A3 '^rot$' "$tmp_dir/out.multi.atlas" | grep -q '  size: 50, 30'
+grep -A4 '^rot$' "$tmp_dir/out.multi.atlas" | grep -q '  orig: 50, 30'
+
+# rotation direction: formats with a fixed convention refuse the other direction
+if sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform libgdx > /dev/null 2>&1; then
+  echo "libgdx must refuse clockwise-rotated sprites" >&2
+  exit 1
+fi
+for t in phaser-hash phaser-array aseprite plist godot unity.json; do
+  if "$convert_bin" --transform "$t" < "$tmp_dir/libgdx_multi.txt" > /dev/null 2>&1; then
+    echo "$t must refuse counter-clockwise-rotated sprites" >&2
+    exit 1
+  fi
+  # two atlases: per-atlas formats write one file each, so give them an output directory
+  sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform "$t" --output-dir "$tmp_dir/cw_$t" > /dev/null
+done
+# layouts without rotated sprites work with any format regardless of direction
+printf 'rotation ccw\natlas 4,4\nsprite "a.png" 0,0 4,4\n' | "$convert_bin" --transform phaser-hash > /dev/null
+"$convert_bin" --transform json < "$tmp_dir/libgdx_multi.txt" | grep -q '"rotation": 270'
+"$convert_bin" --transform csv < "$tmp_dir/libgdx_multi.txt" | grep -q ',270,'
+"$convert_bin" --transform xml < "$tmp_dir/libgdx_multi.txt" | grep -q 'rotation="270"'
+sed '/^rotation ccw$/d' "$tmp_dir/libgdx_multi.txt" | "$convert_bin" --transform json | grep -q '"rotation": 90'
+"$convert_bin" --transform css < "$tmp_dir/libgdx_multi.txt" | grep -q 'rotate(90deg) translate(0, -100%)'
+
+# css: quotes in the atlas path and comment terminators in paths are escaped
+printf 'atlas 4,4\nsprite "a*/b.png" 0,0 4,4\n' > "$tmp_dir/css_escape.txt"
+"$convert_bin" --transform css -a "it's.png" < "$tmp_dir/css_escape.txt" > "$tmp_dir/out.escape.css"
+grep -qF "url('it\\'s.png')" "$tmp_dir/out.escape.css"
+if grep -qF 'a*/b.png' "$tmp_dir/out.escape.css"; then
+  echo "css output must not contain a raw comment terminator" >&2
+  exit 1
+fi
+
+# csv: markers of every type export, and the markers_json column stays one quoted field
+printf 'atlas 16,16\nsprite "a.png" 0,0 16,16\n' > "$tmp_dir/csv_markers.txt"
+cat > "$tmp_dir/csv_markers.markers" <<'MARKERS'
+path "a.png"
+- marker "hurt" circle 6,7 4
+- marker "hit" point 1,1
+- marker "poly" polygon 0,0 4,0 4,4
+MARKERS
+"$convert_bin" --transform csv --markers "$(fix_path "$tmp_dir/csv_markers.markers")" < "$tmp_dir/csv_markers.txt" > "$tmp_dir/out.markers.csv"
+grep -qF ',3,"[{""name"":""hurt""' "$tmp_dir/out.markers.csv"
+grep -q '^marker,0,hurt,circle,6,7,4,,,,0,a,a.png' "$tmp_dir/out.markers.csv"
+grep -q '^marker,1,hit,point,1,1,,,,,0,a,a.png' "$tmp_dir/out.markers.csv"
+grep -q '^marker,2,poly,polygon,0,0,,,,"0,0|4,0|4,4",0,a,a.png' "$tmp_dir/out.markers.csv"
+
+# TexturePacker-style formats: rotated frames carry the unrotated size (readers swap it),
+# and plist rects use Cocos2d-x's "{{x,y},{w,h}}" syntax.
+printf 'atlas 64,32\nsprite "b.png" 16,0 10,6 1,2 3,4 rotated\n' > "$tmp_dir/tp_rotated.txt"
+for t in phaser-hash phaser-array unity.json aseprite; do
+  "$convert_bin" --transform "$t" < "$tmp_dir/tp_rotated.txt" | tr -d ' \n' > "$tmp_dir/out.tp.$t"
+  grep -qF '"frame":{"h":10,"w":6,"x":16,"y":0}' "$tmp_dir/out.tp.$t"
+done
+"$convert_bin" --transform plist < "$tmp_dir/tp_rotated.txt" > "$tmp_dir/out.tp.plist"
+grep -qF '<string>{{16,0},{6,10}}</string>' "$tmp_dir/out.tp.plist"
+grep -qF '<string>{{1,2},{6,10}}</string>' "$tmp_dir/out.tp.plist"
+grep -qF '<string>{-1,1}</string>' "$tmp_dir/out.tp.plist"
+# odd trim differences give a half-pixel offset instead of rounding it away
+printf 'atlas 8,8\nsprite "c.png" 0,0 4,4 1,0 0,0\n' | "$convert_bin" --transform plist | grep -qF '<string>{0.5,0}</string>'
+
+# godot: animations list their frames in play order; from/to only for one ascending run
+printf 'atlas 24,8\nsprite "0.png" 0,0 8,8\nsprite "1.png" 8,0 8,8\nsprite "2.png" 16,0 8,8\n' > "$tmp_dir/godot_anim.txt"
+printf 'animation "back"\n- frame 2\n- frame 0\nanimation "run"\n- frame 0\n- frame 1\n' > "$tmp_dir/godot_anim.anims"
+"$convert_bin" --transform godot --animations "$(fix_path "$tmp_dir/godot_anim.anims")" < "$tmp_dir/godot_anim.txt" | tr -d ' \n' > "$tmp_dir/out.godot_anim"
+grep -qF '{"frames":[2,0],"loop":true,"name":"back","speed":8}' "$tmp_dir/out.godot_anim"
+grep -qF '{"frames":[0,1],"from":0,"loop":true,"name":"run","speed":8,"to":1}' "$tmp_dir/out.godot_anim"
+
+# multipack: single-texture formats write one file per atlas holding only that atlas's sprites
+printf 'atlas 32,32\nsprite "a.png" 0,0 16,16\nsprite "b.png" 16,0 8,8 slice=2,2,2,2\natlas 64,16\nsprite "c.png" 0,0 8,8\nsprite "d.png" 8,0 8,8\n' > "$tmp_dir/mp.txt"
+printf 'animation "walk"\n- frame 0\n- frame 1\n- frame 2\n- frame 3\n' > "$tmp_dir/mp.anims"
+mp_anims="$(fix_path "$tmp_dir/mp.anims")"
+if "$convert_bin" --transform plist < "$tmp_dir/mp.txt" > /dev/null 2>&1; then
+  echo "multipack plist must require --output-dir" >&2
+  exit 1
+fi
+"$convert_bin" --transform plist --output-dir "$tmp_dir/mp_plist" < "$tmp_dir/mp.txt"
+grep -qF '<string>atlas_1.png</string>' "$tmp_dir/mp_plist/atlas_1.plist"
+grep -qF '<key>c</key>' "$tmp_dir/mp_plist/atlas_1.plist"
+if grep -qF '<key>a</key>' "$tmp_dir/mp_plist/atlas_1.plist"; then
+  echo "atlas_1.plist must only list atlas 1 sprites" >&2
+  exit 1
+fi
+"$convert_bin" --transform unity.json --output-dir "$tmp_dir/mp_unity_json" < "$tmp_dir/mp.txt"
+grep -qF '"image": "atlas_1.png"' "$tmp_dir/mp_unity_json/atlas_1.json"
+grep -qF '"d": {' "$tmp_dir/mp_unity_json/atlas_1.json"
+# aseprite: tags and slice keys use frame positions inside each file; a run split across
+# atlases becomes one tag per file
+"$convert_bin" --transform aseprite --animations "$mp_anims" --output-dir "$tmp_dir/mp_aseprite" < "$tmp_dir/mp.txt"
+tr -d ' \n' < "$tmp_dir/mp_aseprite/atlas_0.json" > "$tmp_dir/mp_aseprite.0"
+tr -d ' \n' < "$tmp_dir/mp_aseprite/atlas_1.json" > "$tmp_dir/mp_aseprite.1"
+grep -qF '"frameTags":[{"direction":"forward","from":0,"name":"walk","to":1}]' "$tmp_dir/mp_aseprite.0"
+grep -qF '"frameTags":[{"direction":"forward","from":0,"name":"walk","to":1}]' "$tmp_dir/mp_aseprite.1"
+grep -qF '"frame":1}],"name":"b"' "$tmp_dir/mp_aseprite.0"
+# phaser: one multi-atlas JSON on stdout
+for t in phaser-hash phaser-array; do
+  "$convert_bin" --transform "$t" < "$tmp_dir/mp.txt" | tr -d ' \n' > "$tmp_dir/out.mp.$t"
+  grep -qF '"image":"atlas_1.png","scale":1,"size":{"h":16,"w":64}' "$tmp_dir/out.mp.$t"
+  grep -qF '"textures":[{"format":"RGBA8888","frames":[{"filename":"a"' "$tmp_dir/out.mp.$t"
+done
+# godot: one file listing atlases, each frame tagged with its atlas
+"$convert_bin" --transform godot < "$tmp_dir/mp.txt" | tr -d ' \n' > "$tmp_dir/out.mp.godot"
+grep -qF '"atlases":[{"image":"atlas_0.png","size":{"h":32,"w":32}},{"image":"atlas_1.png","size":{"h":16,"w":64}}]' "$tmp_dir/out.mp.godot"
+grep -qF '{"atlas":1,"margin"' "$tmp_dir/out.mp.godot"
+
+# multi-file output: filenames must stay inside --output-dir and be unique; a refused result
+# writes nothing
+printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/one.txt"
+printf '{ name: "escape", extension: ".x", files: [{ filename: "ok.x", content: "1" }, { filename: "../escaped.x", content: "2" }] }\n' > "$tmp_dir/escape.jsonnet"
+printf '{ name: "dupe", extension: ".x", files: [{ filename: "a.x", content: "1" }, { filename: "a.x", content: "2" }] }\n' > "$tmp_dir/dupe.jsonnet"
+for t in escape dupe; do
+  if "$convert_bin" --transform "$(fix_path "$tmp_dir/$t.jsonnet")" --output-dir "$tmp_dir/files_$t/out" < "$tmp_dir/one.txt" > /dev/null 2>&1; then
+    echo "$t.jsonnet output must be refused" >&2
+    exit 1
+  fi
+  if [ -e "$tmp_dir/files_$t" ]; then
+    echo "$t.jsonnet left output behind" >&2
+    exit 1
+  fi
+done
+
+# phaser-anims: frames use the texture key, shared by all atlases of a multipack layout
+printf 'animation "walk"\n- frame 0\n- frame 1\n' > "$tmp_dir/key.anims"
+key_anims="$(fix_path "$tmp_dir/key.anims")"
+"$convert_bin" --transform phaser-anims --animations "$key_anims" -a 'out/hero_%d.png' < "$tmp_dir/mp.txt" | grep -qF '"key": "hero"'
+"$convert_bin" --transform phaser-anims --animations "$key_anims" < "$tmp_dir/mp.txt" | grep -qF '"key": "atlas"'
+printf 'atlas 16,8\nsprite "a.png" 0,0 8,8\nsprite "b.png" 8,0 8,8\n' \
+  | "$convert_bin" --transform phaser-anims --animations "$key_anims" -a 'hero.png' | grep -qF '"key": "hero"'
+
+# scaled layouts: trims and markers are in original-image pixels, the packed size is scaled;
+# exported metadata uses atlas pixels throughout
+printf 'scale 0.5\natlas 200,250\nsprite "f.png" 0,0 161,228 4,5 2,0\n' > "$tmp_dir/scaled.txt"
+printf 'path "f.png"\n- marker "pivot" point 164,230\n- marker "hit" rectangle 10,20 30,40\n' > "$tmp_dir/scaled.markers"
+"$convert_bin" --transform phaser-hash < "$tmp_dir/scaled.txt" | tr -d ' \n' > "$tmp_dir/out.scaled.phaser"
+grep -qF '"sourceSize":{"h":231,"w":164}' "$tmp_dir/out.scaled.phaser"
+grep -qF '"spriteSourceSize":{"h":228,"w":161,"x":2,"y":3}' "$tmp_dir/out.scaled.phaser"
+"$convert_bin" --transform json --markers "$(fix_path "$tmp_dir/scaled.markers")" < "$tmp_dir/scaled.txt" | tr -d ' \n' > "$tmp_dir/out.scaled.json"
+grep -qF '"pivot":{"x":82,"y":115}' "$tmp_dir/out.scaled.json"
+grep -qF '"type":"rectangle","w":15,"x":5,"y":10}' "$tmp_dir/out.scaled.json"
+grep -qF '"h":20,"index":1,"name":"hit"' "$tmp_dir/out.scaled.json"
+
+# phaser applies any pivot as the origin: only write one when a pivot marker sets it
+printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/nopivot.txt"
+if "$convert_bin" --transform phaser-hash < "$tmp_dir/nopivot.txt" | grep -q '"pivot"'; then
+  echo "phaser frames without a pivot marker must not carry a pivot" >&2
+  exit 1
+fi
+printf 'path "a.png"\n- marker "pivot" point 4,8\n' > "$tmp_dir/nopivot.markers"
+"$convert_bin" --transform phaser-array --markers "$(fix_path "$tmp_dir/nopivot.markers")" < "$tmp_dir/nopivot.txt" \
+  | tr -d ' \n' | grep -qF '"pivot":{"x":0.5,"y":1}'
+
+# nine-patch: the 1px marker border is not part of the exported image
+printf 'atlas 16,16\nsprite "padded.9.png" 0,0 8,8 4,3 4,3 slice=4,4,2,2\n' > "$tmp_dir/ninepatch.txt"
+"$convert_bin" --transform plist < "$tmp_dir/ninepatch.txt" > "$tmp_dir/out.ninepatch.plist"
+grep -qF '<string>{14,12}</string>' "$tmp_dir/out.ninepatch.plist"
+grep -qF '<string>{{3,2},{8,8}}</string>' "$tmp_dir/out.ninepatch.plist"
+grep -qF '<string>{{4,4},{8,6}}</string>' "$tmp_dir/out.ninepatch.plist"
+printf 'atlas 16,16\nsprite "plain.9.png" 0,0 14,12 1,1 1,1 slice=4,4,2,2\n' \
+  | "$convert_bin" --transform phaser-hash | tr -d ' \n' | grep -qF '"sourceSize":{"h":12,"w":14},"spriteSourceSize":{"h":12,"w":14,"x":0,"y":0},"trimmed":false'
+
+# --image-path: the reference written into metadata; -a still names files and seeds GUIDs
+printf 'atlas 32,32\nsprite "a.png" 0,0 16,16\natlas 32,32\nsprite "b.png" 0,0 8,8\n' > "$tmp_dir/ip.txt"
+"$convert_bin" --transform libgdx -a 'out/atlas_%d.png' < "$tmp_dir/ip.txt" | grep -qx 'out/atlas_1.png'
+"$convert_bin" --transform libgdx -a 'out/atlas_%d.png' --image-path 'atlas_%d.png' < "$tmp_dir/ip.txt" > "$tmp_dir/out.ip.atlas"
+grep -qx 'atlas_1.png' "$tmp_dir/out.ip.atlas"
+if grep -q 'out/' "$tmp_dir/out.ip.atlas"; then
+  echo "--image-path must replace the -a path inside the metadata" >&2
+  exit 1
+fi
+"$convert_bin" --transform plist -a 'out/sheet_%d.png' --image-path 'tex/sheet_%d.png' --output-dir "$tmp_dir/ip_plist" < "$tmp_dir/ip.txt"
+grep -qF '<string>tex/sheet_1.png</string>' "$tmp_dir/ip_plist/sheet_1.plist"
+"$convert_bin" --transform unity.meta -a 'out/sheet_%d.png' --output-dir "$tmp_dir/ip_meta_a" < "$tmp_dir/ip.txt"
+"$convert_bin" --transform unity.meta -a 'out/sheet_%d.png' --image-path 'x_%d.png' --output-dir "$tmp_dir/ip_meta_b" < "$tmp_dir/ip.txt"
+diff "$tmp_dir/ip_meta_a/sheet_1.png.meta" "$tmp_dir/ip_meta_b/sheet_1.png.meta"
+"$convert_bin" --transform plist --image-path 'tex/hero_%d.png' --output-dir "$tmp_dir/ip_only" < "$tmp_dir/ip.txt"
+[ -f "$tmp_dir/ip_only/hero_1.plist" ]
+if "$convert_bin" --transform json --image-path 'same.png' < "$tmp_dir/ip.txt" > /dev/null 2>&1; then
+  echo "--image-path without %d must be refused for multipack layouts" >&2
+  exit 1
 fi
 
 echo "convert_test.sh: ok"

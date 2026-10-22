@@ -1,4 +1,7 @@
+// These tests rely on assert(); keep it active in Release builds (CI builds Release).
+#undef NDEBUG
 #include "../src/core/layout_parser.h"
+#include "../src/commands/spratlayout/packing.h"
 #include <iostream>
 #include <string>
 #include <cassert>
@@ -171,6 +174,58 @@ void test_parse_sprite_line_rejects_negative_position() {
     std::cout << "test_parse_sprite_line_rejects_negative_position passed" << std::endl;
 }
 
+void test_parse_sprite_line_rejects_negative_trim() {
+    sprat::core::Sprite s;
+    std::string error;
+
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 10,10 1,2 3,4", s, error));
+    assert(s.has_trim && s.src_x == 1 && s.src_y == 2 && s.trim_right == 3 && s.trim_bottom == 4);
+
+    // Modern format: any negative trim offset
+    for (const char* line : {"sprite \"a.png\" 0,0 10,10 -1,0 0,0",
+                             "sprite \"a.png\" 0,0 10,10 0,-1 0,0",
+                             "sprite \"a.png\" 0,0 10,10 0,0 -1,0",
+                             "sprite \"a.png\" 0,0 10,10 0,0 0,-2147483648"}) {
+        error.clear();
+        assert(!sprat::core::parse_sprite_line(line, s, error));
+        assert(error.find("trim offsets must not be negative") != std::string::npos);
+    }
+
+    // Legacy format: negative crop offset
+    error.clear();
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0 0 10 10 -1 0", s, error));
+    assert(error.find("trim offsets must not be negative") != std::string::npos);
+
+    std::cout << "test_parse_sprite_line_rejects_negative_trim passed" << std::endl;
+}
+
+void test_parse_layout_rotation_direction() {
+    sprat::core::Layout layout;
+    std::string error;
+
+    std::istringstream cw_default("atlas 10,10\nsprite \"a.png\" 0,0 10,10 rotated\n");
+    assert(sprat::core::parse_layout(cw_default, layout, error));
+    assert(!layout.rotate_ccw && !layout.has_rotation);
+
+    std::istringstream ccw("rotation ccw\natlas 10,10\nsprite \"a.png\" 0,0 10,10 rotated\n");
+    assert(sprat::core::parse_layout(ccw, layout, error));
+    assert(layout.rotate_ccw && layout.has_rotation);
+
+    std::istringstream cw("rotation cw\natlas 10,10\n");
+    assert(sprat::core::parse_layout(cw, layout, error));
+    assert(!layout.rotate_ccw && layout.has_rotation);
+
+    std::istringstream invalid("rotation left\natlas 10,10\n");
+    assert(!sprat::core::parse_layout(invalid, layout, error));
+    assert(error.find("Invalid rotation line") != std::string::npos);
+
+    std::istringstream duplicate("rotation ccw\nrotation cw\natlas 10,10\n");
+    assert(!sprat::core::parse_layout(duplicate, layout, error));
+    assert(error.find("Duplicate rotation line") != std::string::npos);
+
+    std::cout << "test_parse_layout_rotation_direction passed" << std::endl;
+}
+
 void test_parse_sprite_line_slice() {
     sprat::core::Sprite s;
     std::string error;
@@ -264,6 +319,71 @@ void test_parse_sprite_line_slice_fill_modes() {
     std::cout << "test_parse_sprite_line_slice_fill_modes passed" << std::endl;
 }
 
+void test_parse_alias_line() {
+    sprat::core::Alias alias;
+    std::string error;
+
+    assert(sprat::core::parse_alias_line("alias \"b.png\" \"a.png\"", alias, error));
+    assert(alias.path == "b.png" && alias.canonical_path == "a.png");
+    assert(!alias.has_trim);
+
+    assert(sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 3,4", alias, error));
+    assert(alias.has_trim);
+    assert(alias.trim_left == 1 && alias.trim_top == 2);
+    assert(alias.trim_right == 3 && alias.trim_bottom == 4);
+
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2", alias, error));
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 x,4", alias, error));
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" -1,2 3,4", alias, error));
+    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 3,4 5,6", alias, error));
+    std::cout << "test_parse_alias_line passed" << std::endl;
+}
+
+void test_expand_layout_aliases() {
+    std::istringstream iss("atlas 16,16\n"
+                           "atlas 16,16\n"
+                           "sprite \"a.png\" 2,3 4,5 1,6 2,0 rotated\n"
+                           "alias \"b.png\" \"a.png\"\n"
+                           "alias \"c.png\" \"a.png\" 1,0 2,6\n");
+    sprat::core::Layout layout;
+    std::string error;
+    assert(sprat::core::parse_layout(iss, layout, error));
+    assert(sprat::core::expand_layout_aliases(layout, error));
+    assert(layout.aliases.empty());
+    assert(layout.sprites.size() == 3);
+
+    // Without its own trim, an alias is a copy of the canonical sprite.
+    const sprat::core::Sprite& b = layout.sprites[1];
+    assert(b.path == "b.png" && b.alias_of == "a.png");
+    assert(b.x == 2 && b.y == 3 && b.w == 4 && b.h == 5 && b.rotated && b.atlas_index == 1);
+    assert(b.src_x == 1 && b.src_y == 6 && b.trim_right == 2 && b.trim_bottom == 0);
+
+    // With its own trim, only the placement within the source image changes.
+    const sprat::core::Sprite& c = layout.sprites[2];
+    assert(c.path == "c.png" && c.alias_of == "a.png");
+    assert(c.x == 2 && c.y == 3 && c.w == 4 && c.h == 5 && c.rotated);
+    assert(c.src_x == 1 && c.src_y == 0 && c.trim_right == 2 && c.trim_bottom == 6);
+
+    std::istringstream missing("atlas 4,4\nsprite \"a.png\" 0,0 4,4\nalias \"b.png\" \"x.png\"\n");
+    assert(sprat::core::parse_layout(missing, layout, error));
+    assert(!sprat::core::expand_layout_aliases(layout, error));
+    assert(error.find("x.png") != std::string::npos);
+    std::cout << "test_expand_layout_aliases passed" << std::endl;
+}
+
+void test_pot_limits() {
+    using sprat::layout::pot_limit;
+    using sprat::layout::pot_search_bound;
+    assert(pot_limit(0) == 0);       // no limit
+    assert(pot_limit(1000) == 512);  // largest power of two within the limit
+    assert(pot_limit(1024) == 1024);
+    assert(pot_search_bound(300, 0) == 512);      // sum rounded up when there is no limit
+    assert(pot_search_bound(300, 1000) == 512);
+    assert(pot_search_bound(3000, 1000) == 512);  // capped by the limit's power of two
+    assert(pot_search_bound(64, 96) == 64);
+    std::cout << "test_pot_limits passed" << std::endl;
+}
+
 int main() {
     test_parse_atlas_line();
     test_parse_sprite_line();
@@ -273,8 +393,13 @@ int main() {
     test_parse_layout_rejects_negative_sprite_dimensions();
     test_parse_layout_rejects_sprite_out_of_bounds();
     test_parse_sprite_line_rejects_negative_position();
+    test_parse_sprite_line_rejects_negative_trim();
+    test_parse_layout_rotation_direction();
     test_parse_sprite_line_slice();
     test_parse_sprite_line_slice_fill_modes();
+    test_parse_alias_line();
+    test_expand_layout_aliases();
+    test_pot_limits();
     std::cout << "All layout tests passed!" << std::endl;
     return 0;
 }

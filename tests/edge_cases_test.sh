@@ -179,4 +179,24 @@ else
     exit 1
 fi
 
+echo "Test: transform file names Windows can't write are refused"
+for name in "nul.txt" "COM3.json" "trailing." "trailing " "a?b.txt"; do
+    cat > "$tmp_dir/badname.jsonnet" <<EOF
+{ extension: ".txt", files: [{ filename: "$name", content: "x" }] }
+EOF
+    if printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' | "$spratconvert_bin" --transform "$tmp_dir/badname.jsonnet" \
+        --output-dir "$tmp_dir/badname_out" > /dev/null 2> "$tmp_dir/badname.err"; then
+        echo "  FAILED: output file name '$name' was accepted"
+        exit 1
+    fi
+    grep -q 'valid on every platform' "$tmp_dir/badname.err"
+done
+# Names that only look similar are fine.
+cat > "$tmp_dir/goodname.jsonnet" <<'EOF'
+{ extension: ".txt", files: [{ filename: "console.txt", content: "x" }, { filename: "com10.txt", content: "y" }] }
+EOF
+printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' | "$spratconvert_bin" --transform "$tmp_dir/goodname.jsonnet" \
+    --output-dir "$tmp_dir/goodname_out" > /dev/null
+[ -f "$tmp_dir/goodname_out/console.txt" ] && [ -f "$tmp_dir/goodname_out/com10.txt" ]
+
 echo "edge_cases_test.sh: ok"

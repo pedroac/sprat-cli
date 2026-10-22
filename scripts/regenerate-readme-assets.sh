@@ -28,14 +28,15 @@ if [ -z "$(ls -A "$FRAMES_DIR")" ]; then
     mogrify -resize "$FRAME_MAX_SIZE" "$FRAMES_DIR"/*.png
 fi
 
-# Build paths
-SPRATLAYOUT="./spratlayout"
-SPRATPACK="./spratpack"
+# Build paths: prefer ./build, so leftover binaries in the repository root (often from
+# an older version) don't produce the images.
+SPRATLAYOUT="./build/spratlayout"
+SPRATPACK="./build/spratpack"
 PROFILES_CONFIG="./spratprofiles.cfg"
 
 if [ ! -f "$SPRATLAYOUT" ]; then
-    SPRATLAYOUT="./build/spratlayout"
-    SPRATPACK="./build/spratpack"
+    SPRATLAYOUT="./spratlayout"
+    SPRATPACK="./spratpack"
 fi
 
 if [ ! -f "$SPRATLAYOUT" ] || [ ! -f "$SPRATPACK" ]; then
