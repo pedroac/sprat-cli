@@ -294,7 +294,7 @@ Each `spratconvert` format handles several atlases the way its engine expects:
 
 | Format | Multipack output |
 |---|---|
-| `json`, `xml`, `csv`, `css`, `libgdx` | One file covering every atlas |
+| `json`, `raw`, `xml`, `csv`, `css`, `libgdx` | One file covering every atlas |
 | `phaser-hash`, `phaser-array` | One Phaser multi-atlas JSON (`textures: [...]`), loaded with `this.load.multiatlas` |
 | `godot` | One file with an `atlases` list; each frame has an `atlas` index |
 | `plist`, `aseprite`, `unity.json` | One file per atlas, named after it (`atlas_0.plist`, ...); requires `--output-dir` |
@@ -394,7 +394,7 @@ Allows 90-degree rotation of sprites to achieve even tighter packing. Sprites ar
 ./build/spratconvert --transform libgdx -a atlas.png < layout.txt > atlas.atlas
 ```
 
-Formats with a fixed convention fail with an explanatory error instead of writing wrong metadata when the layout's direction doesn't match. `unity.meta` (and so the `unity` group) refuses rotated sprites in either direction. A group writes no files when any of its members fails. `json`, `xml` and `csv` report the rotation in clockwise degrees (`90` or `270`), and `css` handles both directions.
+Formats with a fixed convention fail with an explanatory error instead of writing wrong metadata when the layout's direction doesn't match. `unity.meta` (and so the `unity` group) refuses rotated sprites in either direction. A group writes no files when any of its members fails. `json`, `raw`, `xml` and `csv` report the rotation in clockwise degrees (`90` or `270`), and `css` handles both directions.
 ![rotation](README-assets/rotation_pad2.png)
 
 ## Complete Optimization Workflow
@@ -628,6 +628,7 @@ Transform files are searched in:
 | Name | Output | Notes |
 |------|--------|-------|
 | `json` | JSON | Generic metadata: sprites, atlases, animations, markers |
+| `raw` | Text | The same metadata as `json` as plain space-separated tokens, for loading from C in one pass with no parser library (used by [sprat-lib](https://github.com/pedroac/sprat-lib)); see below |
 | `csv` | CSV | Flat spreadsheet-friendly list |
 | `xml` | XML | Generic XML |
 | `css` | CSS | CSS sprite sheet |
@@ -639,6 +640,29 @@ Transform files are searched in:
 | `phaser-anims` | JSON | Phaser 3 animation config; frames use `texture_key` (e.g. `atlas` for a multipack `atlas_%d.png`) |
 | `plist` | plist | Apple / TexturePacker plist; one file per atlas for multipack |
 | `unity` | Group | `unity.json` + `unity.meta` + one `unity.anim` per animation (file named after it, with path characters and a leading dot replaced by `_`, and a `_` prefix for Windows device names such as `con`); the clips reference the texture GUID of the `.meta`, which comes from the `-a` name, so pass `-a atlas.png` (also naming the file `atlas.png.meta`) to keep the textures of one project apart; requires `--output-dir`; multipack writes one `.json` and one `<atlas>.meta` per atlas; rotated sprites are not supported (Unity sprite rects have no rotation); in `unity.meta` the pivot and nine-slice border are relative to the trimmed sprite rect |
+
+### Raw format
+
+`raw` writes a `.sprat` file that a C program can read with a few lines of code: one record
+per line, every value a space-separated token, and every count written before the records
+it counts, so a loader can size each array before filling it. Strings are length-prefixed (`<UTF-8 byte count>:<bytes>`), so names and
+paths may contain spaces; an empty string (`0:`) means "none".
+
+```
+sprat-raw 1
+sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS NORMAL_PATH COLLISION_PATH
+atlas W H PATH NORMAL_PATH COLLISION_PATH
+sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
+marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
+anim FPS FLIP ALIAS FRAMES [SPRITE_INDEX]... NAME
+```
+
+`MARKERS` `marker` lines follow their sprite. Enums are numbers: marker types `point`=0,
+`circle`=1, `rectangle`=2, `polygon`=3; slice modes `stretch`=0, `repeat`=1, `mirror`=2,
+`fixed`=3; `FLIP` bits `h`=1, `v`=2; flags are `0`/`1`. `ROTATION` is in clockwise degrees
+(0, 90 or 270). An alias animation has `ALIAS` set to the index of the animation it replays
+and no frames of its own; otherwise `ALIAS` is `-1`. Values have the same meaning as in
+`json`, and the first line carries the format version.
 
 ### Transform format
 
