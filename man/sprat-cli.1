@@ -168,7 +168,7 @@ Reads layout text from stdin and writes transformed text to stdout.
 .PP
 Unsuffixed placeholders are auto-encoded based on output type inferred from transform metadata (\fBmeta.extension\fR) or transform name/argument.
 .PP
-Transforms can be selected by name (for example \fBjson\fR, \fBcsv\fR, \fBxml\fR, \fBcss\fR) or by path to a custom \fB.transform\fR file.
+Transforms can be selected by name (for example \fBjson\fR, \fBraw\fR, \fBcsv\fR, \fBxml\fR, \fBcss\fR) or by path to a custom \fB.transform\fR file.
 Transform files are searched in the directory beside the executable, the user data directory, and the global install directory.
 .PP
 Optional \fB\-\-markers\fR and \fB\-\-animations\fR files can be loaded and referenced by transform placeholders.
@@ -538,6 +538,9 @@ Metadata for a multipack layout (formats that describe one texture, such as \fBp
 .TP
 Convert layout to JSON:
 .B spratconvert --transform json < layout.txt > layout.json
+.TP
+Convert layout to the raw format, a plain-token file that C code (such as sprat-lib) loads in one pass:
+.B spratconvert --transform raw < layout.txt > layout.sprat
 .TP
 Convert layout to JSON with auto-animations:
 .B spratconvert --transform json --auto-animations < layout.txt > layout.json
