@@ -68,12 +68,12 @@ bool compute_trim_bounds(const unsigned char* rgba,
     }
 
     // Validate that the image dimensions are reasonable
-    if (w > k_max_image_dimension || h > k_max_image_dimension) {
+    if (w > k_max_source_image_dimension || h > k_max_source_image_dimension) {
         return false;
     }
 
     // Use direct pointer arithmetic for alpha channel access.
-    // Bounds are already validated above (w > 0, h > 0, w/h <= k_max_image_dimension).
+    // Bounds are already validated above (w > 0, h > 0, w/h <= k_max_source_image_dimension).
     const size_t stride = static_cast<size_t>(w) * 4;
 
     int top_hit_x = -1;

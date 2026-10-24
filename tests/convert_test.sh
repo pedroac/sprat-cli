@@ -299,9 +299,11 @@ animation "run" 8
 animation "run-left" alias "run" flip hv
 ANIMS
 # String lengths count UTF-8 bytes ("c dé" is 5); an alias points at its source by index.
+# The sheet line totals 4 markers, 3 vertices, 2 frames and 79 string bytes:
+# sprites 1+14 + 1+14 + 5+18, markers 3+4+4+4, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
 sprat-raw 1
-sheet 1 0 0 0 1 3 2 0: 0:
+sheet 1 0 0 0 1 3 2 4 3 2 79 0: 0:
 atlas 64 32 0: 0: 0:
 sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 1:a 14:./frames/a.png 0:
 marker 0 3 5 0 0 0 0 3:hit
@@ -945,5 +947,22 @@ if "$convert_bin" --transform json --image-path 'same.png' < "$tmp_dir/ip.txt" >
   echo "--image-path without %d must be refused for multipack layouts" >&2
   exit 1
 fi
+
+# Marker values must stay within 2^24 atlas pixels (sprat-lib's SPRAT_COORD_LIMIT).
+printf 'atlas 8,8\nsprite "a.png" 0,0 4,4\n' > "$tmp_dir/limit.txt"
+printf 'path "a.png"\n- marker "pivot" point 16777216,-16777216\n' > "$tmp_dir/limit_ok.markers"
+"$convert_bin" --transform raw --markers "$(fix_path "$tmp_dir/limit_ok.markers")" < "$tmp_dir/limit.txt" > /dev/null
+printf 'path "a.png"\n- marker "hit" polygon 0,0 16777217,0\n' > "$tmp_dir/limit_bad.markers"
+if "$convert_bin" --transform raw --markers "$(fix_path "$tmp_dir/limit_bad.markers")" \
+    < "$tmp_dir/limit.txt" > /dev/null 2> "$tmp_dir/limit.err"; then
+  echo "a marker beyond the coordinate limit should fail" >&2
+  exit 1
+fi
+grep -qF 'Marker "hit" of sprite a.png has a value beyond 16777216 atlas pixels' "$tmp_dir/limit.err"
+# The limit applies once scaled: 20000000 at scale 0.5 exports as 10000000.
+printf 'scale 0.5\natlas 8,8\nsprite "a.png" 0,0 4,4\n' > "$tmp_dir/limit_scaled.txt"
+printf 'path "a.png"\n- marker "pivot" point 20000000,0\n' > "$tmp_dir/limit_scaled.markers"
+"$convert_bin" --transform raw --markers "$(fix_path "$tmp_dir/limit_scaled.markers")" \
+    < "$tmp_dir/limit_scaled.txt" > /dev/null
 
 echo "convert_test.sh: ok"

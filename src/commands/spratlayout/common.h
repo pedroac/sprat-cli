@@ -19,7 +19,9 @@ enum class ResolutionReference : std::uint8_t { Largest, Smallest };
 enum class FrameSort : std::uint8_t { Name, None, Stable };
 enum class StableMetric : std::uint8_t { Area, MaxSide, Height, Width, Perimeter };
 
-constexpr int k_max_image_dimension = 100000;
+// Largest source image side spratlayout measures. Distinct from core's k_max_image_dimension,
+// which caps the images spratframes reads and spratunpack writes.
+constexpr int k_max_source_image_dimension = 100000;
 
 struct Sprite {
     std::string path;

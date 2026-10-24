@@ -226,6 +226,95 @@ void test_parse_layout_rotation_direction() {
     std::cout << "test_parse_layout_rotation_direction passed" << std::endl;
 }
 
+void test_parse_layout_rejects_oversized_slice() {
+    sprat::core::Layout layout;
+    std::string error;
+
+    // At scale 1 the bound is exact: 64 = 32 + 32 fits, 33 + 32 does not.
+    std::istringstream fits("atlas 64,64\nsprite \"a.png\" 0,0 64,64 slice=32,0,32,64\n");
+    assert(sprat::core::parse_layout(fits, layout, error));
+    std::istringstream wide("atlas 64,64\nsprite \"a.png\" 0,0 64,64 slice=33,0,32,0\n");
+    assert(!sprat::core::parse_layout(wide, layout, error));
+    assert(error.find("wider than the image") != std::string::npos);
+    std::istringstream tall("atlas 64,64\nsprite \"a.png\" 0,0 64,64 slice=0,40,0,25\n");
+    assert(!sprat::core::parse_layout(tall, layout, error));
+    assert(error.find("taller than the image") != std::string::npos);
+
+    // Trim margins belong to the original image, so insets may reach into them.
+    std::istringstream trimmed("atlas 64,64\nsprite \"a.png\" 0,0 10,10 3,0 2,0 slice=8,0,7,0\n");
+    assert(sprat::core::parse_layout(trimmed, layout, error));
+
+    // A rotated sprite is stored turned, so its original width is the stored height.
+    std::istringstream rotated("atlas 64,64\nsprite \"a.png\" 0,0 10,20 rotated slice=10,0,10,5\n");
+    assert(sprat::core::parse_layout(rotated, layout, error));
+
+    // A nine-patch's 1px marker border is not part of the image the insets refer to.
+    std::istringstream nine("atlas 64,64\nsprite \"p.9.png\" 0,0 10,10 1,1 1,1 slice=5,0,5,0\n");
+    assert(sprat::core::parse_layout(nine, layout, error));
+    std::istringstream nine_wide("atlas 64,64\nsprite \"p.9.png\" 0,0 10,10 1,1 1,1 slice=6,0,5,0\n");
+    assert(!sprat::core::parse_layout(nine_wide, layout, error));
+
+    // Scaled: 5 packed pixels at 0.5 may come from an original up to 11 pixels wide. The
+    // scale line may follow the sprites.
+    std::istringstream scaled("atlas 64,64\nsprite \"a.png\" 0,0 5,5 slice=6,0,5,0\nscale 0.5\n");
+    assert(sprat::core::parse_layout(scaled, layout, error));
+    std::istringstream scaled_wide("atlas 64,64\nsprite \"a.png\" 0,0 5,5 slice=6,0,6,0\nscale 0.5\n");
+    assert(!sprat::core::parse_layout(scaled_wide, layout, error));
+    std::cout << "test_parse_layout_rejects_oversized_slice passed" << std::endl;
+}
+
+void test_parse_layout_enforces_coordinate_limit() {
+    sprat::core::Layout layout;
+    std::string error;
+    const int limit = sprat::core::k_max_coordinate;
+    assert(limit == 16777216); // sprat-lib's SPRAT_COORD_LIMIT
+
+    std::istringstream max_atlas("atlas 16777216,8\n");
+    assert(sprat::core::parse_layout(max_atlas, layout, error));
+    std::istringstream big_atlas("atlas 16777217,8\n");
+    assert(!sprat::core::parse_layout(big_atlas, layout, error));
+    assert(error.find("Atlas dimensions exceed") != std::string::npos);
+    std::istringstream big_extrude("extrude 16777217\natlas 8,8\n");
+    assert(!sprat::core::parse_layout(big_extrude, layout, error));
+
+    // The source size counts the trim the sprite had before packing.
+    std::istringstream full("atlas 16777216,8\nsprite \"a.png\" 0,0 16777216,8\n");
+    assert(sprat::core::parse_layout(full, layout, error));
+    std::istringstream trimmed("atlas 16777216,8\nsprite \"a.png\" 0,0 16777216,8 1,0 0,0\n");
+    assert(!sprat::core::parse_layout(trimmed, layout, error));
+    assert(error.find("once its trim is restored") != std::string::npos);
+
+    // Trims are scaled before the check: 8388607 * 2 + 4 = 16777218.
+    std::istringstream scaled("scale 2\natlas 8,8\nsprite \"a.png\" 0,0 4,4 8388607,0 0,0\n");
+    assert(!sprat::core::parse_layout(scaled, layout, error));
+
+    // An alias keeps its own trim, so it is checked after expansion.
+    std::istringstream alias("atlas 8,8\nsprite \"a.png\" 0,0 4,4\n"
+                             "alias \"b.png\" \"a.png\" 16777216,0 0,0\n");
+    assert(sprat::core::parse_layout(alias, layout, error));
+    assert(!sprat::core::expand_layout_aliases(layout, error));
+    assert(error.find("b.png") != std::string::npos);
+    std::cout << "test_parse_layout_enforces_coordinate_limit passed" << std::endl;
+}
+
+void test_metadata_slice_fits_the_sprite() {
+    sprat::core::Sprite s;
+    s.has_slice = true;
+    // 1 + 1 at 0.5 rounds to 1 + 1 (half away from zero), but the sprite is 1 pixel wide.
+    s.slice_left = 1;
+    s.slice_right = 1;
+    s.slice_top = 3;
+    s.slice_bottom = 3;
+    sprat::core::MetadataSlice m = sprat::core::metadata_slice(s, 0.5, 1, 3);
+    assert(m.left == 1 && m.right == 0);
+    assert(m.top == 2 && m.bottom == 1);
+
+    // Insets that already fit are only scaled.
+    m = sprat::core::metadata_slice(s, 1.0, 10, 10);
+    assert(m.left == 1 && m.right == 1 && m.top == 3 && m.bottom == 3);
+    std::cout << "test_metadata_slice_fits_the_sprite passed" << std::endl;
+}
+
 void test_parse_sprite_line_slice() {
     sprat::core::Sprite s;
     std::string error;
@@ -396,6 +485,9 @@ int main() {
     test_parse_sprite_line_rejects_negative_trim();
     test_parse_layout_rotation_direction();
     test_parse_sprite_line_slice();
+    test_parse_layout_rejects_oversized_slice();
+    test_metadata_slice_fits_the_sprite();
+    test_parse_layout_enforces_coordinate_limit();
     test_parse_sprite_line_slice_fill_modes();
     test_parse_alias_line();
     test_expand_layout_aliases();

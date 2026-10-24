@@ -235,6 +235,26 @@ int resolve_sprite_index(const std::string& key,
     return -1;
 }
 
+// Marker files are hand-written, so their values can be anything an int holds. Fails when
+// a value, once scaled to atlas pixels, would exceed sprat::core::k_max_coordinate.
+bool check_marker_limits(const MarkerItem& m, double scale, std::string& error) {
+    const auto fits = [&](int v) {
+        return sprat::core::within_coordinate_limit(sprat::core::scale_to_atlas(v, scale));
+    };
+    bool ok = fits(m.x) && fits(m.y) && fits(m.radius) && fits(m.w) && fits(m.h);
+    for (const auto& [vx, vy] : m.vertices) {
+        ok = ok && fits(vx) && fits(vy);
+    }
+    if (!ok) {
+        error = std::string(tr("Marker ")) + "\"" + m.name + "\""
+            + (m.sprite_path.empty() ? std::string() : std::string(tr(" of sprite ")) + m.sprite_path)
+            + tr(" has a value beyond ") + std::to_string(sprat::core::k_max_coordinate)
+            + tr(" atlas pixels");
+        return false;
+    }
+    return true;
+}
+
 std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
                                            const Layout& layout,
                                            const std::unordered_map<std::string, int>& by_path,
@@ -803,10 +823,12 @@ std::string build_sprat_json(
         o += ",\"alias_of\":\"" + escape_json(s.alias_of) + "\"";
         o += ",\"has_slice\":" + std::string(s.has_slice ? "true" : "false");
         if (s.has_slice) {
-            o += ",\"slice_left\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_left, layout.scale));
-            o += ",\"slice_top\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_top, layout.scale));
-            o += ",\"slice_right\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_right, layout.scale));
-            o += ",\"slice_bottom\":" + std::to_string(sprat::core::scale_to_atlas(s.slice_bottom, layout.scale));
+            const sprat::core::MetadataSlice slice =
+                sprat::core::metadata_slice(s, layout.scale, source_w, source_h);
+            o += ",\"slice_left\":" + std::to_string(slice.left);
+            o += ",\"slice_top\":" + std::to_string(slice.top);
+            o += ",\"slice_right\":" + std::to_string(slice.right);
+            o += ",\"slice_bottom\":" + std::to_string(slice.bottom);
             o += ",\"slice_h\":\"" + s.slice_h + "\"";
             o += ",\"slice_v\":\"" + s.slice_v + "\"";
         }
@@ -1668,6 +1690,13 @@ int run_spratconvert(int argc, char** argv) {
     const std::vector<MarkerItem> marker_items =
         parse_markers_data(markers_text, layout, sprite_index_by_path, sprite_index_by_name,
                            sprite_names, sprite_markers);
+    for (const MarkerItem& marker : marker_items) {
+        std::string marker_error;
+        if (!check_marker_limits(marker, layout.scale, marker_error)) {
+            std::cerr << marker_error << "\n";
+            return 1;
+        }
+    }
     int animation_fps = -1;
     std::vector<AnimationItem> animation_items =
         parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name,
