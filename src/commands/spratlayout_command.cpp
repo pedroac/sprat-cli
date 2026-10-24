@@ -408,6 +408,10 @@ struct LayoutSettings {
     bool multipack = false;
     unsigned int thread_limit = k_default_threads;
     bool incremental = false;
+    // Without a --sort or profile sort, sources keep their input order.
+    bool has_frame_sort = false;
+    FrameSort frame_sort = FrameSort::Name;
+    StableMetric stable_metric = StableMetric::Area;
     // Profiles of the loaded config file, by name.
     std::unordered_map<std::string, ProfileDefinition> profiles;
 };
@@ -523,23 +527,27 @@ void apply_profile(const ProfileDefinition& profile, const LayoutArgs& args, Lay
     if (!args.has_incremental_override && profile.incremental) {
         s.incremental = *profile.incremental;
     }
+    if (!args.has_frame_sort_override && profile.frame_sort) {
+        s.has_frame_sort = true;
+        s.frame_sort = *profile.frame_sort;
+        s.stable_metric = profile.stable_metric;
+    }
     if (!has_source_resolution && profile.source_resolution) {
         source_w = profile.source_resolution->first;
         source_h = profile.source_resolution->second;
         has_source_resolution = true;
     }
-    if (!has_target_resolution && profile.target_resolution) {
+    // A profile's target resolution scales only from a known source resolution (a flag or
+    // the profile's own); without one the profile is still usable, unscaled.
+    if (!has_target_resolution && profile.target_resolution && has_source_resolution) {
         if (profile.target_resolution->first == -1 && profile.target_resolution->second == -1) {
-            if (has_source_resolution) {
-                target_w = source_w;
-                target_h = source_h;
-                has_target_resolution = true;
-            }
+            target_w = source_w;
+            target_h = source_h;
         } else {
             target_w = profile.target_resolution->first;
             target_h = profile.target_resolution->second;
-            has_target_resolution = true;
         }
+        has_target_resolution = true;
     }
     if (!args.has_resolution_reference_override && profile.resolution_reference) {
         resolution_reference = *profile.resolution_reference;
@@ -561,6 +569,9 @@ bool resolve_settings(const LayoutArgs& args, const fs::path& cwd, const fs::pat
     s.multipack = args.has_multipack_override ? args.multipack : false;
     s.thread_limit = args.has_threads_override ? args.thread_limit : k_default_threads;
     s.incremental = args.has_incremental_override ? args.incremental : false;
+    s.has_frame_sort = args.has_frame_sort_override;
+    s.frame_sort = args.frame_sort;
+    s.stable_metric = args.stable_metric;
     int source_w = args.source_resolution_width;
     int source_h = args.source_resolution_height;
     int target_w = args.target_resolution_width;
@@ -1045,8 +1056,8 @@ int run_spratlayout(int argc, char** argv) {
         return 1;
     }
 
-    const bool enforce_name_order   = (args.has_frame_sort_override && args.frame_sort == FrameSort::Name);
-    const bool enforce_stable_order = (args.has_frame_sort_override && args.frame_sort == FrameSort::Stable);
+    const bool enforce_name_order   = (settings.has_frame_sort && settings.frame_sort == FrameSort::Name);
+    const bool enforce_stable_order = (settings.has_frame_sort && settings.frame_sort == FrameSort::Stable);
     if (enforce_name_order || enforce_stable_order) {
         std::ranges::stable_sort(sources, [](const ImageSource& lhs, const ImageSource& rhs) {
             int cmp = sprat::core::compare_natural(lhs.path, rhs.path);
@@ -1079,7 +1090,7 @@ int run_spratlayout(int argc, char** argv) {
     key.preserve_source_order = !enforce_name_order && !enforce_stable_order;
     key.multipack = settings.multipack;
     key.rotate_ccw = settings.rotate_ccw;
-    key.order_key = build_order_key(args.has_frame_sort_override, args.frame_sort, args.stable_metric);
+    key.order_key = build_order_key(settings.has_frame_sort, settings.frame_sort, settings.stable_metric);
     key.deduplicate_mode = args.deduplicateMode;
     key.dedup_threshold = args.dedup_threshold;
     key.dedup_tolerance = args.dedup_tolerance;
@@ -1141,11 +1152,11 @@ int run_spratlayout(int argc, char** argv) {
     request.optimize_target = settings.optimize_target;
     request.enforce_sort_order = enforce_name_order || enforce_stable_order;
     request.enforce_stable_order = enforce_stable_order;
-    request.stable_metric = args.stable_metric;
+    request.stable_metric = settings.stable_metric;
     request.thread_limit = settings.thread_limit;
 
     if (enforce_stable_order) {
-        sort_sprites_stable(sprites, args.stable_metric);
+        sort_sprites_stable(sprites, settings.stable_metric);
     }
 
     // Reuse a previous layout when possible: first the incremental seed (keeps

@@ -74,6 +74,12 @@ add_test(
 )
 
 add_test(
+    NAME profile_keys
+    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/profile_keys_test.sh
+            $<TARGET_FILE:spratlayout>
+)
+
+add_test(
     NAME edge_cases
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/edge_cases_test.sh
             $<TARGET_FILE:spratlayout>

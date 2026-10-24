@@ -367,6 +367,10 @@ Config keys available per profile section:
 .IP "\(bu" 2
 \fBoptimize=gpu|space\fR
 .IP "\(bu" 2
+\fBpreset=fast|quality|small|pot\fR (sets \fBmode\fR and \fBoptimize\fR like \fB\-\-preset\fR)
+.IP "\(bu" 2
+\fBsort=name|none|stable\fR[\fB:\fR\fImetric\fR] (like \fB\-\-sort\fR)
+.IP "\(bu" 2
 \fBmax_width\fR, \fBmax_height\fR
 .IP "\(bu" 2
 \fBpadding\fR
@@ -374,6 +378,8 @@ Config keys available per profile section:
 \fBscale\fR (\fB0 < scale <= 1\fR), \fBtrim_transparent\fR, \fBthreads\fR, \fBmultipack\fR
 .IP "\(bu" 2
 \fBrotate=true|false\fR, \fBrotate_direction=cw|ccw\fR
+.PP
+Command-line options override profile values. A profile's \fBtarget_resolution\fR scales the layout only when a source resolution is known (\fB\-\-source\-resolution\fR or the profile's \fBsource_resolution\fR); otherwise it is skipped. Settings of later pipeline steps, as saved by front ends such as sprat-gui, are accepted and ignored: \fBdilate\fR, \fBgpu_compress\fR, \fBimage_format\fR, \fBimage_quality\fR, \fBzopfli\fR, \fBframe_lines\fR, \fBframe_line_width\fR, \fBframe_line_color\fR, \fBatlas_index\fR (spratpack) and \fBauto_animations\fR (spratconvert). Any other unknown key is an error.
 .SS spratpack
 .TP
 \fB\-a\fR, \fB\-\-atlas\fR, \fB\-o\fR, \fB\-\-output\fR \fIPATTERN\fR

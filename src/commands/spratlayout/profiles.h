@@ -31,6 +31,8 @@ struct ProfileDefinition {
     // (-1, -1) means "same as source_resolution".
     std::optional<std::pair<int, int>> target_resolution;
     std::optional<ResolutionReference> resolution_reference;
+    std::optional<FrameSort> frame_sort;
+    StableMetric stable_metric = StableMetric::Area;
 };
 
 struct PresetDefinition {

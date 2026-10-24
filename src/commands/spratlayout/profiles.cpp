@@ -1,6 +1,8 @@
 #include "commands/spratlayout/profiles.h"
 
+#include <algorithm>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <unordered_set>
 
@@ -105,6 +107,19 @@ bool parse_profile_section_header(const std::string& header_content,
     return true;
 }
 
+// Profiles can also hold the settings of the later pipeline steps (sprat-gui saves its
+// profiles this way). spratlayout accepts these keys and leaves them to those tools.
+bool is_other_tool_profile_key(const std::string& lower_key) {
+    static const char* const keys[] = {
+        // spratpack
+        "dilate", "gpu_compress", "image_format", "image_quality", "zopfli",
+        "frame_lines", "frame_line_width", "frame_line_color", "atlas_index",
+        // spratconvert
+        "auto_animations",
+    };
+    return std::ranges::find(keys, lower_key) != std::end(keys);
+}
+
 // Applies a single key=value entry to `def`.  Returns false and sets `error`
 // on any validation failure.
 bool apply_profile_entry(ProfileDefinition& def,
@@ -120,6 +135,23 @@ bool apply_profile_entry(ProfileDefinition& def,
             return false;
         }
         def.mode = parsed_mode;
+    } else if (lower_key == "preset") {
+        PresetDefinition preset;
+        if (!parse_preset_from_string(value, preset)) {
+            error = std::string(tr("invalid preset '")) + value + tr("' at line ") + std::to_string(line_number);
+            return false;
+        }
+        def.mode = preset.mode;
+        def.optimize_target = preset.optimize_target;
+    } else if (lower_key == "sort") {
+        FrameSort frame_sort;
+        if (!parse_frame_sort_from_string(value, frame_sort, def.stable_metric)) {
+            error = std::string(tr("invalid sort '")) + value + tr("' at line ") + std::to_string(line_number);
+            return false;
+        }
+        def.frame_sort = frame_sort;
+    } else if (is_other_tool_profile_key(lower_key)) {
+        // Read by spratpack/spratconvert front ends such as sprat-gui; nothing to lay out.
     } else if (lower_key == "optimize") {
         OptimizeTarget parsed_target;
         if (!parse_optimize_target_from_string(value, parsed_target, error)) {
