@@ -441,7 +441,7 @@ bool load_image_cache(const fs::path& cache_path, ImageCache& out) {
             // Older caches used 0 as "not computed"; recompute those.
             entry.has_perceptual_hash = entry.perceptual_hash != 0;
         }
-        if (entry.w <= 0 || entry.h <= 0 || entry.w > k_max_image_dimension || entry.h > k_max_image_dimension) {
+        if (entry.w <= 0 || entry.h <= 0 || entry.w > k_max_source_image_dimension || entry.h > k_max_source_image_dimension) {
             continue;
         }
         entry.trim_transparent = trim_flag != 0;
@@ -461,7 +461,7 @@ bool save_image_cache(const fs::path& cache_path, const ImageCache& entries) {
     valid.reserve(entries.size());
     for (const auto& kv : entries) {
         const ImageCacheEntry& e = kv.second;
-        if (e.w > 0 && e.h > 0 && e.w <= k_max_image_dimension && e.h <= k_max_image_dimension) {
+        if (e.w > 0 && e.h > 0 && e.w <= k_max_source_image_dimension && e.h <= k_max_source_image_dimension) {
             valid.push_back({&kv.first, &e});
         }
     }

@@ -89,6 +89,10 @@ sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR] [rotated] 
 .PP
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
+Atlas sides, the extrude, and each sprite's size with its trim restored must not exceed
+16777216 (2^24) pixels after scaling; \fBspratconvert\fR applies the same limit to scaled
+marker values. This matches the limit sprat-lib enforces when loading raw metadata.
+.PP
 If rotation is used for a sprite, the sprite line includes the \fBrotated\fR token. Rotated sprites are turned 90 degrees clockwise, or counter-clockwise when the layout contains a \fBrotation ccw\fR line (written by \fB\-\-rotate\-direction ccw\fR).
 .PP
 The optional \fBslice=\fR token defines nine-slice insets and per-axis fill modes.
@@ -96,6 +100,11 @@ The format is \fBslice=L,T,R,B[,H_MODE,V_MODE]\fR where \fBL\fR, \fBT\fR, \fBR\f
 non-negative integer insets and \fBH_MODE\fR/\fBV_MODE\fR are optional fill modes for the
 horizontal and vertical stretchable regions (\fBstretch\fR, \fBrepeat\fR, \fBmirror\fR, or \fBfixed\fR;
 default: \fBstretch\fR).
+Insets are in original-image pixels and must fit the image: \fBL\fR+\fBR\fR must not exceed its
+width, nor \fBT\fR+\fBB\fR its height (for a nine-patch, the content inside the marker border);
+layouts that break this are rejected.
+When the layout is scaled, \fBspratconvert\fR rounds each inset to atlas pixels and trims any
+rounding excess from the right and bottom insets, so exported insets always fit the sprite.
 .PP
 Android nine-patch images (\fB*.9.png\fR) are detected automatically: the 1-pixel marker
 border is stripped and the stretch region is read from the opaque black pixels on the top
@@ -545,7 +554,7 @@ Metadata for a multipack layout (formats that describe one texture, such as \fBp
 Convert layout to JSON:
 .B spratconvert --transform json < layout.txt > layout.json
 .TP
-Convert layout to the raw format, a plain-token file that C code (such as sprat-lib) loads in one pass:
+Convert layout to the raw format, a plain-token file that C code (such as sprat-lib) loads in one pass and one allocation:
 .B spratconvert --transform raw < layout.txt > layout.sprat
 .TP
 Convert layout to JSON with auto-animations:

@@ -515,7 +515,11 @@ Annotate sprites with nine-slice insets and per-axis fill modes for UI scaling. 
 slice=L,T,R,B[,H_MODE,V_MODE]
 ```
 
-- `L,T,R,B` — non-negative integer insets (left, top, right, bottom) defining the nine-slice grid.
+- `L,T,R,B` — non-negative integer insets (left, top, right, bottom) defining the nine-slice grid,
+  in original-image pixels. They must fit the image: `L+R` must not exceed its width, nor `T+B`
+  its height (for a nine-patch, the content inside the marker border); layouts that break this
+  are rejected. When the layout is scaled, `spratconvert` rounds each inset to atlas pixels and
+  trims any rounding excess from the right and bottom insets, so exported insets always fit the sprite.
 - `H_MODE,V_MODE` — optional fill modes for the horizontal and vertical stretchable regions:
   - `stretch` (default) — scales the region to fill the available space.
   - `repeat` — tiles the region at its original size without scaling.
@@ -649,12 +653,15 @@ Transform files are searched in:
 
 `raw` writes a `.sprat` file that a C program can read with a few lines of code: one record
 per line, every value a space-separated token, and every count written before the records
-it counts, so a loader can size each array before filling it. Strings are length-prefixed (`<UTF-8 byte count>:<bytes>`), so names and
+it counts, so a loader can size each array before filling it. The `sheet` line also carries
+totals for the whole file (`MARKERS`, `VERTICES`, `FRAMES` and `STRING_BYTES`, the UTF-8 bytes
+of every string), so a loader knows the exact size of the model up front and can allocate it
+once; it must reject a file whose records don't match those totals. Strings are length-prefixed (`<UTF-8 byte count>:<bytes>`), so names and
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
 sprat-raw 1
-sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS NORMAL_PATH COLLISION_PATH
+sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS MARKERS VERTICES FRAMES STRING_BYTES NORMAL_PATH COLLISION_PATH
 atlas W H PATH NORMAL_PATH COLLISION_PATH
 sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
@@ -667,6 +674,12 @@ anim FPS FLIP ALIAS FRAMES [SPRITE_INDEX]... NAME
 (0, 90 or 270). An alias animation has `ALIAS` set to the index of the animation it replays
 and no frames of its own; otherwise `ALIAS` is `-1`. Values have the same meaning as in
 `json`, and the first line carries the format version.
+
+Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
+[sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an
+`int` and each converts to `float` exactly. Layouts are rejected when an atlas side, the
+extrude, or a sprite's size with its trim restored exceeds it after scaling, and
+`spratconvert` rejects markers whose scaled values do.
 
 ### Transform format
 

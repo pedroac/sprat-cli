@@ -103,6 +103,18 @@ inline bool is_nine_patch_path(std::string_view path) {
     return path.size() >= suffix.size() && path.substr(path.size() - suffix.size()) == suffix;
 }
 
+// Largest coordinate or size spratconvert exports, in atlas pixels (2^24). It matches
+// sprat-lib's SPRAT_COORD_LIMIT, so every sheet spratconvert writes also loads there:
+// sums of a few such values fit in an int, and each one converts to float exactly.
+constexpr int k_max_coordinate = 1 << 24;
+constexpr bool within_coordinate_limit(long long value) {
+    return value >= -k_max_coordinate && value <= k_max_coordinate;
+}
+
+// Fails when a sprite's exported geometry would exceed k_max_coordinate: its scaled
+// source size (upright packed size plus scaled trims) must stay within the limit.
+bool check_sprite_limits(const Sprite& s, double scale, std::string& error);
+
 // Layout trims, slices and markers are in original-image pixels, while the packed size is
 // already scaled. Converts one such value into atlas pixels, rounding to the nearest pixel
 // and saturating instead of overflowing for absurd layout scales.
@@ -119,5 +131,22 @@ struct MetadataTrim {
     int bottom = 0;
 };
 MetadataTrim metadata_trim(const Sprite& s, double scale);
+
+// Nine-slice insets in atlas pixels. Each inset is rounded on its own, which can push a
+// pair past the sprite by a pixel, so the right and bottom insets give up any excess:
+// left + right <= source_w and top + bottom <= source_h always hold, letting loaders
+// such as sprat-lib reject insets that don't fit.
+struct MetadataSlice {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
+};
+MetadataSlice metadata_slice(const Sprite& s, double scale, int source_w, int source_h);
+
+// Fails when a sprite's slice insets don't fit its original image (for a nine-patch, the
+// content inside the marker border): left + right must not exceed its width, nor
+// top + bottom its height.
+bool check_slice_fits(const Sprite& s, double scale, std::string& error);
 
 } // namespace sprat::core

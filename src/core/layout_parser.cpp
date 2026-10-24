@@ -2,6 +2,7 @@
 #include "cli_parse.h"
 #include "i18n.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
@@ -100,6 +101,73 @@ MetadataTrim metadata_trim(const Sprite& s, double scale) {
     }
     return {scale_to_atlas(t.left, scale), scale_to_atlas(t.top, scale),
             scale_to_atlas(t.right, scale), scale_to_atlas(t.bottom, scale)};
+}
+
+// Largest original size that spratlayout packs into `packed` atlas pixels. It rounds the
+// scaled size to the nearest pixel (at least 1), so the original may be up to half an
+// atlas pixel larger than packed / scale.
+static long long max_original_size(int packed, double scale) {
+    if (scale == 1.0) {
+        return packed;
+    }
+    const long double original = std::floor((static_cast<long double>(packed) + 0.5L) / scale);
+    if (original >= static_cast<long double>(std::numeric_limits<long long>::max())) {
+        return std::numeric_limits<long long>::max();
+    }
+    return static_cast<long long>(original);
+}
+
+// Shrinks `second` so first + second <= limit, after capping `first` at limit.
+static void fit_inset_pair(int& first, int& second, int limit) {
+    limit = std::max(limit, 0);
+    first = std::clamp(first, 0, limit);
+    second = std::clamp(second, 0, limit - first);
+}
+
+MetadataSlice metadata_slice(const Sprite& s, double scale, int source_w, int source_h) {
+    MetadataSlice out{scale_to_atlas(s.slice_left, scale), scale_to_atlas(s.slice_top, scale),
+                      scale_to_atlas(s.slice_right, scale), scale_to_atlas(s.slice_bottom, scale)};
+    fit_inset_pair(out.left, out.right, source_w);
+    fit_inset_pair(out.top, out.bottom, source_h);
+    return out;
+}
+
+bool check_sprite_limits(const Sprite& s, double scale, std::string& error) {
+    const MetadataTrim trim = metadata_trim(s, scale);
+    const long long source_w = static_cast<long long>(s.rotated ? s.h : s.w) + trim.left + trim.right;
+    const long long source_h = static_cast<long long>(s.rotated ? s.w : s.h) + trim.top + trim.bottom;
+    if (!within_coordinate_limit(source_w) || !within_coordinate_limit(source_h)) {
+        error = std::string(tr("Sprite ")) + s.path + tr(" is larger than ")
+            + std::to_string(k_max_coordinate) + tr(" pixels once its trim is restored");
+        return false;
+    }
+    return true;
+}
+
+bool check_slice_fits(const Sprite& s, double scale, std::string& error) {
+    if (!s.has_slice) {
+        return true;
+    }
+    const MetadataTrim trim = metadata_trim(s, 1.0); // original-image pixels
+    const long long width = max_original_size(s.rotated ? s.h : s.w, scale);
+    const long long height = max_original_size(s.rotated ? s.w : s.h, scale);
+    const long long source_w = width > std::numeric_limits<long long>::max() / 2
+        ? width : width + trim.left + trim.right;
+    const long long source_h = height > std::numeric_limits<long long>::max() / 2
+        ? height : height + trim.top + trim.bottom;
+    if (static_cast<long long>(s.slice_left) + s.slice_right > source_w) {
+        error = std::string(tr("Slice insets of sprite ")) + s.path + tr(" are wider than the image (")
+            + std::to_string(s.slice_left) + "+" + std::to_string(s.slice_right) + " > "
+            + std::to_string(source_w) + ")";
+        return false;
+    }
+    if (static_cast<long long>(s.slice_top) + s.slice_bottom > source_h) {
+        error = std::string(tr("Slice insets of sprite ")) + s.path + tr(" are taller than the image (")
+            + std::to_string(s.slice_top) + "+" + std::to_string(s.slice_bottom) + " > "
+            + std::to_string(source_h) + ")";
+        return false;
+    }
+    return true;
 }
 
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error) {
@@ -435,6 +503,11 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 error = std::string(tr("Atlas dimensions must be positive: ")) + line;
                 return false;
             }
+            if (w > k_max_coordinate || h > k_max_coordinate) {
+                error = std::string(tr("Atlas dimensions exceed ")) + std::to_string(k_max_coordinate)
+                    + ": " + line;
+                return false;
+            }
             parsed.atlases.push_back({w, h});
         } else if (line.starts_with("root")) {
             if (parsed.has_root) {
@@ -470,6 +543,10 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             }
             if (!parse_extrude_line(line, parsed.extrude)) {
                 error = std::string(tr("Invalid extrude line: ")) + line;
+                return false;
+            }
+            if (parsed.extrude > k_max_coordinate) {
+                error = std::string(tr("Extrude exceeds ")) + std::to_string(k_max_coordinate) + ": " + line;
                 return false;
             }
             parsed.has_extrude = true;
@@ -553,6 +630,15 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
         parsed.scale = 1.0;
     }
 
+    // Checked once the scale is known, since it may follow the sprite lines. Aliases are
+    // not checked: they inherit the canonical sprite's insets with their own trim, and
+    // spratconvert fits the insets to every sprite anyway (see metadata_slice).
+    for (const Sprite& s : parsed.sprites) {
+        if (!check_sprite_limits(s, parsed.scale, error) || !check_slice_fits(s, parsed.scale, error)) {
+            return false;
+        }
+    }
+
     out = std::move(parsed);
     return true;
 }
@@ -580,6 +666,10 @@ bool expand_layout_aliases(Layout& layout, std::string& error) {
             expanded.trim_right = alias.trim_right;
             expanded.trim_bottom = alias.trim_bottom;
             expanded.has_trim = true;
+        }
+        // An alias keeps its own trim, which may make it larger than its canonical sprite.
+        if (!check_sprite_limits(expanded, layout.scale, error)) {
+            return false;
         }
         layout.sprites.push_back(std::move(expanded));
     }

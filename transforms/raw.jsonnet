@@ -2,7 +2,8 @@
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
 //   sprat-raw 1
-//   sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS NORMAL_PATH COLLISION_PATH
+//   sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS
+//         MARKERS VERTICES FRAMES STRING_BYTES NORMAL_PATH COLLISION_PATH
 //   atlas W H PATH NORMAL_PATH COLLISION_PATH
 //   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y
 //          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
@@ -13,10 +14,17 @@
 // An empty string means "none". Enums are numbers: marker type point=0 circle=1 rectangle=2
 // polygon=3; slice mode stretch=0 repeat=1 mirror=2 fixed=3; FLIP bits h=1 v=2. ALIAS is the
 // index of the animation an alias replays (its FRAMES is 0), or -1.
+//
+// The sheet line's MARKERS, VERTICES, FRAMES and STRING_BYTES are the totals over the whole
+// file: marker lines, polygon vertices, animation frame indexes, and the UTF-8 bytes of every
+// string. With them a loader knows the exact size of the model before reading the records, so
+// it can allocate it once; a loader must reject a file whose records don't match them.
 local sprat = std.extVar("sprat");
 local lib = import "sprat.libsonnet";
 
-local str(s) = std.length(std.encodeUTF8(s)) + ":" + s;
+local str_bytes(s) = std.length(std.encodeUTF8(s));
+local str(s) = str_bytes(s) + ":" + s;
+local sum(xs) = std.foldl(function(acc, x) acc + x, xs, 0);
 local bool(b) = if b then "1" else "0";
 local line(tokens) = std.join(" ", ["" + t for t in tokens]) + "\n";
 
@@ -55,14 +63,29 @@ local anim_line(a) =
   line(["anim", a.fps, flip_bits(a.flip), alias, std.length(frames)] + frames + [str(a.name)]);
 
 local animations = if sprat.has_animations then sprat.animations else [];
+local normal_path = if sprat.has_normal_atlas then sprat.normal_atlas_path else "";
+local collision_path = if sprat.has_collision_atlas then sprat.collision_atlas_path else "";
+
+// Totals for the sheet line, computed from exactly what the records below write.
+local all_markers = [m for s in sprat.sprites for m in s.markers];
+local vertex_count(m) = if std.objectHas(m, "vertices") then std.length(m.vertices) else 0;
+local frame_count(a) = if a.is_alias then 0 else std.length(a.frame_indices);
+local string_bytes =
+  str_bytes(normal_path) + str_bytes(collision_path)
+  + sum([str_bytes(at.path) + str_bytes(at.normal_path) + str_bytes(at.collision_path)
+         for at in sprat.atlases])
+  + sum([str_bytes(s.name) + str_bytes(s.path) + str_bytes(s.alias_of) for s in sprat.sprites])
+  + sum([str_bytes(m.name) for m in all_markers])
+  + sum([str_bytes(a.name) for a in animations]);
 
 local header =
   "sprat-raw 1\n"
   + line(["sheet", sprat.scale, sprat.extrude, bool(sprat.multipack),
           if sprat.has_collision_atlas then sprat.collision_atlas_scale else 0,
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
-          str(if sprat.has_normal_atlas then sprat.normal_atlas_path else ""),
-          str(if sprat.has_collision_atlas then sprat.collision_atlas_path else "")]);
+          std.length(all_markers), sum([vertex_count(m) for m in all_markers]),
+          sum([frame_count(a) for a in animations]), string_bytes,
+          str(normal_path), str(collision_path)]);
 
 {
   name: "Raw",
