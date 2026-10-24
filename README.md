@@ -212,6 +212,10 @@ Profile definitions are searched in:
    - Windows: `%APPDATA%\sprat\spratprofiles.cfg`
 4. `/usr/local/share/sprat/spratprofiles.cfg` (Global)
 
+Besides the keys matching `spratlayout`'s options (`mode`, `optimize`, `max_width`, `padding`, `rotate_direction`, ...), a profile accepts `preset=fast|quality|small|pot` (sets `mode` and `optimize` like `--preset`) and `sort=name|none|stable[:<metric>]` (like `--sort`). Command-line flags override profile values. A profile's `target_resolution=WxH|source` scales the layout only when a source resolution is known (`--source-resolution` or the profile's `source_resolution`); otherwise it is skipped.
+
+A profile can also hold settings of the later pipeline steps, as GUIs such as [sprat-gui](https://github.com/pedroac/sprat-gui) save them: `dilate`, `gpu_compress`, `image_format`, `image_quality`, `zopfli`, `frame_lines`, `frame_line_width`, `frame_line_color`, `atlas_index` (spratpack) and `auto_animations` (spratconvert). `spratlayout` accepts and ignores them; any other unknown key is an error.
+
 ### Spratlayout Options
 - `--mode compact|pot|fast`: Packing algorithm choice.
 - `--optimize gpu|space`: Prioritize GPU-friendly dimensions or minimum area.
