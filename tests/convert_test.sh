@@ -1011,6 +1011,20 @@ if "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_big_dec
   exit 1
 fi
 grep -qF 'Animation "run" has fps 1000.0, above the limit of 100' "$tmp_dir/fps.err"
+# An fps that is not a number is ignored with a warning, file-wide and per animation.
+printf 'fps abc\nanimation "run" x9\n- frame "a.png"\n' > "$tmp_dir/fps_nan.anims"
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_nan.anims")" \
+    < "$tmp_dir/limit.txt" 2> "$tmp_dir/fps.err" | grep -q '^anim 8 '
+grep -qF 'Warning: Animations file fps "abc" is not a number; it is ignored' "$tmp_dir/fps.err"
+grep -qF 'Warning: Animation "run" fps "x9" is not a number; it is ignored' "$tmp_dir/fps.err"
+# A valid file gives no warning.
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_ok.anims")" \
+    < "$tmp_dir/limit.txt" > /dev/null 2> "$tmp_dir/fps.err"
+if [ -s "$tmp_dir/fps.err" ]; then
+  echo "a valid animations file should not warn" >&2
+  cat "$tmp_dir/fps.err" >&2
+  exit 1
+fi
 
 # The limit applies once scaled: 20000000 at scale 0.5 exports as 10000000.
 printf 'scale 0.5\natlas 8,8\nsprite "a.png" 0,0 4,4\n' > "$tmp_dir/limit_scaled.txt"

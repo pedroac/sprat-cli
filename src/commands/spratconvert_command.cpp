@@ -439,7 +439,8 @@ std::vector<AnimationItem> parse_animations_data(
     const std::unordered_map<std::string, int>& by_path,
     const std::unordered_map<std::string, int>& by_name,
     int& animation_fps_out,
-    std::string& error
+    std::string& error,
+    std::vector<std::string>& warnings
 ) {
     const std::string limit = std::to_string(k_max_animation_fps);
     std::vector<AnimationItem> animations;
@@ -466,18 +467,20 @@ std::vector<AnimationItem> parse_animations_data(
                 ++pos;
             }
             if (pos < trimmed.size() && trimmed[pos] == '"') {
-                std::string error;
-                parse_quoted(trimmed, pos, raw_root, error);
+                std::string quote_error;
+                parse_quoted(trimmed, pos, raw_root, quote_error);
             }
         } else if (cmd == "fps") {
             std::string fps_token;
             int fps = 0;
-            if (liss >> fps_token && read_animation_fps(fps_token, fps)) {
-                if (fps > k_max_animation_fps) {
-                    error = std::string(tr("Animations file fps ")) + fps_token
-                        + tr(" is above the limit of ") + limit;
-                    return {};
-                }
+            if (!(liss >> fps_token) || !read_animation_fps(fps_token, fps)) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Animations file fps \"{0}\" is not a number; it is ignored", {fps_token}));
+            } else if (fps > k_max_animation_fps) {
+                error = sprat::core::tr_format(
+                    "Animations file fps {0} is above the limit of {1}", {fps_token, limit});
+                return {};
+            } else {
                 animation_fps_out = fps;
             }
         } else if (cmd == "animation") {
@@ -487,8 +490,8 @@ std::vector<AnimationItem> parse_animations_data(
                 pos++;
             }
             if (pos < trimmed.size() && trimmed[pos] == '"') {
-                std::string error;
-                if (!parse_quoted(trimmed, pos, name, error)) {
+                std::string quote_error;
+                if (!parse_quoted(trimmed, pos, name, quote_error)) {
                     continue;
                 }
             } else {
@@ -516,9 +519,9 @@ std::vector<AnimationItem> parse_animations_data(
                     alias_src_pos++;
                 }
                 if (alias_src_pos < trimmed.size() && trimmed[alias_src_pos] == '"') {
-                    std::string error;
+                    std::string quote_error;
                     std::string alias_source;
-                    if (parse_quoted(trimmed, alias_src_pos, alias_source, error)) {
+                    if (parse_quoted(trimmed, alias_src_pos, alias_source, quote_error)) {
                         item.alias_source = alias_source;
                     }
                 }
@@ -536,11 +539,16 @@ std::vector<AnimationItem> parse_animations_data(
                 int custom_fps = 0;
                 if (read_animation_fps(next_token, custom_fps)) {
                     if (custom_fps > k_max_animation_fps) {
-                        error = std::string(tr("Animation ")) + "\"" + item.name + "\""
-                            + tr(" has fps ") + next_token + tr(", above the limit of ") + limit;
+                        error = sprat::core::tr_format(
+                            "Animation \"{0}\" has fps {1}, above the limit of {2}",
+                            {item.name, next_token, limit});
                         return {};
                     }
                     item.fps = custom_fps;
+                } else if (!next_token.empty()) {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Animation \"{0}\" fps \"{1}\" is not a number; it is ignored",
+                        {item.name, next_token}));
                 }
                 animations.push_back(std::move(item));
                 current_anim = &animations.back();
@@ -560,8 +568,8 @@ std::vector<AnimationItem> parse_animations_data(
             }
             if (pos < trimmed.size() && trimmed[pos] == '"') {
                 std::string path;
-                std::string error;
-                if (parse_quoted(trimmed, pos, path, error)) {
+                std::string quote_error;
+                if (parse_quoted(trimmed, pos, path, quote_error)) {
                     path = join_metadata_root(raw_root, path);
                     int idx = resolve_sprite_index(path, by_path, by_name);
                     if (idx >= 0) {
@@ -1748,9 +1756,13 @@ int run_spratconvert(int argc, char** argv) {
     }
     int animation_fps = -1;
     std::string animations_error;
+    std::vector<std::string> animations_warnings;
     std::vector<AnimationItem> animation_items =
         parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name,
-                               animation_fps, animations_error);
+                               animation_fps, animations_error, animations_warnings);
+    for (const std::string& warning : animations_warnings) {
+        std::cerr << tr("Warning: ") << warning << "\n";
+    }
     if (!animations_error.empty()) {
         std::cerr << animations_error << "\n";
         return 1;

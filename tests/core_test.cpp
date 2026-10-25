@@ -2,6 +2,7 @@
 #undef NDEBUG
 #include "../src/core/checked_math.h"
 #include "../src/core/cli_parse.h"
+#include "../src/core/i18n.h"
 #include "../src/core/image_limits.h"
 #include "../src/core/output_pattern.h"
 #include "../src/core/parallel.h"
@@ -275,6 +276,17 @@ void test_image_size_within_limits() {
     std::cout << "test_image_size_within_limits passed" << std::endl;
 }
 
+void test_tr_format() {
+    using sprat::core::tr_format;
+    assert(tr_format("Animation {0} has fps {1}", {"run", "120"}) == "Animation run has fps 120");
+    // A translation may reorder or repeat the values.
+    assert(tr_format("{1} fps in {0} ({1})", {"run", "120"}) == "120 fps in run (120)");
+    // Placeholders without a matching argument, and other braces, stay as they are.
+    assert(tr_format("{2} {x} {} {", {"a"}) == "{2} {x} {} {");
+    assert(tr_format("no values", {}) == "no values");
+    std::cout << "test_tr_format passed" << std::endl;
+}
+
 int main() {
     test_parse_positive_int();
     test_parse_non_negative_int();
@@ -292,6 +304,7 @@ int main() {
     test_group_near_duplicates();
     test_run_workers();
     test_image_size_within_limits();
+    test_tr_format();
     std::cout << "All core tests passed!" << std::endl;
     return 0;
 }

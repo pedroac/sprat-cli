@@ -1,5 +1,6 @@
 #include "i18n.h"
 
+#include <cctype>
 #include <cstdlib>
 
 #ifdef SPRAT_ENABLE_GETTEXT
@@ -37,6 +38,28 @@ const char* tr(const char* msgid) {
 #else
     return msgid;
 #endif
+}
+
+std::string tr_format(const char* msgid, std::initializer_list<std::string_view> args) {
+    const std::string_view text = tr(msgid);
+    std::string out;
+    out.reserve(text.size());
+    size_t i = 0;
+    while (i < text.size()) {
+        // "{N}" with a single digit N that names an argument; anything else is copied as is.
+        if (text[i] == '{' && i + 2 < text.size()
+            && std::isdigit(static_cast<unsigned char>(text[i + 1])) && text[i + 2] == '}') {
+            const size_t index = static_cast<size_t>(text[i + 1] - '0');
+            if (index < args.size()) {
+                out += *(args.begin() + index);
+                i += 3;
+                continue;
+            }
+        }
+        out += text[i];
+        ++i;
+    }
+    return out;
 }
 
 } // namespace sprat::core
