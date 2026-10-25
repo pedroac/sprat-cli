@@ -60,10 +60,10 @@ struct MarkerItem {
 };
 
 constexpr int DEFAULT_ANIMATION_FPS = 8;
-// Most frames per second an animation may play at: the refresh rate of the fastest common
-// displays. It matches sprat-lib's SPRAT_FPS_LIMIT, so every sheet spratconvert writes also
-// loads there, and game code multiplying a millisecond time by fps stays within an int longer.
-constexpr int k_max_animation_fps = 240;
+// Most frames per second an animation may play at. Sprite animations run far slower, so a
+// larger value is a mistake. It matches sprat-lib's SPRAT_FPS_LIMIT, so every sheet
+// spratconvert writes also loads there.
+constexpr int k_max_animation_fps = 100;
 constexpr int k_default_precision = 8;
 constexpr size_t k_string_growth_padding = 8;
 constexpr unsigned char k_json_control_char_limit = 0x20;
@@ -1557,7 +1557,7 @@ void print_usage() {
               << tr("  --list-transforms-json     Print available transforms as JSON and exit\n")
               << tr("  --transforms-dir           Print the transforms directory and exit\n")
               << tr("  --markers PATH             Load external markers file\n")
-              << tr("  --animations PATH          Load external animations file (fps up to 240)\n")
+              << tr("  --animations PATH          Load external animations file (fps up to 100)\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
               << tr("  --normal-atlas PATTERN     Normal map atlas path pattern (same format as --atlas)\n")
               << tr("  --collision-atlas PATTERN  Collision map atlas path pattern (same format as --atlas)\n")
