@@ -959,6 +959,25 @@ if "$convert_bin" --transform raw --markers "$(fix_path "$tmp_dir/limit_bad.mark
   exit 1
 fi
 grep -qF 'Marker "hit" of sprite a.png has a value beyond 16777216 atlas pixels' "$tmp_dir/limit.err"
+
+# Animation fps must stay within 240 (sprat-lib's SPRAT_FPS_LIMIT), file-wide and per animation.
+printf 'fps 240\nanimation "run" 240\n- frame "a.png"\n' > "$tmp_dir/fps_ok.anims"
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_ok.anims")" \
+    < "$tmp_dir/limit.txt" | grep -q '^anim 240 '
+printf 'fps 241\nanimation "run"\n- frame "a.png"\n' > "$tmp_dir/fps_file.anims"
+if "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_file.anims")" \
+    < "$tmp_dir/limit.txt" > /dev/null 2> "$tmp_dir/fps.err"; then
+  echo "an animations file fps above 240 should fail" >&2
+  exit 1
+fi
+grep -qF 'Animations file fps 241 is above the limit of 240' "$tmp_dir/fps.err"
+printf 'fps 12\nanimation "run" 1000\n- frame "a.png"\n' > "$tmp_dir/fps_anim.anims"
+if "$convert_bin" --transform json --animations "$(fix_path "$tmp_dir/fps_anim.anims")" \
+    < "$tmp_dir/limit.txt" > /dev/null 2> "$tmp_dir/fps.err"; then
+  echo "an animation fps above 240 should fail" >&2
+  exit 1
+fi
+grep -qF 'Animation "run" has fps 1000, above the limit of 240' "$tmp_dir/fps.err"
 # The limit applies once scaled: 20000000 at scale 0.5 exports as 10000000.
 printf 'scale 0.5\natlas 8,8\nsprite "a.png" 0,0 4,4\n' > "$tmp_dir/limit_scaled.txt"
 printf 'path "a.png"\n- marker "pivot" point 20000000,0\n' > "$tmp_dir/limit_scaled.markers"

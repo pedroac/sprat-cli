@@ -59,6 +59,10 @@ struct MarkerItem {
 };
 
 constexpr int DEFAULT_ANIMATION_FPS = 8;
+// Most frames per second an animation may play at: the refresh rate of the fastest common
+// displays. It matches sprat-lib's SPRAT_FPS_LIMIT, so every sheet spratconvert writes also
+// loads there, and game code multiplying a millisecond time by fps stays within an int longer.
+constexpr int k_max_animation_fps = 240;
 constexpr int k_default_precision = 8;
 constexpr size_t k_string_growth_padding = 8;
 constexpr unsigned char k_json_control_char_limit = 0x20;
@@ -395,6 +399,27 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
         }
     }
     return markers;
+}
+
+// Animation files are hand-written, so fps can be anything an int holds. Values of 0 or less
+// mean the default; fails when the file-wide fps or an animation's own is above
+// k_max_animation_fps.
+bool check_animation_fps(const std::vector<AnimationItem>& animations, int file_fps,
+                         std::string& error) {
+    const std::string limit = std::to_string(k_max_animation_fps);
+    if (file_fps > k_max_animation_fps) {
+        error = std::string(tr("Animations file fps ")) + std::to_string(file_fps)
+            + tr(" is above the limit of ") + limit;
+        return false;
+    }
+    for (const AnimationItem& anim : animations) {
+        if (anim.fps > k_max_animation_fps) {
+            error = std::string(tr("Animation ")) + "\"" + anim.name + "\"" + tr(" has fps ")
+                + std::to_string(anim.fps) + tr(", above the limit of ") + limit;
+            return false;
+        }
+    }
+    return true;
 }
 
 std::vector<AnimationItem> parse_animations_data(
@@ -1508,7 +1533,7 @@ void print_usage() {
               << tr("  --list-transforms-json     Print available transforms as JSON and exit\n")
               << tr("  --transforms-dir           Print the transforms directory and exit\n")
               << tr("  --markers PATH             Load external markers file\n")
-              << tr("  --animations PATH          Load external animations file\n")
+              << tr("  --animations PATH          Load external animations file (fps 1 to 240)\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
               << tr("  --normal-atlas PATTERN     Normal map atlas path pattern (same format as --atlas)\n")
               << tr("  --collision-atlas PATTERN  Collision map atlas path pattern (same format as --atlas)\n")
@@ -1701,6 +1726,13 @@ int run_spratconvert(int argc, char** argv) {
     std::vector<AnimationItem> animation_items =
         parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name,
                                animation_fps);
+    {
+        std::string fps_error;
+        if (!check_animation_fps(animation_items, animation_fps, fps_error)) {
+            std::cerr << fps_error << "\n";
+            return 1;
+        }
+    }
 
     if (auto_animations) {
         std::map<std::string, std::vector<int>> grouped;
