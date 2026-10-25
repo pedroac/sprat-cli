@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -401,24 +402,26 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
     return markers;
 }
 
-// Animation files are hand-written, so fps can be anything an int holds. Values of 0 or less
-// mean the default; fails when the file-wide fps or an animation's own is above
-// k_max_animation_fps.
-bool check_animation_fps(const std::vector<AnimationItem>& animations, int file_fps,
-                         std::string& error) {
-    const std::string limit = std::to_string(k_max_animation_fps);
-    if (file_fps > k_max_animation_fps) {
-        error = std::string(tr("Animations file fps ")) + std::to_string(file_fps)
-            + tr(" is above the limit of ") + limit;
+// Reads an fps number from a hand-written animations file; false when the token is not an
+// integer. A number too large for an int is still above k_max_animation_fps, so it saturates
+// to INT_MAX instead of being dropped (and a too-negative one to INT_MIN, the default).
+bool read_animation_fps(const std::string& token, int& out) {
+    if (token.empty()) {
         return false;
     }
-    for (const AnimationItem& anim : animations) {
-        if (anim.fps > k_max_animation_fps) {
-            error = std::string(tr("Animation ")) + "\"" + anim.name + "\"" + tr(" has fps ")
-                + std::to_string(anim.fps) + tr(", above the limit of ") + limit;
-            return false;
-        }
+    int value = 0;
+    const char* end = token.data() + token.size();
+    const auto [ptr, ec] = std::from_chars(token.data(), end, value);
+    if (ptr != end) {
+        return false;
     }
+    if (ec == std::errc::result_out_of_range) {
+        value = token[0] == '-' ? std::numeric_limits<int>::min()
+                                : std::numeric_limits<int>::max();
+    } else if (ec != std::errc()) {
+        return false;
+    }
+    out = value;
     return true;
 }
 
@@ -426,8 +429,10 @@ std::vector<AnimationItem> parse_animations_data(
     const std::string& animations_text,
     const std::unordered_map<std::string, int>& by_path,
     const std::unordered_map<std::string, int>& by_name,
-    int& animation_fps_out
+    int& animation_fps_out,
+    std::string& error
 ) {
+    const std::string limit = std::to_string(k_max_animation_fps);
     std::vector<AnimationItem> animations;
     std::istringstream iss(animations_text);
     std::string line;
@@ -456,8 +461,14 @@ std::vector<AnimationItem> parse_animations_data(
                 parse_quoted(trimmed, pos, raw_root, error);
             }
         } else if (cmd == "fps") {
+            std::string fps_token;
             int fps = 0;
-            if (liss >> fps) {
+            if (liss >> fps_token && read_animation_fps(fps_token, fps)) {
+                if (fps > k_max_animation_fps) {
+                    error = std::string(tr("Animations file fps ")) + fps_token
+                        + tr(" is above the limit of ") + limit;
+                    return {};
+                }
                 animation_fps_out = fps;
             }
         } else if (cmd == "animation") {
@@ -514,8 +525,12 @@ std::vector<AnimationItem> parse_animations_data(
                 current_anim = nullptr;
             } else {
                 int custom_fps = 0;
-                std::istringstream fps_iss(next_token);
-                if (fps_iss >> custom_fps) {
+                if (read_animation_fps(next_token, custom_fps)) {
+                    if (custom_fps > k_max_animation_fps) {
+                        error = std::string(tr("Animation ")) + "\"" + item.name + "\""
+                            + tr(" has fps ") + next_token + tr(", above the limit of ") + limit;
+                        return {};
+                    }
                     item.fps = custom_fps;
                 }
                 animations.push_back(std::move(item));
@@ -1533,7 +1548,7 @@ void print_usage() {
               << tr("  --list-transforms-json     Print available transforms as JSON and exit\n")
               << tr("  --transforms-dir           Print the transforms directory and exit\n")
               << tr("  --markers PATH             Load external markers file\n")
-              << tr("  --animations PATH          Load external animations file (fps 1 to 240)\n")
+              << tr("  --animations PATH          Load external animations file (fps up to 240)\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
               << tr("  --normal-atlas PATTERN     Normal map atlas path pattern (same format as --atlas)\n")
               << tr("  --collision-atlas PATTERN  Collision map atlas path pattern (same format as --atlas)\n")
@@ -1723,15 +1738,13 @@ int run_spratconvert(int argc, char** argv) {
         }
     }
     int animation_fps = -1;
+    std::string animations_error;
     std::vector<AnimationItem> animation_items =
         parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name,
-                               animation_fps);
-    {
-        std::string fps_error;
-        if (!check_animation_fps(animation_items, animation_fps, fps_error)) {
-            std::cerr << fps_error << "\n";
-            return 1;
-        }
+                               animation_fps, animations_error);
+    if (!animations_error.empty()) {
+        std::cerr << animations_error << "\n";
+        return 1;
     }
 
     if (auto_animations) {
