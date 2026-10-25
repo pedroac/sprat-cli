@@ -404,10 +404,11 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
 
 // Reads an fps number from a hand-written animations file the way `stream >> int` does:
 // an optional sign, then the leading digits, so "12.5" reads 12 and "+24" reads 24; false
-// when there are no digits. A number too large for an int is still above
-// k_max_animation_fps, so it saturates to INT_MAX instead of being dropped (and a
-// too-negative one to INT_MIN, the default).
-bool read_animation_fps(const std::string& token, int& out) {
+// when there are no digits. `partial` tells whether anything follows the digits, so the
+// caller can warn that "12.5" or a typo such as "1O0" was cut short. A number too large
+// for an int is still above k_max_animation_fps, so it saturates to INT_MAX instead of
+// being dropped (and a too-negative one to INT_MIN, the default).
+bool read_animation_fps(const std::string& token, int& out, bool& partial) {
     size_t digits_begin = 0;
     if (!token.empty() && (token[0] == '+' || token[0] == '-')) {
         digits_begin = 1;
@@ -431,6 +432,7 @@ bool read_animation_fps(const std::string& token, int& out) {
         return false;
     }
     out = value;
+    partial = digits_end < token.size();
     return true;
 }
 
@@ -473,7 +475,10 @@ std::vector<AnimationItem> parse_animations_data(
         } else if (cmd == "fps") {
             std::string fps_token;
             int fps = 0;
-            if (!(liss >> fps_token) || !read_animation_fps(fps_token, fps)) {
+            bool partial = false;
+            if (!(liss >> fps_token)) {
+                warnings.push_back(tr("Animations file fps has no value; it is ignored"));
+            } else if (!read_animation_fps(fps_token, fps, partial)) {
                 warnings.push_back(sprat::core::tr_format(
                     "Animations file fps \"{0}\" is not a number; it is ignored", {fps_token}));
             } else if (fps > k_max_animation_fps) {
@@ -481,6 +486,11 @@ std::vector<AnimationItem> parse_animations_data(
                     "Animations file fps {0} is above the limit of {1}", {fps_token, limit});
                 return {};
             } else {
+                if (partial) {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Animations file fps \"{0}\" is read as {1}",
+                        {fps_token, std::to_string(fps)}));
+                }
                 animation_fps_out = fps;
             }
         } else if (cmd == "animation") {
@@ -537,12 +547,18 @@ std::vector<AnimationItem> parse_animations_data(
                 current_anim = nullptr;
             } else {
                 int custom_fps = 0;
-                if (read_animation_fps(next_token, custom_fps)) {
+                bool partial = false;
+                if (read_animation_fps(next_token, custom_fps, partial)) {
                     if (custom_fps > k_max_animation_fps) {
                         error = sprat::core::tr_format(
                             "Animation \"{0}\" has fps {1}, above the limit of {2}",
                             {item.name, next_token, limit});
                         return {};
+                    }
+                    if (partial) {
+                        warnings.push_back(sprat::core::tr_format(
+                            "Animation \"{0}\" fps \"{1}\" is read as {2}",
+                            {item.name, next_token, std::to_string(custom_fps)}));
                     }
                     item.fps = custom_fps;
                 } else if (!next_token.empty()) {

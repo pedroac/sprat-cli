@@ -1017,6 +1017,17 @@ printf 'fps abc\nanimation "run" x9\n- frame "a.png"\n' > "$tmp_dir/fps_nan.anim
     < "$tmp_dir/limit.txt" 2> "$tmp_dir/fps.err" | grep -q '^anim 8 '
 grep -qF 'Warning: Animations file fps "abc" is not a number; it is ignored' "$tmp_dir/fps.err"
 grep -qF 'Warning: Animation "run" fps "x9" is not a number; it is ignored' "$tmp_dir/fps.err"
+# A bare fps line has its own warning.
+printf 'fps\nanimation "run"\n- frame "a.png"\n' > "$tmp_dir/fps_bare.anims"
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_bare.anims")" \
+    < "$tmp_dir/limit.txt" 2> "$tmp_dir/fps.err" | grep -q '^anim 8 '
+grep -qF 'Warning: Animations file fps has no value; it is ignored' "$tmp_dir/fps.err"
+# Only the leading integer is read, with a warning when anything follows it.
+printf 'fps 12abc\nanimation "run" 1O0\n- frame "a.png"\n' > "$tmp_dir/fps_partial.anims"
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_partial.anims")" \
+    < "$tmp_dir/limit.txt" 2> "$tmp_dir/fps.err" | grep -q '^anim 1 '
+grep -qF 'Warning: Animations file fps "12abc" is read as 12' "$tmp_dir/fps.err"
+grep -qF 'Warning: Animation "run" fps "1O0" is read as 1' "$tmp_dir/fps.err"
 # A valid file gives no warning.
 "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_ok.anims")" \
     < "$tmp_dir/limit.txt" > /dev/null 2> "$tmp_dir/fps.err"

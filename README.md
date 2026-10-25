@@ -837,7 +837,7 @@ path "b"
 
 `--animations` expects a plaintext file using the `animation` and `- frame` DSL. Frame entries are resolved to sprite indexes by path, name, or index.
 An optional `root` directive sets a base directory; quoted frame paths that are relative are resolved against it.
-The `fps` line sets the default speed for every animation, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8; a value that is not a number is ignored with a warning.
+The `fps` line sets the default speed for every animation, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (`12.5` is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
 
 Example `animations.txt`:
 ```txt
