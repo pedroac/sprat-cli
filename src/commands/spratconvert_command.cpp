@@ -402,22 +402,31 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
     return markers;
 }
 
-// Reads an fps number from a hand-written animations file; false when the token is not an
-// integer. A number too large for an int is still above k_max_animation_fps, so it saturates
-// to INT_MAX instead of being dropped (and a too-negative one to INT_MIN, the default).
+// Reads an fps number from a hand-written animations file the way `stream >> int` does:
+// an optional sign, then the leading digits, so "12.5" reads 12 and "+24" reads 24; false
+// when there are no digits. A number too large for an int is still above
+// k_max_animation_fps, so it saturates to INT_MAX instead of being dropped (and a
+// too-negative one to INT_MIN, the default).
 bool read_animation_fps(const std::string& token, int& out) {
-    if (token.empty()) {
+    size_t digits_begin = 0;
+    if (!token.empty() && (token[0] == '+' || token[0] == '-')) {
+        digits_begin = 1;
+    }
+    size_t digits_end = digits_begin;
+    while (digits_end < token.size()
+           && std::isdigit(static_cast<unsigned char>(token[digits_end]))) {
+        ++digits_end;
+    }
+    if (digits_end == digits_begin) {
         return false;
     }
+    const bool negative = token[0] == '-';
+    // from_chars takes a '-' but not a '+', so a '+' is skipped.
+    const char* number_begin = token.data() + (negative ? 0 : digits_begin);
     int value = 0;
-    const char* end = token.data() + token.size();
-    const auto [ptr, ec] = std::from_chars(token.data(), end, value);
-    if (ptr != end) {
-        return false;
-    }
+    const auto [ptr, ec] = std::from_chars(number_begin, token.data() + digits_end, value);
     if (ec == std::errc::result_out_of_range) {
-        value = token[0] == '-' ? std::numeric_limits<int>::min()
-                                : std::numeric_limits<int>::max();
+        value = negative ? std::numeric_limits<int>::min() : std::numeric_limits<int>::max();
     } else if (ec != std::errc()) {
         return false;
     }

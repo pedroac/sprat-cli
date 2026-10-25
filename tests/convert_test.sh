@@ -997,6 +997,20 @@ grep -qF 'Animation "run" has fps 4294967296, above the limit of 240' "$tmp_dir/
 printf 'fps -99999999999\nanimation "run"\n- frame "a.png"\n' > "$tmp_dir/fps_neg.anims"
 "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_neg.anims")" \
     < "$tmp_dir/limit.txt" | grep -q '^anim 8 '
+# fps reads its leading integer, as before: "12.5" is 12, "+24" is 24, "1000.0" is above 240.
+printf 'fps 12.5\nanimation "run"\n- frame "a.png"\n' > "$tmp_dir/fps_dec.anims"
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_dec.anims")" \
+    < "$tmp_dir/limit.txt" | grep -q '^anim 12 '
+printf 'animation "run" +24\n- frame "a.png"\n' > "$tmp_dir/fps_plus.anims"
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_plus.anims")" \
+    < "$tmp_dir/limit.txt" | grep -q '^anim 24 '
+printf 'animation "run" 1000.0\n- frame "a.png"\n' > "$tmp_dir/fps_big_dec.anims"
+if "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/fps_big_dec.anims")" \
+    < "$tmp_dir/limit.txt" > /dev/null 2> "$tmp_dir/fps.err"; then
+  echo "an animation fps of 1000.0 should fail" >&2
+  exit 1
+fi
+grep -qF 'Animation "run" has fps 1000.0, above the limit of 240' "$tmp_dir/fps.err"
 
 # The limit applies once scaled: 20000000 at scale 0.5 exports as 10000000.
 printf 'scale 0.5\natlas 8,8\nsprite "a.png" 0,0 4,4\n' > "$tmp_dir/limit_scaled.txt"
