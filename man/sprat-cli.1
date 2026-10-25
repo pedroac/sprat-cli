@@ -469,6 +469,7 @@ Supported marker types: \fBpoint\fR (\fBx,y\fR), \fBcircle\fR (\fBx,y radius\fR)
 \fB\-\-animations\fR \fIPATH\fR
 Load external animations plaintext file using the \fBanimation\fR and \fB- frame\fR DSL.
 An optional \fBroot\fR directive sets a base directory; relative quoted frame paths are resolved against it.
+The \fBfps\fR line sets every animation's default speed, and a number after an animation's name sets its own. Both go up to 240 frames per second, sprat-lib's limit; a higher value is an error. A value of 0 or less means the default, 8.
 .PP
 An animation can be declared as an alias of another animation using the \fBalias\fR keyword:
 .PP
