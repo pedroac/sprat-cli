@@ -29,7 +29,7 @@ local anim_obj(a) =
     { name: a.name, alias: a.alias_source }
     + (if a.flip != "" then { flip: a.flip } else {})
   else
-    { name: a.name, fps: a.fps, sprite_indexes: a.frame_indices, sprite_names: [f.name for f in a.frames] }
+    { name: a.name, fps: a.fps, loop: a.loop, sprite_indexes: a.frame_indices, sprite_names: [f.name for f in a.frames] }
     + (if a.flip != "" then { flip: a.flip } else {});
 
 local atlas_obj(at) = {

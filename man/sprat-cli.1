@@ -256,7 +256,7 @@ func make_sprite_frames(json_path: String) -> SpriteFrames:
     return sf
 .fi
 .PP
-Each frame entry contains \fBregion\fR (atlas coordinates), \fBmargin\fR (trim offsets: left/top/right/bottom), \fBsource_size\fR and \fBrotated\fR; multipack layouts add \fBatlas\fR, an index into the top-level \fBatlases\fR list, in place of the top-level \fBimage\fR. \fBAtlasTexture\fR cannot rotate a region, so pack without \fB\-\-rotate\fR for this loader. Animation entries contain \fBframes\fR (indices into \fBframes\fR, in play order), \fBspeed\fR (fps) and \fBloop: true\fR, plus \fBfrom\fR/\fBto\fR only when the frames form one ascending run.
+Each frame entry contains \fBregion\fR (atlas coordinates), \fBmargin\fR (trim offsets: left/top/right/bottom), \fBsource_size\fR and \fBrotated\fR; multipack layouts add \fBatlas\fR, an index into the top-level \fBatlases\fR list, in place of the top-level \fBimage\fR. \fBAtlasTexture\fR cannot rotate a region, so pack without \fB\-\-rotate\fR for this loader. Animation entries contain \fBframes\fR (indices into \fBframes\fR, in play order), \fBspeed\fR (fps) and \fBloop\fR (false for \fBonce\fR and \fBonce\-pingpong\fR; a ping-pong animation lists its way back in \fBframes\fR), plus \fBfrom\fR/\fBto\fR only when the frames form one ascending run.
 .PP
 The \fBLibGDX\fR transform produces a LibGDX \fBTextureAtlas\fR \fB.atlas\fR file. The \fBoffset\fR field uses LibGDX's y-up convention: \fBoffset: {{trim_left}}, {{trim_bottom}}\fR. Animations are not encoded in the \fB.atlas\fR format; use sprite name suffixes (e.g. \fBwalk_0\fR, \fBwalk_1\fR) and \fBAnimation<TextureRegion>\fR in code instead.
 .PP
@@ -470,6 +470,8 @@ Supported marker types: \fBpoint\fR (\fBx,y\fR), \fBcircle\fR (\fBx,y radius\fR)
 Load external animations plaintext file using the \fBanimation\fR and \fB- frame\fR DSL.
 An optional \fBroot\fR directive sets a base directory; relative quoted frame paths are resolved against it.
 The \fBfps\fR line sets every animation's default speed, and a number after an animation's name sets its own. Both go up to 100 frames per second, sprat-lib's limit; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (\fB12.5\fR is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
+.PP
+Each animation also has a loop mode: \fBloop\fR (the default) repeats it, \fBonce\fR plays it once and stops on the last frame, \fBpingpong\fR plays it forward then backward and repeats, and \fBonce\-pingpong\fR plays forward then backward once and stops on the first frame. The \fBloop\fR line sets the default mode, and a mode after an animation's name sets its own, before or after its fps (\fBanimation "run" 8 pingpong\fR). An alias plays the way the animation it replays does. An unknown mode is ignored with a warning. Phaser (\fByoyo\fR) and Aseprite (tag \fBdirection\fR and \fBrepeat\fR) play ping-pong themselves; Godot and Unity only have a loop flag, so their frame lists include the way back. The \fBraw\fR format does not carry loop modes yet.
 .PP
 An animation can be declared as an alias of another animation using the \fBalias\fR keyword:
 .PP

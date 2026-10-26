@@ -835,6 +835,85 @@ printf 'animation "back"\n- frame 2\n- frame 0\nanimation "run"\n- frame 0\n- fr
 grep -qF '{"frames":[2,0],"loop":true,"name":"back","speed":8}' "$tmp_dir/out.godot_anim"
 grep -qF '{"frames":[0,1],"from":0,"loop":true,"name":"run","speed":8,"to":1}' "$tmp_dir/out.godot_anim"
 
+# loop modes: the "loop" line sets the default, a mode after an animation's name (before
+# or after its fps) sets its own, and aliases play the way their source does
+cat > "$tmp_dir/loop.anims" <<'LOOPANIMS'
+loop once
+animation "dflt"
+- frame 0
+- frame 1
+animation "fwd" loop
+- frame 0
+- frame 1
+animation "pp" 12 pingpong
+- frame 0
+- frame 1
+- frame 2
+animation "opp" once-pingpong 6
+- frame 0
+- frame 1
+- frame 2
+animation "pp-left" alias "pp" flip h
+LOOPANIMS
+loop_anims="$(fix_path "$tmp_dir/loop.anims")"
+"$convert_bin" --transform json --animations "$loop_anims" < "$tmp_dir/godot_anim.txt" > "$tmp_dir/out.loop.json"
+python3 - "$tmp_dir/out.loop.json" <<'PY'
+import json, sys
+anims = {a['name']: a for a in json.load(open(sys.argv[1]))['animations']}
+assert anims['dflt']['loop'] == 'once', anims['dflt']
+assert anims['fwd']['loop'] == 'loop', anims['fwd']
+assert anims['pp']['loop'] == 'pingpong' and anims['pp']['fps'] == 12, anims['pp']
+assert anims['opp']['loop'] == 'once-pingpong' and anims['opp']['fps'] == 6, anims['opp']
+assert 'loop' not in anims['pp-left'], anims['pp-left']
+PY
+# a custom transform sees an alias's mode resolved from its source
+printf 'local s = std.extVar("sprat");\n{ name: "loop", extension: ".txt", content: std.join(",", [a.name + "=" + a.loop for a in s.animations]) }\n' > "$tmp_dir/loop.jsonnet"
+"$convert_bin" --transform "$(fix_path "$tmp_dir/loop.jsonnet")" --animations "$loop_anims" < "$tmp_dir/godot_anim.txt" \
+  | grep -qxF 'dflt=once,fwd=loop,pp=pingpong,opp=once-pingpong,pp-left=pingpong'
+# godot and unity have only a loop flag, so a ping-pong lists its way back
+"$convert_bin" --transform godot --animations "$loop_anims" < "$tmp_dir/godot_anim.txt" | tr -d ' \n' > "$tmp_dir/out.loop.godot"
+grep -qF '{"frames":[0,1],"from":0,"loop":false,"name":"dflt","speed":8,"to":1}' "$tmp_dir/out.loop.godot"
+grep -qF '{"frames":[0,1,2,1],"loop":true,"name":"pp","speed":12}' "$tmp_dir/out.loop.godot"
+grep -qF '{"frames":[0,1,2,1,0],"loop":false,"name":"opp","speed":6}' "$tmp_dir/out.loop.godot"
+"$convert_bin" --transform unity.anim --animations "$loop_anims" --output-dir "$tmp_dir/loop_unity" < "$tmp_dir/godot_anim.txt"
+grep -qF 'm_LoopTime: 0' "$tmp_dir/loop_unity/dflt.anim"
+grep -qF 'm_LoopTime: 1' "$tmp_dir/loop_unity/fwd.anim"
+test "$(grep -c -- '- time:' "$tmp_dir/loop_unity/pp.anim")" -eq 4
+grep -qF 'm_StopTime: 0.33333333' "$tmp_dir/loop_unity/pp.anim"
+grep -qF 'm_LoopTime: 1' "$tmp_dir/loop_unity/pp.anim"
+test "$(grep -c -- '- time:' "$tmp_dir/loop_unity/opp.anim")" -eq 5
+grep -qF 'm_LoopTime: 0' "$tmp_dir/loop_unity/opp.anim"
+# phaser and aseprite play ping-pong themselves
+"$convert_bin" --transform phaser-anims --animations "$loop_anims" < "$tmp_dir/godot_anim.txt" > "$tmp_dir/out.loop.phaser"
+"$convert_bin" --transform aseprite --animations "$loop_anims" < "$tmp_dir/godot_anim.txt" > "$tmp_dir/out.loop.aseprite"
+python3 - "$tmp_dir/out.loop.phaser" "$tmp_dir/out.loop.aseprite" <<'PY'
+import json, sys
+anims = {a['key']: a for a in json.load(open(sys.argv[1]))['anims']}
+assert anims['dflt']['repeat'] == 0 and 'yoyo' not in anims['dflt'], anims['dflt']
+assert anims['fwd']['repeat'] == -1 and 'yoyo' not in anims['fwd'], anims['fwd']
+assert anims['pp']['repeat'] == -1 and anims['pp']['yoyo'] is True, anims['pp']
+assert anims['opp']['repeat'] == 0 and anims['opp']['yoyo'] is True, anims['opp']
+assert len(anims['pp']['frames']) == 3, anims['pp']
+tags = {t['name']: t for t in json.load(open(sys.argv[2]))['meta']['frameTags']}
+assert tags['dflt']['direction'] == 'forward' and tags['dflt']['repeat'] == '1', tags['dflt']
+assert tags['fwd']['direction'] == 'forward' and 'repeat' not in tags['fwd'], tags['fwd']
+assert tags['pp']['direction'] == 'pingpong' and 'repeat' not in tags['pp'], tags['pp']
+assert tags['opp']['direction'] == 'pingpong' and tags['opp']['repeat'] == '2', tags['opp']
+PY
+"$convert_bin" --transform xml --animations "$loop_anims" < "$tmp_dir/godot_anim.txt" \
+  | grep -qF '<animation index="2" name="pp" fps="12" loop="pingpong" sprite_indexes="0,1,2" />'
+"$convert_bin" --transform csv --animations "$loop_anims" < "$tmp_dir/godot_anim.txt" > "$tmp_dir/out.loop.csv"
+grep -qxF 'animation,2,pp,12,0|1|2,,pingpong' "$tmp_dir/out.loop.csv"
+# unknown modes and extra settings are ignored with a warning
+printf 'loop forever\nloop\nanimation "run" 8 bounce\n- frame 0\nanimation "walk" sideways\n- frame 0\n' > "$tmp_dir/loop_bad.anims"
+"$convert_bin" --transform json --animations "$(fix_path "$tmp_dir/loop_bad.anims")" \
+  < "$tmp_dir/godot_anim.txt" > "$tmp_dir/out.loop_bad.json" 2> "$tmp_dir/loop_bad.err"
+grep -qF 'Animations file loop "forever" is not one of loop, once, pingpong, once-pingpong; it is ignored' "$tmp_dir/loop_bad.err"
+grep -qF 'Animations file loop has no value; it is ignored' "$tmp_dir/loop_bad.err"
+grep -qF 'Animation "run" has an unknown setting "bounce"; it is ignored' "$tmp_dir/loop_bad.err"
+grep -qF 'Animation "walk" fps "sideways" is not a number; it is ignored' "$tmp_dir/loop_bad.err"
+grep -qF '"loop": "loop"' "$tmp_dir/out.loop_bad.json"
+
 # multipack: single-texture formats write one file per atlas holding only that atlas's sprites
 printf 'atlas 32,32\nsprite "a.png" 0,0 16,16\nsprite "b.png" 16,0 8,8 slice=2,2,2,2\natlas 64,16\nsprite "c.png" 0,0 8,8\nsprite "d.png" 8,0 8,8\n' > "$tmp_dir/mp.txt"
 printf 'animation "walk"\n- frame 0\n- frame 1\n- frame 2\n- frame 3\n' > "$tmp_dir/mp.anims"

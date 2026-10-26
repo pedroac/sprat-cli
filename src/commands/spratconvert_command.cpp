@@ -71,11 +71,22 @@ constexpr std::uint8_t HEX_NIBBLE_MASK = 0x0f;
 constexpr int BITS_PER_NIBBLE = 4;
 constexpr const char* HEX_DIGITS = "0123456789abcdef";
 
+// How an animation plays: "loop" repeats it, "once" plays it once and holds the last
+// frame, "pingpong" plays it forward then backward and repeats, and "once-pingpong" plays
+// forward then backward once and holds the first frame.
+constexpr const char* DEFAULT_ANIMATION_LOOP = "loop";
+constexpr const char* k_animation_loop_modes = "loop, once, pingpong, once-pingpong";
+
+bool is_animation_loop_mode(const std::string& token) {
+    return token == "loop" || token == "once" || token == "pingpong" || token == "once-pingpong";
+}
+
 struct AnimationItem {
     size_t index = 0;
     std::string name;
     std::vector<int> sprite_indexes;
     int fps = DEFAULT_ANIMATION_FPS;
+    std::string loop = DEFAULT_ANIMATION_LOOP;
     std::string alias_source;
     std::string flip;
 };
@@ -441,6 +452,7 @@ std::vector<AnimationItem> parse_animations_data(
     const std::unordered_map<std::string, int>& by_path,
     const std::unordered_map<std::string, int>& by_name,
     int& animation_fps_out,
+    std::string& animation_loop_out,
     std::string& error,
     std::vector<std::string>& warnings
 ) {
@@ -493,6 +505,17 @@ std::vector<AnimationItem> parse_animations_data(
                 }
                 animation_fps_out = fps;
             }
+        } else if (cmd == "loop") {
+            std::string mode;
+            if (!(liss >> mode)) {
+                warnings.push_back(tr("Animations file loop has no value; it is ignored"));
+            } else if (!is_animation_loop_mode(mode)) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Animations file loop \"{0}\" is not one of {1}; it is ignored",
+                    {mode, k_animation_loop_modes}));
+            } else {
+                animation_loop_out = mode;
+            }
         } else if (cmd == "animation") {
             std::string name;
             size_t pos = trimmed.find("animation") + 9;
@@ -515,12 +538,11 @@ std::vector<AnimationItem> parse_animations_data(
             item.index = animations.size();
             item.name = name;
             item.fps = animation_fps_out > 0 ? animation_fps_out : DEFAULT_ANIMATION_FPS;
+            item.loop = animation_loop_out;
 
+            std::istringstream rest(trimmed.substr(pos));
             std::string next_token;
-            {
-                std::istringstream rest(trimmed.substr(pos));
-                rest >> next_token;
-            }
+            rest >> next_token;
 
             if (next_token == "alias") {
                 size_t alias_kw_pos = trimmed.find("alias", pos);
@@ -546,25 +568,43 @@ std::vector<AnimationItem> parse_animations_data(
                 animations.push_back(std::move(item));
                 current_anim = nullptr;
             } else {
-                int custom_fps = 0;
-                bool partial = false;
-                if (read_animation_fps(next_token, custom_fps, partial)) {
-                    if (custom_fps > k_max_animation_fps) {
-                        error = sprat::core::tr_format(
-                            "Animation \"{0}\" has fps {1}, above the limit of {2}",
-                            {item.name, next_token, limit});
-                        return {};
+                // After the name come an optional fps and an optional loop mode, in any order.
+                bool has_fps = false;
+                bool has_loop = false;
+                for (std::string token = next_token; !token.empty();
+                     token.clear(), rest >> token) {
+                    if (!has_loop && is_animation_loop_mode(token)) {
+                        item.loop = token;
+                        has_loop = true;
+                        continue;
                     }
-                    if (partial) {
+                    if (has_fps) {
                         warnings.push_back(sprat::core::tr_format(
-                            "Animation \"{0}\" fps \"{1}\" is read as {2}",
-                            {item.name, next_token, std::to_string(custom_fps)}));
+                            "Animation \"{0}\" has an unknown setting \"{1}\"; it is ignored",
+                            {item.name, token}));
+                        continue;
                     }
-                    item.fps = custom_fps;
-                } else if (!next_token.empty()) {
-                    warnings.push_back(sprat::core::tr_format(
-                        "Animation \"{0}\" fps \"{1}\" is not a number; it is ignored",
-                        {item.name, next_token}));
+                    has_fps = true;
+                    int custom_fps = 0;
+                    bool partial = false;
+                    if (read_animation_fps(token, custom_fps, partial)) {
+                        if (custom_fps > k_max_animation_fps) {
+                            error = sprat::core::tr_format(
+                                "Animation \"{0}\" has fps {1}, above the limit of {2}",
+                                {item.name, token, limit});
+                            return {};
+                        }
+                        if (partial) {
+                            warnings.push_back(sprat::core::tr_format(
+                                "Animation \"{0}\" fps \"{1}\" is read as {2}",
+                                {item.name, token, std::to_string(custom_fps)}));
+                        }
+                        item.fps = custom_fps;
+                    } else {
+                        warnings.push_back(sprat::core::tr_format(
+                            "Animation \"{0}\" fps \"{1}\" is not a number; it is ignored",
+                            {item.name, token}));
+                    }
                 }
                 animations.push_back(std::move(item));
                 current_anim = &animations.back();
@@ -610,6 +650,29 @@ std::vector<AnimationItem> parse_animations_data(
         }
     }
     return animations;
+}
+
+// An alias replays its source, so it plays the way its source does. Chains of aliases are
+// followed to the regular animation at their end; an unknown source or a cycle leaves the
+// alias's own mode (transforms that need the source, such as raw, report those).
+void resolve_alias_loops(std::vector<AnimationItem>& animations) {
+    std::unordered_map<std::string, size_t> by_name;
+    for (size_t i = 0; i < animations.size(); ++i) {
+        by_name.emplace(animations[i].name, i);
+    }
+    for (AnimationItem& item : animations) {
+        const AnimationItem* source = &item;
+        for (size_t steps = 0; !source->alias_source.empty() && steps <= animations.size(); ++steps) {
+            const auto it = by_name.find(source->alias_source);
+            if (it == by_name.end()) {
+                break;
+            }
+            source = &animations[it->second];
+        }
+        if (source->alias_source.empty()) {
+            item.loop = source->loop;
+        }
+    }
 }
 
 #ifndef SPRAT_GLOBAL_TRANSFORMS_DIR
@@ -1059,6 +1122,7 @@ std::string build_sprat_json(
         j += "{\"index\":" + std::to_string(ai);
         j += ",\"name\":\"" + escape_json(anim.name) + "\"";
         j += ",\"fps\":" + std::to_string(eff_anim_fps);
+        j += ",\"loop\":\"" + anim.loop + "\"";
         j += ",\"is_alias\":" + std::string(is_alias ? "true" : "false");
         j += ",\"alias_source\":\"" + escape_json(anim.alias_source) + "\"";
         j += ",\"flip\":\"" + escape_json(anim.flip) + "\"";
@@ -1582,6 +1646,7 @@ void print_usage() {
               << tr("  --transforms-dir           Print the transforms directory and exit\n")
               << tr("  --markers PATH             Load external markers file\n")
               << tr("  --animations PATH          Load external animations file (fps up to 100)\n")
+              << tr("                             loop modes: loop, once, pingpong, once-pingpong\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
               << tr("  --normal-atlas PATTERN     Normal map atlas path pattern (same format as --atlas)\n")
               << tr("  --collision-atlas PATTERN  Collision map atlas path pattern (same format as --atlas)\n")
@@ -1771,11 +1836,13 @@ int run_spratconvert(int argc, char** argv) {
         }
     }
     int animation_fps = -1;
+    std::string animation_loop = DEFAULT_ANIMATION_LOOP;
     std::string animations_error;
     std::vector<std::string> animations_warnings;
     std::vector<AnimationItem> animation_items =
         parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name,
-                               animation_fps, animations_error, animations_warnings);
+                               animation_fps, animation_loop, animations_error,
+                               animations_warnings);
     for (const std::string& warning : animations_warnings) {
         std::cerr << tr("Warning: ") << warning << "\n";
     }
@@ -1806,6 +1873,7 @@ int run_spratconvert(int argc, char** argv) {
                 anim.name = name;
                 anim.sprite_indexes = frames;
                 anim.fps = (animation_fps > 0 ? animation_fps : DEFAULT_ANIMATION_FPS);
+                anim.loop = animation_loop;
                 animation_items.push_back(std::move(anim));
             }
         }
@@ -1823,6 +1891,7 @@ int run_spratconvert(int argc, char** argv) {
         }
         item.sprite_indexes = std::move(filtered);
     }
+    resolve_alias_loops(normalized_animations);
 
     int global_pivot_x = 0;
     int global_pivot_y = 0;

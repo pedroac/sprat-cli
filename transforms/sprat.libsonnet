@@ -133,6 +133,22 @@
   css_comment_escape(s)::
     std.strReplace(s, "*/", "* /"),
 
+  // Whether an animation repeats: "loop" and "pingpong" do, "once" and "once-pingpong" stop.
+  loops(anim):: anim.loop == "loop" || anim.loop == "pingpong",
+
+  // Whether an animation plays forward then backward ("pingpong" or "once-pingpong").
+  is_pingpong(anim):: anim.loop == "pingpong" || anim.loop == "once-pingpong",
+
+  // `items` (an animation's frames) in the order one pass of `anim` shows them, for
+  // formats with no ping-pong of their own. "pingpong" goes back without either end frame,
+  // so repeating it never shows a frame twice in a row (0 1 2 3 2 1 | 0 1 ...);
+  // "once-pingpong" goes back to the first frame and stops there (0 1 2 3 2 1 0).
+  play_order(items, anim)::
+    local n = std.length(items);
+    local back_to = if anim.loop == "pingpong" then 1 else 0;
+    if !self.is_pingpong(anim) || n < 2 then items
+    else items + [items[i] for i in std.reverse(std.range(back_to, n - 2))],
+
   // Split an array of frame indices into contiguous runs.
   // Returns [{from: N, to: M}, ...].
   consecutive_runs(indices)::

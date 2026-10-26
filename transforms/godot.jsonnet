@@ -25,13 +25,15 @@ local frame_obj(s) = {
 
 // frames lists every frame in play order (indices into frames[]); from/to are only
 // emitted when the frames form one ascending run, so they never misdescribe the animation.
+// SpriteFrames has only a loop flag, so a ping-pong animation lists its way back too.
 local anim_obj(a) =
-  local runs = lib.consecutive_runs(a.frame_indices);
+  local frames = lib.play_order(a.frame_indices, a);
+  local runs = lib.consecutive_runs(frames);
   {
     name: a.name,
-    frames: a.frame_indices,
+    frames: frames,
     speed: a.fps,
-    loop: true,
+    loop: lib.loops(a),
   } + (if std.length(runs) == 1 then { from: runs[0].from, to: runs[0].to } else {});
 
 // Texture fields of one atlas; multipack layouts list every atlas and tag frames with theirs.

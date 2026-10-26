@@ -9,8 +9,10 @@ local frame_entry(frame, i, fps) =
   "      value: {fileID: " + frame.name_hash_signed +
   ", guid: " + lib.unity_guid(sprat, sprat.sprites[frame.index].atlas_index) + ", type: 3}\n";
 
+// A clip has only a loop flag (m_LoopTime), so a ping-pong animation keys its way back too.
 local render_clip(anim) =
   local eff_fps = if anim.fps > 0 then anim.fps else 8;
+  local frames = lib.play_order(anim.frames, anim);
   "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n" +
   "--- !u!74 &740000" + anim.index + "\n" +
   "AnimationClip:\n" +
@@ -31,7 +33,7 @@ local render_clip(anim) =
   "  m_FloatCurves: []\n" +
   "  m_PPtrCurves:\n" +
   "  - curve:\n" +
-  std.join("", [frame_entry(anim.frames[i], i, eff_fps) for i in std.range(0, std.length(anim.frames) - 1)]) +
+  std.join("", [frame_entry(frames[i], i, eff_fps) for i in std.range(0, std.length(frames) - 1)]) +
   "    attribute: m_Sprite\n" +
   "    path:\n" +
   "    classID: 212\n" +
@@ -41,12 +43,12 @@ local render_clip(anim) =
   "    m_AdditiveReferencePoseClip: {fileID: 0}\n" +
   "    m_AdditiveReferencePoseTime: 0\n" +
   "    m_StartTime: 0\n" +
-  "    m_StopTime: " + lib.format_double(anim.duration) + "\n" +
+  "    m_StopTime: " + lib.format_double(std.length(frames) / eff_fps) + "\n" +
   "    m_OrientationOffsetY: 0\n" +
   "    m_Level: 0\n" +
   "    m_CycleOffset: 0\n" +
   "    m_HasAdditiveReferencePose: 0\n" +
-  "    m_LoopTime: 1\n" +
+  "    m_LoopTime: " + (if lib.loops(anim) then "1" else "0") + "\n" +
   "    m_LoopBlend: 0\n" +
   "    m_LoopBlendOrientation: 0\n" +
   "    m_LoopBlendPositionY: 0\n" +

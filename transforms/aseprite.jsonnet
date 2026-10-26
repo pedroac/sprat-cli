@@ -31,13 +31,16 @@ local frame_obj(s) = {
 };
 
 // Build frameTags from the animation frames held in `sprites`: animations may be
-// non-contiguous or span atlases, so each consecutive run becomes its own tag.
+// non-contiguous or span atlases, so each consecutive run becomes its own tag. A tag's
+// repeat counts passes, and each direction of a ping-pong is one pass; no repeat loops.
 local frame_tags(sprites) =
   local local_index = { ["" + sprites[i].index]: i for i in std.range(0, std.length(sprites) - 1) };
   local tags(anim) =
     local held = [idx for idx in anim.frame_indices if std.objectHas(local_index, "" + idx)];
     [
-      { name: anim.name, from: local_index["" + run.from], to: local_index["" + run.to], direction: "forward" }
+      { name: anim.name, from: local_index["" + run.from], to: local_index["" + run.to],
+        direction: if lib.is_pingpong(anim) then "pingpong" else "forward" }
+      + (if lib.loops(anim) then {} else { repeat: if lib.is_pingpong(anim) then "2" else "1" })
       for run in lib.consecutive_runs(held)
     ];
   if std.length(sprites) == 0 then [] else std.flatMap(tags, sprat.animations);

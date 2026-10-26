@@ -637,7 +637,7 @@ Transform files are searched in:
 |------|--------|-------|
 | `json` | JSON | Generic metadata: sprites, atlases, animations, markers |
 | `raw` | Text | The same metadata as `json` as plain space-separated tokens, for loading from C in one pass with no parser library (used by [sprat-lib](https://github.com/pedroac/sprat-lib)); see below |
-| `csv` | CSV | Flat spreadsheet-friendly list |
+| `csv` | CSV | Flat spreadsheet-friendly list; animation rows are `animation,INDEX,NAME,FPS,FRAMES,FLIP,LOOP` (`FRAMES` separated by `\|`) |
 | `xml` | XML | Generic XML |
 | `css` | CSS | CSS sprite sheet |
 | `aseprite` | JSON | Aseprite JSON Array format; frameTags built from animations (non-contiguous animations become multiple tags); one file per atlas for multipack |
@@ -750,7 +750,8 @@ local sprat = std.extVar("sprat");
 
 | Field | Description |
 |---|---|
-| `index`, `name`, `fps`, `duration` | Identity and timing |
+| `index`, `name`, `fps`, `duration` | Identity and timing (`duration` is one forward pass) |
+| `loop` | `loop`, `once`, `pingpong` or `once-pingpong`; an alias has its source's |
 | `frame_indices` | Global sprite index sequence (may be non-contiguous) |
 | `frames` | `[{index, name, name_hash_decimal, name_hash_signed, name_hash_hex}]` resolved per frame |
 | `is_alias`, `alias_source`, `flip` | Alias support |
@@ -839,11 +840,13 @@ path "b"
 An optional `root` directive sets a base directory; quoted frame paths that are relative are resolved against it.
 The `fps` line sets the default speed for every animation, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (`12.5` is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
 
+Each animation also has a loop mode: `loop` (the default) repeats it, `once` plays it once and stops on the last frame, `pingpong` plays it forward then backward and repeats, and `once-pingpong` plays forward then backward once and stops on the first frame. The `loop` line sets the default mode, and a mode after an animation's name sets its own, before or after its fps (`animation "run" 8 pingpong`). An alias plays the way the animation it replays does. An unknown mode is ignored with a warning. Formats with their own ping-pong use it (Phaser `yoyo`, Aseprite tag `direction` and `repeat`); Godot and Unity only have a loop flag, so their frame lists include the way back (`0 1 2 1` for `pingpong`, `0 1 2 1 0` for `once-pingpong`). The `raw` format does not carry loop modes yet.
+
 Example `animations.txt`:
 ```txt
 root "./frames"
 fps 12
-animation "run" 8
+animation "run" 8 pingpong
 - frame "a.png"
 - frame "b"
 animation "idle"

@@ -71,8 +71,7 @@ local anim_row(a) =
     (if a.flip != "" then "," + a.flip else "") + "\n"
   else
     "animation," + a.index + "," + csv_escape(a.name) + "," + a.fps + "," +
-    std.join("|", ["" + idx for idx in a.frame_indices]) +
-    (if a.flip != "" then "," + a.flip else "") + "\n";
+    std.join("|", ["" + idx for idx in a.frame_indices]) + "," + a.flip + "," + a.loop + "\n";
 
 local body =
   std.join("", [sprite_row(s) for s in sprat.sprites]) +
