@@ -660,20 +660,21 @@ once; it must reject a file whose records don't match those totals. Strings are 
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
-sprat-raw 1
+sprat-raw 2
 sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS MARKERS VERTICES FRAMES STRING_BYTES NORMAL_PATH COLLISION_PATH
 atlas W H PATH NORMAL_PATH COLLISION_PATH
 sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
-anim FPS FLIP ALIAS FRAMES [SPRITE_INDEX]... NAME
+anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
 ```
 
 `MARKERS` `marker` lines follow their sprite. Enums are numbers: marker types `point`=0,
 `circle`=1, `rectangle`=2, `polygon`=3; slice modes `stretch`=0, `repeat`=1, `mirror`=2,
-`fixed`=3; `FLIP` bits `h`=1, `v`=2; flags are `0`/`1`. `ROTATION` is in clockwise degrees
+`fixed`=3; `FLIP` bits `h`=1, `v`=2; `LOOP` bits `once`=1, `pingpong`=2 (so `loop`=0,
+`once`=1, `pingpong`=2, `once-pingpong`=3; an alias has its source's); flags are `0`/`1`. `ROTATION` is in clockwise degrees
 (0, 90 or 270). An alias animation has `ALIAS` set to the index of the animation it replays
 and no frames of its own; otherwise `ALIAS` is `-1`. Values have the same meaning as in
-`json`, and the first line carries the format version.
+`json`, and the first line carries the format version (version 2 added `LOOP`).
 
 Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
 [sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an
@@ -840,7 +841,7 @@ path "b"
 An optional `root` directive sets a base directory; quoted frame paths that are relative are resolved against it.
 The `fps` line sets the default speed for every animation, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (`12.5` is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
 
-Each animation also has a loop mode: `loop` (the default) repeats it, `once` plays it once and stops on the last frame, `pingpong` plays it forward then backward and repeats, and `once-pingpong` plays forward then backward once and stops on the first frame. The `loop` line sets the default mode, and a mode after an animation's name sets its own, before or after its fps (`animation "run" 8 pingpong`). An alias plays the way the animation it replays does. An unknown mode is ignored with a warning. Formats with their own ping-pong use it (Phaser `yoyo`, Aseprite tag `direction` and `repeat`); Godot and Unity only have a loop flag, so their frame lists include the way back (`0 1 2 1` for `pingpong`, `0 1 2 1 0` for `once-pingpong`). The `raw` format does not carry loop modes yet.
+Each animation also has a loop mode: `loop` (the default) repeats it, `once` plays it once and stops on the last frame, `pingpong` plays it forward then backward and repeats, and `once-pingpong` plays forward then backward once and stops on the first frame. The `loop` line sets the default mode, and a mode after an animation's name sets its own, before or after its fps (`animation "run" 8 pingpong`). An alias plays the way the animation it replays does. An unknown mode is ignored with a warning. Formats with their own ping-pong use it (Phaser `yoyo`, Aseprite tag `direction` and `repeat`); Godot and Unity only have a loop flag, so their frame lists include the way back (`0 1 2 1` for `pingpong`, `0 1 2 1 0` for `once-pingpong`).
 
 Example `animations.txt`:
 ```txt

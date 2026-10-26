@@ -1,19 +1,21 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 1
+//   sprat-raw 2
 //   sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS
 //         MARKERS VERTICES FRAMES STRING_BYTES NORMAL_PATH COLLISION_PATH
 //   atlas W H PATH NORMAL_PATH COLLISION_PATH
 //   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y
 //          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
 //   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME          (MARKERS lines after a sprite)
-//   anim FPS FLIP ALIAS FRAMES [SPRITE_INDEX]... NAME
+//   anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
 //
 // Strings are length-prefixed ("<utf8 bytes>:<bytes>"), so they may hold spaces or newlines.
 // An empty string means "none". Enums are numbers: marker type point=0 circle=1 rectangle=2
-// polygon=3; slice mode stretch=0 repeat=1 mirror=2 fixed=3; FLIP bits h=1 v=2. ALIAS is the
-// index of the animation an alias replays (its FRAMES is 0), or -1.
+// polygon=3; slice mode stretch=0 repeat=1 mirror=2 fixed=3; FLIP bits h=1 v=2; LOOP bits
+// once=1 pingpong=2 (loop=0, once=1, pingpong=2, once-pingpong=3). ALIAS is the index of the
+// animation an alias replays (its FRAMES is 0), or -1; an alias's LOOP is its source's.
+// Version 2 added LOOP; version 1 files have none, and play as loop.
 //
 // The sheet line's MARKERS, VERTICES, FRAMES and STRING_BYTES are the totals over the whole
 // file: marker lines, polygon vertices, animation frame indexes, and the UTF-8 bytes of every
@@ -55,12 +57,14 @@ local flip_bits(f) =
   (if std.length(std.findSubstr("h", f)) > 0 then 1 else 0)
   + (if std.length(std.findSubstr("v", f)) > 0 then 2 else 0);
 
+local loop_bits = { loop: 0, once: 1, pingpong: 2, "once-pingpong": 3 };
+
 local anim_line(a) =
   local frames = if a.is_alias then [] else a.frame_indices;
   local alias = if !a.is_alias then -1
                 else if std.objectHas(anim_index, a.alias_source) then anim_index[a.alias_source]
                 else error "animation '" + a.name + "' is an alias of unknown animation '" + a.alias_source + "'";
-  line(["anim", a.fps, flip_bits(a.flip), alias, std.length(frames)] + frames + [str(a.name)]);
+  line(["anim", a.fps, flip_bits(a.flip), loop_bits[a.loop], alias, std.length(frames)] + frames + [str(a.name)]);
 
 local animations = if sprat.has_animations then sprat.animations else [];
 local normal_path = if sprat.has_normal_atlas then sprat.normal_atlas_path else "";
@@ -79,7 +83,7 @@ local string_bytes =
   + sum([str_bytes(a.name) for a in animations]);
 
 local header =
-  "sprat-raw 1\n"
+  "sprat-raw 2\n"
   + line(["sheet", sprat.scale, sprat.extrude, bool(sprat.multipack),
           if sprat.has_collision_atlas then sprat.collision_atlas_scale else 0,
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),

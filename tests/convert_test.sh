@@ -293,16 +293,17 @@ path "b"
 MARKERS
 raw_animations_file="$tmp_dir/raw.animations.txt"
 cat > "$raw_animations_file" <<'ANIMS'
-animation "run" 8
+animation "run" 8 once-pingpong
 - frame "./frames/a.png"
 - frame "b"
 animation "run-left" alias "run" flip hv
 ANIMS
-# String lengths count UTF-8 bytes ("c dé" is 5); an alias points at its source by index.
+# String lengths count UTF-8 bytes ("c dé" is 5); an alias points at its source by index
+# and plays as it does (LOOP 3 is once-pingpong).
 # The sheet line totals 4 markers, 3 vertices, 2 frames and 79 string bytes:
 # sprites 1+14 + 1+14 + 5+18, markers 3+4+4+4, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
-sprat-raw 1
+sprat-raw 2
 sheet 1 0 0 0 1 3 2 4 3 2 79 0: 0:
 atlas 64 32 0: 0: 0:
 sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 1:a 14:./frames/a.png 0:
@@ -312,8 +313,8 @@ marker 3 0 0 0 0 0 3 0 0 4 0 2 3 4:zone
 sprite 0 16 0 8 8 90 1 2 3 4 0 0 0 0 0 0 0 0 0 1 1:b 14:./frames/b.png 0:
 marker 2 1 2 0 3 4 0 4:foot
 sprite 0 24 0 8 8 0 0 0 0 0 0 0 1 1 2 3 4 1 2 0 5:c dé 18:./frames/c dé.png 0:
-anim 8 0 -1 2 0 1 3:run
-anim 8 3 0 0 8:run-left
+anim 8 0 3 -1 2 0 1 3:run
+anim 8 3 3 0 0 8:run-left
 RAW
 "$convert_bin" --transform raw --markers "$(fix_path "$raw_markers_file")" \
   --animations "$(fix_path "$raw_animations_file")" < "$raw_layout_file" > "$tmp_dir/out.sprat"
