@@ -23,7 +23,7 @@ local render(at) =
       image: at.path,
       format: "RGBA8888",
       size: { w: at.width, h: at.height },
-      scale: "" + sprat.scale,
+      scale: sprat.scale_text,
     };
   local result = {
     frames: std.foldl(function(acc, s) acc { [s.name]: frame_obj(s) }, at.sprites, {}),

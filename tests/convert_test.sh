@@ -1139,4 +1139,96 @@ printf 'path "a.png"\n- marker "pivot" point 20000000,0\n' > "$tmp_dir/limit_sca
 "$convert_bin" --transform raw --markers "$(fix_path "$tmp_dir/limit_scaled.markers")" \
     < "$tmp_dir/limit_scaled.txt" > /dev/null
 
+# ── hand-written markers and animations files ────────────────────────────────
+cat > "$tmp_dir/hand.txt" <<'HAND'
+atlas 32,8
+scale 1
+sprite "f/run_1.png" 0,0 8,8
+sprite "f/run_2.png" 8,0 8,8
+sprite "f/1.png" 16,0 8,8
+HAND
+# A path that matches no sprite drops its markers instead of making them global, where a
+# mistyped pivot would move every sprite; malformed markers are reported.
+cat > "$tmp_dir/hand.markers" <<'HANDM'
+path "f/typo.png"
+- marker "pivot" point 3,3
+path "f/run_1.png"
+- marker "pivot" point 5 5
+- marker "x" pnt 3,3
+- marker "poly" polygon 1,1 2,x 3,3
+- marker "ok" point 1,2
+HANDM
+"$convert_bin" --transform json --markers "$(fix_path "$tmp_dir/hand.markers")" \
+    < "$tmp_dir/hand.txt" > "$tmp_dir/hand.json" 2> "$tmp_dir/hand.err"
+python3 - "$tmp_dir/hand.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for s in d["sprites"]:
+    assert s["pivot"] == {"x": 0, "y": 0}, s
+run_1 = d["sprites"][0]
+assert [m["name"] for m in run_1["markers"]] == ["ok"], run_1["markers"]
+PY
+grep -qF 'Warning: Markers file path "f/typo.png" matches no sprite; its markers are ignored' "$tmp_dir/hand.err"
+grep -qF 'Warning: Marker "pivot" has invalid point values; it is ignored' "$tmp_dir/hand.err"
+grep -qF 'Warning: Marker "x" has an unknown type "pnt"' "$tmp_dir/hand.err"
+grep -qF 'Warning: Marker "poly" has invalid polygon values; it is ignored' "$tmp_dir/hand.err"
+
+# The fps and loop lines are defaults wherever they appear; unresolved frames, frames
+# outside an animation and bad flips are reported; a bare number is a sprite index.
+cat > "$tmp_dir/hand.anims" <<'HANDA'
+- frame 0
+animation "a"
+- frame "nope.png"
+- frame 99
+- frame 1
+fps 30
+loop once
+animation "b" 12 loop
+- frame "f/1.png"
+animation "c" alias "b" flip both
+animation "d" alias "b" flip vh
+HANDA
+"$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/hand.anims")" \
+    < "$tmp_dir/hand.txt" > "$tmp_dir/hand.sprat" 2> "$tmp_dir/hand.err"
+grep -qxF 'anim 30 0 1 -1 1 1 1:a' "$tmp_dir/hand.sprat"
+grep -qxF 'anim 12 0 0 -1 1 2 1:b' "$tmp_dir/hand.sprat"
+grep -qxF 'anim 30 0 0 1 0 1:c' "$tmp_dir/hand.sprat"
+grep -qxF 'anim 30 3 0 1 0 1:d' "$tmp_dir/hand.sprat"
+grep -qF 'Warning: Frame line "- frame 0" is not inside an animation; it is ignored' "$tmp_dir/hand.err"
+grep -qF 'Warning: Animation "a" frame "nope.png" matches no sprite; it is ignored' "$tmp_dir/hand.err"
+grep -qF 'Warning: Animation "a" frame 99 is out of range (the layout has 3 sprites); it is ignored' "$tmp_dir/hand.err"
+grep -qF 'Warning: Animation "c" flip "both" is not one of h, v, hv; it is ignored' "$tmp_dir/hand.err"
+
+# Animation names must be unique; one from the file replaces the automatic one.
+printf 'animation "a"\n- frame 0\nanimation "a"\n- frame 1\n' > "$tmp_dir/dup.anims"
+if "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/dup.anims")" \
+    < "$tmp_dir/hand.txt" > /dev/null 2> "$tmp_dir/dup.err"; then
+  echo "duplicate animation names should be rejected" >&2
+  exit 1
+fi
+grep -qF 'Animation "a" is defined more than once' "$tmp_dir/dup.err"
+printf 'animation "run"\n- frame 1\n' > "$tmp_dir/auto.anims"
+"$convert_bin" --transform raw --auto-animations --animations "$(fix_path "$tmp_dir/auto.anims")" \
+    < "$tmp_dir/hand.txt" > "$tmp_dir/auto.sprat"
+test "$(grep -c '^anim ' "$tmp_dir/auto.sprat")" -eq 1
+grep -qxF 'anim 8 0 0 -1 1 1 3:run' "$tmp_dir/auto.sprat"
+
+# The layout stream can carry markers and animations, loop lines and comments included;
+# a line that only starts like one of their keywords is still an error.
+{ cat "$tmp_dir/hand.txt"; printf '# comment\nloop once\nanimation "a"\n- frame 0\n'; } \
+    | "$convert_bin" --transform raw | grep -qxF 'anim 8 0 1 -1 1 0 1:a'
+if { cat "$tmp_dir/hand.txt"; printf 'pathological\n'; } | "$convert_bin" --transform json > /dev/null 2>&1; then
+  echo "a line that only starts with a keyword should be rejected" >&2
+  exit 1
+fi
+if printf 'atlas 8,8\nroot "x" junk\n' | "$convert_bin" --transform json > /dev/null 2>&1; then
+  echo "text after the root path should be rejected" >&2
+  exit 1
+fi
+
+# Text outputs write the scale as given, not with Jsonnet's 17 digits.
+sed 's/^scale 1$/scale 0.1/' "$tmp_dir/hand.txt" > "$tmp_dir/scale.txt"
+"$convert_bin" --transform raw < "$tmp_dir/scale.txt" | grep -q '^sheet 0.1 '
+"$convert_bin" --transform xml < "$tmp_dir/scale.txt" | grep -qF 'scale="0.1"'
+
 echo "convert_test.sh: ok"

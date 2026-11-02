@@ -23,7 +23,7 @@ local header =
   ':root {\n' +
   '  --atlas-width: ' + sprat.atlas_width + 'px;\n' +
   '  --atlas-height: ' + sprat.atlas_height + 'px;\n' +
-  '  --atlas-scale: ' + sprat.scale + ';\n' +
+  '  --atlas-scale: ' + sprat.scale_text + ';\n' +
   '}\n\n' +
   '.sprat-sprite {\n' +
   '  background-repeat: no-repeat;\n' +

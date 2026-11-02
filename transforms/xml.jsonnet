@@ -74,7 +74,7 @@ local animations_section =
   icon: "icons/xml-svgrepo-com.svg",
   content:
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
-    '<layout multipack="' + sprat.multipack + '" scale="' + sprat.scale + '" extrude="' + sprat.extrude + '">\n' +
+    '<layout multipack="' + sprat.multipack + '" scale="' + sprat.scale_text + '" extrude="' + sprat.extrude + '">\n' +
     atlases_section +
     animations_section +
     '</layout>\n',

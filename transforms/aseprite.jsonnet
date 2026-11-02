@@ -54,7 +54,7 @@ local render(image, width, height, sprites) =
       image: image,
       format: "RGBA8888",
       size: { w: width, h: height },
-      scale: "" + sprat.scale,
+      scale: sprat.scale_text,
       frameTags: frame_tags(sprites),
       layers: [],
       slices: [

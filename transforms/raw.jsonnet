@@ -81,7 +81,7 @@ local string_bytes =
 
 local header =
   "sprat-raw 3\n"
-  + line(["sheet", sprat.scale, sprat.extrude, bool(sprat.multipack),
+  + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
           std.length(all_markers), sum([vertex_count(m) for m in all_markers]),
           sum([frame_count(a) for a in animations]), string_bytes]);

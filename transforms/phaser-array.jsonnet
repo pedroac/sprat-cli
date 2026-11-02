@@ -10,7 +10,7 @@ local result =
       image: sprat.atlas_path,
       format: "RGBA8888",
       size: { w: sprat.atlas_width, h: sprat.atlas_height },
-      scale: "" + sprat.scale,
+      scale: sprat.scale_text,
     },
   };
 

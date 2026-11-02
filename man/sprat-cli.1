@@ -147,7 +147,7 @@ Entries older than one hour are pruned automatically.
 .SS spratpack
 Reads layout text from stdin and writes one or more PNG streams.
 .PP
-Layout accepts:
+Layout accepts (lines starting with \fB#\fR are comments):
 .br
 atlas \fIwidth,height\fR (multiple sections supported for multipack)
 .br
@@ -181,6 +181,10 @@ Transforms can be selected by name (for example \fBjson\fR, \fBraw\fR, \fBcsv\fR
 Transform files are searched in the directory beside the executable, the user data directory, and the global install directory.
 .PP
 Optional \fB\-\-markers\fR and \fB\-\-animations\fR files can be loaded and referenced by transform placeholders.
+Without them, markers and animations are read from the layout stream.
+A markers \fBpath\fR that matches no sprite is reported and its markers are ignored, rather than made global.
+Animation names must be unique. The \fBfps\fR and \fBloop\fR lines set defaults for every animation without its own, wherever they appear.
+A bare number in \fB\- frame\fR is a sprite index; frames that match no sprite, malformed markers, and alias \fBflip\fR values other than \fBh\fR, \fBv\fR or \fBhv\fR are ignored with a warning.
 .PP
 If \fB\-\-auto\-animations\fR is enabled, frames are automatically grouped into animations based on common name prefixes and numeric suffixes, ordered by name (\fBrun_2\fR before \fBrun_10\fR).
 Layout \fBalias\fR lines are expanded into frames that share the canonical sprite's atlas region; the \fB{{alias_of}}\fR sprite field holds the canonical path (empty for regular sprites).

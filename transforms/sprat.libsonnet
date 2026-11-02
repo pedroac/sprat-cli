@@ -70,7 +70,7 @@
     meta: {
       app: "https://github.com/pedroac/sprat-cli",
       format: "RGBA8888",
-      scale: "" + sprat.scale,
+      scale: sprat.scale_text,
     },
   },
 

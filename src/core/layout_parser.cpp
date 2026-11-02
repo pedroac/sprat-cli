@@ -58,20 +58,23 @@ static bool parse_slice(const std::string& val, int& left, int& top, int& right,
     return true;
 }
 
-// Returns true for line prefixes that appear in the combined raw-layout format
-// produced by spratconvert but carry no meaning for the basic layout parser.
-// Adding a new prefix here is the only change needed if the format gains a
-// new ignored token type.
+// Returns true for the markers and animations lines that spratconvert also reads from the
+// layout stream when no --markers or --animations file is given; they carry no meaning
+// for the layout itself. Matched by whole keyword, so a mistyped line is still reported.
+// Adding a keyword here is the only change needed if those formats gain a new line type.
 static bool is_combined_format_passthrough(const std::string& line) {
-    constexpr std::array<std::string_view, 5> k_prefixes = {
-        "path", "- marker", "- frame", "animation", "fps"
-    };
-    for (const auto& prefix : k_prefixes) {
-        if (line.starts_with(prefix)) {
-            return true;
-        }
+    constexpr std::array<std::string_view, 4> k_keywords = {"path", "animation", "fps", "loop"};
+    constexpr std::array<std::string_view, 2> k_list_keywords = {"marker", "frame"};
+    std::istringstream iss(line);
+    std::string first;
+    std::string second;
+    iss >> first;
+    if (first == "-") {
+        iss >> second;
+        return std::find(k_list_keywords.begin(), k_list_keywords.end(), second)
+            != k_list_keywords.end();
     }
-    return false;
+    return std::find(k_keywords.begin(), k_keywords.end(), first) != k_keywords.end();
 }
 
 namespace sprat::core {
@@ -489,7 +492,8 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
     std::unordered_set<std::string> seen_sprite_paths;
 
     while (std::getline(in, line)) {
-        if (line.empty()) {
+        const size_t first_char = line.find_first_not_of(" \t\r");
+        if (first_char == std::string::npos || line[first_char] == '#') {
             continue;
         }
 
@@ -522,6 +526,10 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             std::string root_error;
             if (!parse_quoted(line, pos, root_path, root_error)) {
                 error = std::string(tr("Invalid root line: ")) + root_error;
+                return false;
+            }
+            if (line.find_first_not_of(" \t\r", pos) != std::string::npos) {
+                error = std::string(tr("Invalid root line: ")) + tr("extra content after the path");
                 return false;
             }
             parsed.root = root_path;
@@ -609,13 +617,6 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             // meaning for the basic layout parser. See is_combined_format_passthrough.
             continue;
         } else {
-            // If the line is just whitespace, skip it
-            std::string trimmed = line;
-            trimmed.erase(0, trimmed.find_first_not_of(" \t\r\n"));
-            trimmed.erase(trimmed.find_last_not_of(" \t\r\n") + 1);
-            if (trimmed.empty()) {
-                continue;
-            }
             error = std::string(tr("Unknown line: ")) + line;
             return false;
         }

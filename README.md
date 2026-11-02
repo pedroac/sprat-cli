@@ -706,6 +706,7 @@ local sprat = std.extVar("sprat");
 | `rotation_direction` | string | `cw` or `ccw` (from the layout's `rotation` line; default `cw`) |
 | `has_rotated` | boolean | `true` when any sprite is rotated |
 | `scale`, `extrude` | number | Layout-level values |
+| `scale_text` | string | `scale` as text, up to 8 significant digits (`0.1`); use it where a transform writes the scale as a string, since Jsonnet turns `sprat.scale` into `0.10000000000000001` |
 | `has_animations`, `has_markers` | boolean | Whether extra files were loaded |
 | `animation_count`, `marker_count`, `sprite_count` | number | Counts |
 | `output_stem`, `output_stem_hash_hex` | string | Output stem (the transform's variant name with `--output-dir`) and its FNV-1a hex hash |
@@ -812,6 +813,7 @@ Sprite names default to the source file basename without extension (e.g. `./fram
 
 `--markers` expects a plaintext file using the `path` and `- marker` DSL.
 An optional `root` directive sets a base directory; `path` values that are relative are resolved against it.
+Markers before any `path` are global. A `path` that matches no sprite is reported, and its markers are ignored rather than made global, so a mistyped path can't hand its pivot to every sprite. A marker with an unknown type or values that don't match its type is ignored with a warning.
 Supported marker types:
 - `point`: `x,y`
 - `circle`: `x,y radius`
@@ -828,11 +830,14 @@ path "b"
 - marker "foot" rectangle 1,2 3,4
 ```
 
-`--animations` expects a plaintext file using the `animation` and `- frame` DSL. Frame entries are resolved to sprite indexes by path, name, or index.
+`--animations` expects a plaintext file using the `animation` and `- frame` DSL. Frame entries are resolved to sprite indexes by path, name, or index: a bare number such as `- frame 1` is an index, so quote the path to name a sprite file such as `"1.png"`. A frame that matches no sprite, or an index outside the layout, is ignored with a warning.
 An optional `root` directive sets a base directory; quoted frame paths that are relative are resolved against it.
-The `fps` line sets the default speed for every animation, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (`12.5` is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
+Animation names must be unique; with `--auto-animations`, an animation from the file replaces the automatic one of the same name.
+The `fps` line sets the default speed for every animation that has none of its own, wherever the line appears in the file, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (`12.5` is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
 
-Each animation also has a loop mode: `loop` (the default) repeats it, `once` plays it once and stops on the last frame, `pingpong` plays it forward then backward and repeats, and `once-pingpong` plays forward then backward once and stops on the first frame. The `loop` line sets the default mode, and a mode after an animation's name sets its own, before or after its fps (`animation "run" 8 pingpong`). An alias plays the way the animation it replays does. An unknown mode is ignored with a warning. Formats with their own ping-pong use it (Phaser `yoyo`, Aseprite tag `direction` and `repeat`); Godot and Unity only have a loop flag, so their frame lists include the way back (`0 1 2 1` for `pingpong`, `0 1 2 1 0` for `once-pingpong`).
+Each animation also has a loop mode: `loop` (the default) repeats it, `once` plays it once and stops on the last frame, `pingpong` plays it forward then backward and repeats, and `once-pingpong` plays forward then backward once and stops on the first frame. The `loop` line sets the default mode (also wherever it appears), and a mode after an animation's name sets its own, before or after its fps (`animation "run" 8 pingpong`). An alias plays the way the animation it replays does. An unknown mode is ignored with a warning. Formats with their own ping-pong use it (Phaser `yoyo`, Aseprite tag `direction` and `repeat`); Godot and Unity only have a loop flag, so their frame lists include the way back (`0 1 2 1` for `pingpong`, `0 1 2 1 0` for `once-pingpong`).
+
+An alias replays another animation instead of listing frames, optionally mirrored: `animation "run-left" alias "run" flip h`. `flip` takes `h`, `v` or `hv`; any other value is ignored with a warning.
 
 Example `animations.txt`:
 ```txt
@@ -841,9 +846,12 @@ fps 12
 animation "run" 8 pingpong
 - frame "a.png"
 - frame "b"
+animation "run-left" alias "run" flip h
 animation "idle"
 - frame 1
 ```
+
+Without `--markers` or `--animations`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers and animations. Layout files may hold `#` comment lines.
 
 Column meanings for the `sprite` line in trim mode:
 
