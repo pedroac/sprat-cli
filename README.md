@@ -492,21 +492,13 @@ Scale the whole output atlas (dimensions and sprite positions) by a factor. `--s
 ./build/spratpack --output-scale 0.5 < layout.txt > atlas_half.png
 ```
 
-### Secondary Atlases (Normal & Collision Maps)
-Pack companion maps with the same layout so every sprite lines up with the color atlas. `--path-suffix` loads `hero_n.png` instead of `hero.png`, and so on.
+### Variant Atlases
+Pack variants of the same sprites (palette swaps, skins, ...) with one layout, so every sprite sits at the same place in each atlas. `--path-suffix` loads `hero_red.png` instead of `hero.png`, and so on; the variant images should have the same sizes as the originals, because positions and trims come from the layout.
 ```sh
 ./build/spratlayout ./frames > layout.txt
 ./build/spratpack -a atlas_%d.png < layout.txt
-./build/spratpack --path-suffix _n -a normal_%d.png < layout.txt
-# Collision maps can be packed at a lower resolution
-./build/spratpack --path-suffix _col --output-scale 0.25 -a collision_%d.png < layout.txt
-
-./build/spratconvert --transform godot -a atlas_%d.png \
-  --normal-atlas normal_%d.png \
-  --collision-atlas collision_%d.png --collision-scale 0.25 \
-  < layout.txt > atlas.tres
+./build/spratpack --path-suffix _red -a atlas_red_%d.png < layout.txt
 ```
-`--collision-scale` must match the `--output-scale` used to pack the collision atlas, so engines can map sprite coordinates onto it. Transforms receive `has_normal_atlas`, `has_collision_atlas`, `collision_atlas_path` and `collision_atlas_scale`. `godot` emits `normal_image`, `collision_image` and `collision_scale`, `unity.json` adds `_NormalMap`/`_CollisionMap` secondary textures, and `json` includes the paths per atlas.
 
 ### Nine-Slice (Slice) Metadata
 Annotate sprites with nine-slice insets and per-axis fill modes for UI scaling. Add a `slice=` token to any sprite line in the layout:
@@ -586,8 +578,6 @@ Use `--image-path PATTERN` (same `%d` syntax) to choose the reference written in
 # out/atlas_0.plist refers to "atlas_0.png"
 ```
 
-`--normal-atlas` and `--collision-atlas` are written as given.
-
 ### Automatic Animations
 Automatically group sprites into animations based on their filenames (e.g., `hero_walk_01.png`, `hero_walk_02.png` -> animation `hero_walk`).
 ```sh
@@ -660,9 +650,9 @@ once; it must reject a file whose records don't match those totals. Strings are 
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
-sprat-raw 2
-sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS MARKERS VERTICES FRAMES STRING_BYTES NORMAL_PATH COLLISION_PATH
-atlas W H PATH NORMAL_PATH COLLISION_PATH
+sprat-raw 3
+sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS MARKERS VERTICES FRAMES STRING_BYTES
+atlas W H PATH
 sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
 anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
@@ -674,7 +664,8 @@ anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
 `once`=1, `pingpong`=2, `once-pingpong`=3; an alias has its source's); flags are `0`/`1`. `ROTATION` is in clockwise degrees
 (0, 90 or 270). An alias animation has `ALIAS` set to the index of the animation it replays
 and no frames of its own; otherwise `ALIAS` is `-1`. Values have the same meaning as in
-`json`, and the first line carries the format version (version 2 added `LOOP`).
+`json`, and the first line carries the format version (version 2 added `LOOP`; version 3 dropped the normal
+and collision map fields).
 
 Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
 [sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an
@@ -704,7 +695,7 @@ local sprat = std.extVar("sprat");
 | Field | Type | Description |
 |---|---|---|
 | `sprites` | array | All sprites across all atlases |
-| `atlases` | array | Each entry has `index`, `width`, `height`, `path`, `stem`, `filename`, `hash_hex` (FNV-1a of `path`), `normal_path`, `collision_path`, `sprites` |
+| `atlases` | array | Each entry has `index`, `width`, `height`, `path`, `stem`, `filename`, `hash_hex` (FNV-1a of `path`), `sprites` |
 | `animations` | array | Animation definitions |
 | `markers` | array | All markers across all sprites |
 | `atlas_width`, `atlas_height` | number | First atlas dimensions |

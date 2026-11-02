@@ -28,12 +28,6 @@ add_test(
 )
 
 add_test(
-    NAME collision_atlas
-    COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/collision_atlas_test.sh
-            $<TARGET_FILE:spratconvert>
-)
-
-add_test(
     NAME perceptual_dedup
     COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/perceptual_dedup_test.sh
             $<TARGET_FILE:spratlayout>

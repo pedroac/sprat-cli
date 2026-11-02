@@ -24,12 +24,7 @@ local render(at) =
       format: "RGBA8888",
       size: { w: at.width, h: at.height },
       scale: "" + sprat.scale,
-    } +
-    (if sprat.has_normal_atlas || sprat.has_collision_atlas then {
-      secondary_textures:
-        (if sprat.has_normal_atlas then [{ name: "_NormalMap", path: at.normal_path }] else []) +
-        (if sprat.has_collision_atlas then [{ name: "_CollisionMap", path: at.collision_path }] else []),
-    } else {});
+    };
   local result = {
     frames: std.foldl(function(acc, s) acc { [s.name]: frame_obj(s) }, at.sprites, {}),
     meta: meta,
@@ -51,8 +46,6 @@ local render(at) =
       path: sprat.atlas_path,
       width: sprat.atlas_width,
       height: sprat.atlas_height,
-      normal_path: sprat.normal_atlas_path,
-      collision_path: sprat.collision_atlas_path,
       sprites: sprat.sprites,
     }),
   }

@@ -37,21 +37,16 @@ local anim_obj(a) =
   } + (if std.length(runs) == 1 then { from: runs[0].from, to: runs[0].to } else {});
 
 // Texture fields of one atlas; multipack layouts list every atlas and tag frames with theirs.
-local atlas_obj(image, w, h, normal_image, collision_image) =
-  { image: image, size: { w: w, h: h } } +
-  (if sprat.has_normal_atlas then { normal_image: normal_image } else {}) +
-  (if sprat.has_collision_atlas then { collision_image: collision_image } else {});
+local atlas_obj(image, w, h) = { image: image, size: { w: w, h: h } };
 
 local result =
   (if multi then {
-    atlases: [atlas_obj(at.path, at.width, at.height, at.normal_path, at.collision_path) for at in sprat.atlases],
-  } else atlas_obj(sprat.atlas_path, sprat.atlas_width, sprat.atlas_height,
-                   sprat.normal_atlas_path, sprat.collision_atlas_path)) +
+    atlases: [atlas_obj(at.path, at.width, at.height) for at in sprat.atlases],
+  } else atlas_obj(sprat.atlas_path, sprat.atlas_width, sprat.atlas_height)) +
   {
     scale: sprat.scale,
     frames: [frame_obj(s) for s in sprat.sprites],
   } +
-  (if sprat.has_collision_atlas then { collision_scale: sprat.collision_atlas_scale } else {}) +
   (if sprat.has_animations then {
     animations: [anim_obj(a) for a in sprat.animations],
   } else {});

@@ -425,7 +425,7 @@ DDS compression quality. Default: \fBfast\fR (range fit). \fBbest\fR (cluster fi
 Scale the output atlas dimensions and sprite positions by \fIFACTOR\fR (for example \fB0.5\fR for half size). Uses the filter selected by \fB\-\-scale\-filter\fR.
 .TP
 \fB\-\-path\-suffix\fR \fISUFFIX\fR
-Insert \fISUFFIX\fR before the extension when loading sprite images (for example \fB_n\fR loads \fBhero_n.png\fR instead of \fBhero.png\fR). Used to pack normal or collision maps with the same layout.
+Insert \fISUFFIX\fR before the extension when loading sprite images (for example \fB_red\fR loads \fBhero_red.png\fR instead of \fBhero.png\fR). Used to pack variants of the same sprites, such as palette swaps, with one layout.
 .TP
 \fB\-\-frame\-lines\fR
 Draw rectangle outlines for each sprite.
@@ -450,7 +450,7 @@ Transform name or path to a custom transform file. Default: \fBjson\fR.
 Atlas path pattern used by \fB{{atlas_path}}\fR/\fB{{atlas_*}}\fR placeholders. Example: \fBatlas_%d.png\fR. It names the per-atlas output files and seeds stable IDs (such as Unity GUIDs), and by default it is also how the metadata refers to the atlas images.
 .TP
 \fB\-\-image\-path\fR \fIPATTERN\fR
-Path written into the metadata to refer to each atlas image, with the same \fB%d\fR syntax. Default: the \fB\-\-atlas\fR path as given. Engines usually resolve it relative to the metadata file, so use it when \fB\-\-atlas\fR includes a directory, e.g. \fB\-\-atlas out/atlas_%d.png \-\-image\-path atlas_%d.png \-\-output\-dir out\fR. Without \fB\-\-atlas\fR, it also names the atlas files. \fB\-\-normal\-atlas\fR and \fB\-\-collision\-atlas\fR are written as given.
+Path written into the metadata to refer to each atlas image, with the same \fB%d\fR syntax. Default: the \fB\-\-atlas\fR path as given. Engines usually resolve it relative to the metadata file, so use it when \fB\-\-atlas\fR includes a directory, e.g. \fB\-\-atlas out/atlas_%d.png \-\-image\-path atlas_%d.png \-\-output\-dir out\fR. Without \fB\-\-atlas\fR, it also names the atlas files.
 .TP
 \fB\-\-output\-dir\fR \fIPATH\fR
 Write transform output to \fIPATH/{variant}{extension}\fR instead of stdout.
@@ -484,15 +484,6 @@ In the output, alias entries carry an \fBalias\fR field in place of \fBfps\fR an
 .TP
 \fB\-\-auto\-animations\fR
 Automatically group frames into animations by name pattern.
-.TP
-\fB\-\-normal\-atlas\fR \fIPATTERN\fR
-Normal map atlas path pattern (same format as \fB\-\-atlas\fR). Exposed to transforms as \fBhas_normal_atlas\fR and \fBnormal_atlas_path\fR.
-.TP
-\fB\-\-collision\-atlas\fR \fIPATTERN\fR
-Collision map atlas path pattern (same format as \fB\-\-atlas\fR). Exposed to transforms as \fBhas_collision_atlas\fR and \fBcollision_atlas_path\fR.
-.TP
-\fB\-\-collision\-scale\fR \fIFACTOR\fR
-Scale used when packing the collision atlas (the \fBspratpack \-\-output\-scale\fR value). Exposed as \fBcollision_atlas_scale\fR. Default: \fB1\fR.
 .SS spratframes
 .TP
 \fB\-\-has\-rectangles\fR

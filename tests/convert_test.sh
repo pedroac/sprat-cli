@@ -303,9 +303,9 @@ ANIMS
 # The sheet line totals 4 markers, 3 vertices, 2 frames and 79 string bytes:
 # sprites 1+14 + 1+14 + 5+18, markers 3+4+4+4, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
-sprat-raw 2
-sheet 1 0 0 0 1 3 2 4 3 2 79 0: 0:
-atlas 64 32 0: 0: 0:
+sprat-raw 3
+sheet 1 0 0 1 3 2 4 3 2 79
+atlas 64 32 0:
 sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 1:a 14:./frames/a.png 0:
 marker 0 3 5 0 0 0 0 3:hit
 marker 1 6 7 4 0 0 0 4:hurt
@@ -330,6 +330,22 @@ if "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/raw.bad_ali
   exit 1
 fi
 grep -q "unknown animation 'nope'" "$tmp_dir/raw.bad_alias.err"
+
+# Normal and collision map atlases are no longer supported: their options are rejected
+# and no transform mentions them.
+for removed in --normal-atlas --collision-atlas --collision-scale; do
+  if "$convert_bin" "$removed" x < "$raw_layout_file" > /dev/null 2>&1; then
+    echo "spratconvert accepted the removed option $removed" >&2
+    exit 1
+  fi
+done
+for t in json godot unity.json raw; do
+  "$convert_bin" --transform "$t" < "$raw_layout_file" > "$tmp_dir/no_secondary.out"
+  if grep -qiE 'normal_|collision' "$tmp_dir/no_secondary.out"; then
+    echo "$t output still mentions normal or collision maps" >&2
+    exit 1
+  fi
+done
 
 # ── JSON auto-escape transform (Jsonnet) ─────────────────────────────────────
 json_auto_escape_transform="$tmp_dir/json_auto_escape.jsonnet"

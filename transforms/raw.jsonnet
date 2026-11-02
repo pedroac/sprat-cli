@@ -1,10 +1,9 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 2
-//   sheet SCALE EXTRUDE MULTIPACK COLLISION_SCALE ATLASES SPRITES ANIMATIONS
-//         MARKERS VERTICES FRAMES STRING_BYTES NORMAL_PATH COLLISION_PATH
-//   atlas W H PATH NORMAL_PATH COLLISION_PATH
+//   sprat-raw 3
+//   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS MARKERS VERTICES FRAMES STRING_BYTES
+//   atlas W H PATH
 //   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y
 //          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
 //   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME          (MARKERS lines after a sprite)
@@ -15,7 +14,9 @@
 // polygon=3; slice mode stretch=0 repeat=1 mirror=2 fixed=3; FLIP bits h=1 v=2; LOOP bits
 // once=1 pingpong=2 (loop=0, once=1, pingpong=2, once-pingpong=3). ALIAS is the index of the
 // animation an alias replays (its FRAMES is 0), or -1; an alias's LOOP is its source's.
-// Version 2 added LOOP; version 1 files have none, and play as loop.
+// Version 3 dropped the normal and collision map fields (COLLISION_SCALE and NORMAL_PATH,
+// COLLISION_PATH on the sheet and atlas lines). Version 2 added LOOP; version 1 files have
+// none, and play as loop.
 //
 // The sheet line's MARKERS, VERTICES, FRAMES and STRING_BYTES are the totals over the whole
 // file: marker lines, polygon vertices, animation frame indexes, and the UTF-8 bytes of every
@@ -67,36 +68,30 @@ local anim_line(a) =
   line(["anim", a.fps, flip_bits(a.flip), loop_bits[a.loop], alias, std.length(frames)] + frames + [str(a.name)]);
 
 local animations = if sprat.has_animations then sprat.animations else [];
-local normal_path = if sprat.has_normal_atlas then sprat.normal_atlas_path else "";
-local collision_path = if sprat.has_collision_atlas then sprat.collision_atlas_path else "";
 
 // Totals for the sheet line, computed from exactly what the records below write.
 local all_markers = [m for s in sprat.sprites for m in s.markers];
 local vertex_count(m) = if std.objectHas(m, "vertices") then std.length(m.vertices) else 0;
 local frame_count(a) = if a.is_alias then 0 else std.length(a.frame_indices);
 local string_bytes =
-  str_bytes(normal_path) + str_bytes(collision_path)
-  + sum([str_bytes(at.path) + str_bytes(at.normal_path) + str_bytes(at.collision_path)
-         for at in sprat.atlases])
+  sum([str_bytes(at.path) for at in sprat.atlases])
   + sum([str_bytes(s.name) + str_bytes(s.path) + str_bytes(s.alias_of) for s in sprat.sprites])
   + sum([str_bytes(m.name) for m in all_markers])
   + sum([str_bytes(a.name) for a in animations]);
 
 local header =
-  "sprat-raw 2\n"
+  "sprat-raw 3\n"
   + line(["sheet", sprat.scale, sprat.extrude, bool(sprat.multipack),
-          if sprat.has_collision_atlas then sprat.collision_atlas_scale else 0,
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
           std.length(all_markers), sum([vertex_count(m) for m in all_markers]),
-          sum([frame_count(a) for a in animations]), string_bytes,
-          str(normal_path), str(collision_path)]);
+          sum([frame_count(a) for a in animations]), string_bytes]);
 
 {
   name: "Raw",
   description: "Plain-token metadata for fast loading from C (sprat-lib)",
   extension: ".sprat",
   content: header
-    + std.join("", [line(["atlas", at.width, at.height, str(at.path), str(at.normal_path), str(at.collision_path)])
+    + std.join("", [line(["atlas", at.width, at.height, str(at.path)])
                     for at in sprat.atlases])
     + std.join("", [sprite_lines(s) for s in sprat.sprites])
     + std.join("", [anim_line(a) for a in animations]),
