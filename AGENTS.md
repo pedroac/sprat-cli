@@ -67,10 +67,13 @@ between commands.
 
 ```sh
 cmake -S . -B build -DSPRAT_DOWNLOAD_STB=ON -DBUILD_TESTING=ON
-cmake --build build --parallel
+cmake --build build --parallel 4
 ctest --test-dir build --output-on-failure
 ```
 
+- Always give `--parallel` a job count. Without one, the Makefiles generator runs
+  every compile at once and can run out of memory (the OOM killer then kills the build
+  and anything else, including agent sessions).
 - Without `-DBUILD_TESTING=ON`, `ctest` finds no tests.
 - Each test gets its own layout cache (`TMPDIR`), emptied before every `ctest` run by the
   `reset_test_cache` fixture; cached layouts are keyed by `VERSION` only, so outside the
