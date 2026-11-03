@@ -45,6 +45,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-markers\fR \fIPATH\fR]
 [\fB\-\-animations\fR \fIPATH\fR]
 [\fB\-\-auto\-animations\fR]
+[\fB\-\-puppets\fR \fIPATH\fR]
 .PP
 .B spratframes
 [\fB\-\-has\-rectangles\fR]
@@ -180,8 +181,11 @@ Transforms are Jsonnet files, selected by name (for example \fBjson\fR, \fBraw\f
 Named transforms are searched in the \fBtransforms\fR directory beside the executable, the user data directory, and the global install directory.
 \fB\-\-list\-transforms\fR lists them.
 .PP
-Optional \fB\-\-markers\fR and \fB\-\-animations\fR files add markers (pivots, hitboxes, ...) and animations to the data transforms receive.
-Without them, markers and animations are read from the layout stream.
+Optional \fB\-\-markers\fR, \fB\-\-animations\fR and \fB\-\-puppets\fR files add markers (pivots, hitboxes, ...), animations and puppet rigs to the data transforms receive.
+Without them, markers, animations and puppets are read from the layout stream.
+A \fBroot\fR line in these files resolves relative paths; sprite names are not changed by it.
+In the layout stream they share the layout's \fBroot\fR line; a second one is an error.
+Names in these files may not be empty.
 A markers \fBpath\fR that matches no sprite is reported and its markers are ignored, rather than made global.
 Animation names must be unique. The \fBfps\fR and \fBloop\fR lines set defaults for every animation without its own, wherever they appear.
 A \fB\- frame\fR line lists one or more frames: sprite paths, names, or indexes (a bare number), and ranges such as \fB0..7\fR or \fBrun_01..run_08\fR.
@@ -193,7 +197,7 @@ Layout \fBalias\fR lines are expanded into frames that share the canonical sprit
 A transform evaluates to an object with \fBname\fR, \fBdescription\fR, \fBextension\fR, and either \fBcontent\fR (one output, optionally named by \fBfilename\fR with \fB\-\-output\-dir\fR) or \fBfiles\fR, an array of \fB{filename, content}\fR that requires \fB\-\-output\-dir\fR.
 File names must be plain names that are valid on every platform, or nothing is written.
 .PP
-The layout data is \fBstd.extVar("sprat")\fR: global fields such as \fBscale\fR (and \fBscale_text\fR, the same value as text), \fBextrude\fR, \fBmultipack\fR, \fBatlases\fR, \fBsprites\fR, \fBanimations\fR and \fBmarkers\fR (each with \fBsprite_index\fR, \-1 for global markers).
+The layout data is \fBstd.extVar("sprat")\fR: global fields such as \fBscale\fR (and \fBscale_text\fR, the same value as text), \fBextrude\fR, \fBmultipack\fR, \fBatlases\fR, \fBsprites\fR, \fBanimations\fR, \fBpuppets\fR and \fBmarkers\fR (each with \fBsprite_index\fR, \-1 for global markers).
 Each sprite has its atlas rect (\fBx\fR, \fBy\fR, \fBw\fR, \fBh\fR, \fBatlas_index\fR), trims, \fBsource_w\fR/\fBsource_h\fR, \fBrotated\fR, \fBhas_pivot\fR and pivot fields (absolute and normalized), nine-slice fields, its \fBmarkers\fR, \fBalias_of\fR, and stable FNV-1a name hashes.
 Marker files use original-image pixels; exported markers, pivots, trims and nine-slice insets are scaled by the layout's \fBscale\fR into atlas pixels.
 Shared helpers live in \fBsprat.libsonnet\fR (\fBimport "sprat.libsonnet"\fR).
@@ -453,15 +457,35 @@ Each animation also has a loop mode: \fBloop\fR (the default) repeats it, \fBonc
 .PP
 An animation can be declared as an alias of another animation using the \fBalias\fR keyword:
 .PP
-animation \fI"name"\fR alias \fI"source"\fR [\fBh-flip\fR] [\fBv-flip\fR]
+animation \fI"name"\fR alias \fI"source"\fR [flip \fBh\fR|\fBv\fR|\fBhv\fR]
 .PP
-Alias declarations carry no frame list; instead they reference another animation by name and attach optional rendering hints.
-\fBh-flip\fR and \fBv-flip\fR are independent and order-insensitive.
-The source name is stored as metadata; validation is the runtime's responsibility.
-In the output, alias entries carry an \fBalias\fR field in place of \fBfps\fR and \fBsprite_indexes\fR.
+An alias has no frames of its own: it replays its source, optionally mirrored, and plays the way its source does.
+In the transform data it has \fBis_alias\fR, \fBalias_source\fR and \fBflip\fR.
+An alias of an unknown animation, or a cycle of aliases, is an error.
 .TP
 \fB\-\-auto\-animations\fR
 Automatically group frames into animations by name pattern.
+.TP
+\fB\-\-puppets\fR \fIPATH\fR
+Load a puppets plaintext file: cutout rigs of parts joined by markers. Lines:
+.RS
+.PP
+puppet "\fIname\fR"
+.br
+part "\fIname\fR"
+.br
+\- sprite "\fIsprite\fR" [\-> "\fIname\fR"]
+.br
+\- animation "\fIanimation\fR" [\-> "\fIname\fR"]
+.br
+attach "\fIchild\fR":"\fImarker\fR" to "\fIparent\fR":"\fImarker\fR" [leeway:\fIN\fR] [angle:\fIMIN\fR..\fIMAX\fR]
+.PP
+Parts are drawn in file order, back first. A part's variants are sprites (path, name or index) or animations, interchangeable, named after them unless \fB\->\fR names them.
+An \fBattach\fR line pins the child part's point marker, in every sprite it shows, to the parent part's marker, whose shape (a point, or the inside of a circle, rectangle or polygon) is where the child's point may be.
+\fBleeway\fR lets it drift up to \fIN\fR original-image pixels beyond that (default 0); \fBangle\fR limits how far, in degrees clockwise, the child turns relative to its parent (between \-360 and 360; default free).
+Missing markers, parts without variants, puppets without parts and puppets with several unattached parts are reported. Attaching an unknown part, a part to itself or a part twice, a cycle of attachments, and repeated puppet, part or variant names are errors.
+Currently the \fBraw\fR transform writes puppets; custom transforms read \fBsprat.puppets\fR.
+.RE
 .SS spratframes
 .TP
 \fB\-\-has\-rectangles\fR
@@ -534,6 +558,9 @@ Convert layout to JSON with auto-animations:
 .TP
 Convert layout with markers and animations:
 .B spratconvert --transform json --markers markers.txt --animations animations.txt < layout.txt > layout.json
+.TP
+Convert layout with markers, animations and puppets to the raw format:
+.B spratconvert --transform raw --markers markers.txt --animations animations.txt --puppets puppets.txt < layout.txt > layout.sprat
 .TP
 Convert with a custom transform template:
 .B spratconvert --transform ./my.transform < layout.txt > layout.custom.txt

@@ -87,26 +87,38 @@ static void skip_spaces(const std::string& line, size_t& pos) {
     }
 }
 
-// Returns true for the markers and animations lines that spratconvert also reads from the
-// layout stream when no --markers or --animations file is given; they carry no meaning
-// for the layout itself. Matched by whole keyword, so a mistyped line is still reported.
-// Adding a keyword here is the only change needed if those formats gain a new line type.
-static bool is_combined_format_passthrough(const std::string& line) {
-    constexpr std::array<std::string_view, 4> k_keywords = {"path", "animation", "fps", "loop"};
-    constexpr std::array<std::string_view, 2> k_list_keywords = {"marker", "frame"};
+namespace sprat::core {
+
+std::string metadata_line_keyword(const std::string& line) {
     std::istringstream iss(line);
     std::string first;
-    std::string second;
     iss >> first;
     if (first == "-") {
+        std::string second;
         iss >> second;
-        return std::find(k_list_keywords.begin(), k_list_keywords.end(), second)
-            != k_list_keywords.end();
+        return "- " + second;
     }
-    return std::find(k_keywords.begin(), k_keywords.end(), first) != k_keywords.end();
+    return first;
 }
 
-namespace sprat::core {
+bool is_markers_keyword(std::string_view keyword) {
+    return keyword == "root" || keyword == "path" || keyword == "- marker";
+}
+
+bool is_animations_keyword(std::string_view keyword) {
+    return keyword == "root" || keyword == "fps" || keyword == "loop" || keyword == "animation"
+        || keyword == "- frame";
+}
+
+bool is_puppets_keyword(std::string_view keyword) {
+    return keyword == "root" || keyword == "puppet" || keyword == "part" || keyword == "attach"
+        || keyword == "- sprite" || keyword == "- animation";
+}
+
+bool is_metadata_keyword(std::string_view keyword) {
+    return is_markers_keyword(keyword) || is_animations_keyword(keyword) || is_puppets_keyword(keyword);
+}
+
 
 int scale_to_atlas(int value, double scale) {
     if (scale == 1.0) {
@@ -592,9 +604,10 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             parsed.aliases.push_back(std::move(alias));
-        } else if (is_combined_format_passthrough(line)) {
-            // These lines are valid in the combined raw layout format but carry no
-            // meaning for the basic layout parser. See is_combined_format_passthrough.
+        } else if (is_metadata_keyword(metadata_line_keyword(line))) {
+            // Markers, animations and puppets lines, which spratconvert reads from the
+            // layout stream; they mean nothing to the layout itself. Matched by whole
+            // keyword, so a mistyped line is still reported.
             continue;
         } else {
             error = std::string(tr("Unknown line: ")) + line;

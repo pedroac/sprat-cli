@@ -99,6 +99,16 @@ bool parse_rotation_line(const std::string& line, bool& rotate_ccw);
 // alias "ORIGINAL" -> "DUPLICATE" [trim:L,T,R,B]
 bool parse_alias_line(const std::string& line, Alias& out, std::string& error);
 bool parse_layout(std::istream& in, Layout& out, std::string& error);
+
+// The hand-written metadata files spratconvert reads (markers, animations, puppets) may also
+// ride in the layout stream. metadata_line_keyword gives a line's keyword: its first word, or
+// "- WORD" for list lines ("- marker", "- frame", ...). Each is_*_keyword tells whether a
+// keyword belongs to that format; is_metadata_keyword whether it belongs to any of them.
+std::string metadata_line_keyword(const std::string& line);
+bool is_markers_keyword(std::string_view keyword);
+bool is_animations_keyword(std::string_view keyword);
+bool is_puppets_keyword(std::string_view keyword);
+bool is_metadata_keyword(std::string_view keyword);
 // Appends one sprite per alias, sharing its canonical sprite's atlas region, and
 // clears layout.aliases. Fails if an alias names a canonical sprite that is missing.
 bool expand_layout_aliases(Layout& layout, std::string& error);
