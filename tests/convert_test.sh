@@ -281,15 +281,18 @@ scale 1
 sprite "./frames/a.png" 0,0 16,16
 sprite "./frames/b.png" 16,0 8,8 1,2 3,4 rotated
 sprite "./frames/c dé.png" 24,0 8,8 slice=1,2,3,4,repeat,mirror
+alias "./frames/d.png" "./frames/a.png"
 LAYOUT
 raw_markers_file="$tmp_dir/raw.markers.txt"
 cat > "$raw_markers_file" <<'MARKERS'
+- marker "spawn" point 1,1
 path "./frames/a.png"
 - marker "hit" point 3,5
 - marker "hurt" circle 6,7 4
 - marker "zone" polygon 0,0 4,0 2,3
 path "b"
 - marker "foot" rectangle 1,2 3,4
+- marker "pivot" point 0,0
 MARKERS
 raw_animations_file="$tmp_dir/raw.animations.txt"
 cat > "$raw_animations_file" <<'ANIMS'
@@ -299,20 +302,24 @@ animation "run" 8 once-pingpong
 animation "run-left" alias "run" flip hv
 ANIMS
 # String lengths count UTF-8 bytes ("c dé" is 5); an alias points at its source by index
-# and plays as it does (LOOP 3 is once-pingpong).
-# The sheet line totals 4 markers, 3 vertices, 2 frames and 79 string bytes:
-# sprites 1+14 + 1+14 + 5+18, markers 3+4+4+4, animations 3+8.
+# and plays as it does (LOOP 3 is once-pingpong). The global marker comes before the
+# sprites; b's pivot at 0,0 still sets HAS_PIVOT; the deduplicated d names a by index.
+# The sheet line totals 1 global marker, 6 markers, 3 vertices, 2 frames and 104 string
+# bytes: spawn 5, sprites 1+14 + 1+14 + 5+18 + 1+14, markers 3+4+4+4+5, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
-sprat-raw 3
-sheet 1 0 0 1 3 2 4 3 2 79
+sprat-raw 4
+sheet 1 0 0 1 4 2 1 6 3 2 104
 atlas 64 32 0:
-sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 1:a 14:./frames/a.png 0:
+marker 0 1 1 0 0 0 0 5:spawn
+sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 3 1:a 14:./frames/a.png
 marker 0 3 5 0 0 0 0 3:hit
 marker 1 6 7 4 0 0 0 4:hurt
 marker 3 0 0 0 0 0 3 0 0 4 0 2 3 4:zone
-sprite 0 16 0 8 8 90 1 2 3 4 0 0 0 0 0 0 0 0 0 1 1:b 14:./frames/b.png 0:
+sprite 0 16 0 8 8 90 1 2 3 4 1 0 0 0 0 0 0 0 0 0 -1 2 1:b 14:./frames/b.png
 marker 2 1 2 0 3 4 0 4:foot
-sprite 0 24 0 8 8 0 0 0 0 0 0 0 1 1 2 3 4 1 2 0 5:c dé 18:./frames/c dé.png 0:
+marker 0 0 0 0 0 0 0 5:pivot
+sprite 0 24 0 8 8 0 0 0 0 0 0 0 0 1 1 2 3 4 1 2 -1 0 5:c dé 18:./frames/c dé.png
+sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1:d 14:./frames/d.png
 anim 8 0 3 -1 2 0 1 3:run
 anim 8 3 3 0 0 8:run-left
 RAW
@@ -322,6 +329,9 @@ if ! diff "$tmp_dir/expected.sprat" "$tmp_dir/out.sprat"; then
   echo "raw transform output mismatch" >&2
   exit 1
 fi
+# JSON lists the global markers at the top level.
+"$convert_bin" --transform json --markers "$(fix_path "$raw_markers_file")" < "$raw_layout_file" \
+  | python3 -c 'import json, sys; m = json.load(sys.stdin)["markers"]; assert [x["name"] for x in m] == ["spawn"], m'
 
 printf 'animation "x" alias "nope"\n' > "$tmp_dir/raw.bad_alias.txt"
 if "$convert_bin" --transform raw --animations "$(fix_path "$tmp_dir/raw.bad_alias.txt")" \

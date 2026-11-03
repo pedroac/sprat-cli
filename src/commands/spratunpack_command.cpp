@@ -452,6 +452,9 @@ private:
             std::cerr << tr("Error: Invalid layout: ") << error << "\n";
             return false;
         }
+        for (const std::string& warning : layout.warnings) {
+            std::cerr << tr("Warning: ") << warning << "\n";
+        }
         layout_atlases_ = layout.atlases;
         for (const auto& sprite : layout.sprites) {
             if (!add_layout_frame(sprite, layout.scale, layout.rotate_ccw)) {

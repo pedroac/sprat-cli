@@ -45,7 +45,10 @@ local result = {
   atlases: [atlas_obj(at) for at in sprat.atlases],
   sprites: [sprite_obj(s) for s in sprat.sprites],
 } +
-(if sprat.has_animations then { animations: [anim_obj(a) for a in sprat.animations] } else {});
+(if sprat.has_animations then { animations: [anim_obj(a) for a in sprat.animations] } else {}) +
+// Markers given before any path in the markers file, which belong to no one sprite.
+(local globals = [m for m in sprat.markers if m.sprite_index < 0];
+ if std.length(globals) > 0 then { markers: globals } else {});
 
 {
   name: "JSON",

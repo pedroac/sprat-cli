@@ -155,7 +155,7 @@ rotation \fBcw\fR|\fBccw\fR (direction of rotated sprites; default \fBcw\fR)
 .br
 scale \fIfactor\fR
 .br
-sprite lines in current or legacy numeric format
+sprite lines (the old numeric format \fIx y w h\fR [\fIleft top\fR] still loads, with a warning: it has no right and bottom trim)
 .br
 current sprite lines may include \fBrotated\fR, \fBdither\fR, \fBcolors=N\fR, and \fBslice=L,T,R,B[,H,V]\fR tokens.
 .br
@@ -175,59 +175,31 @@ If \fB\-\-atlas\-index\fR is used, only the specified atlas index is processed a
 .SS spratconvert
 Reads layout text from stdin and writes transformed text to stdout.
 .PP
-Unsuffixed placeholders are auto-encoded based on output type inferred from transform metadata (\fBmeta.extension\fR) or transform name/argument.
+Transforms are Jsonnet files, selected by name (for example \fBjson\fR, \fBraw\fR, \fBcsv\fR, \fBxml\fR, \fBcss\fR) or by path to a custom \fB.jsonnet\fR file.
+Named transforms are searched in the \fBtransforms\fR directory beside the executable, the user data directory, and the global install directory.
+\fB\-\-list\-transforms\fR lists them.
 .PP
-Transforms can be selected by name (for example \fBjson\fR, \fBraw\fR, \fBcsv\fR, \fBxml\fR, \fBcss\fR) or by path to a custom \fB.transform\fR file.
-Transform files are searched in the directory beside the executable, the user data directory, and the global install directory.
-.PP
-Optional \fB\-\-markers\fR and \fB\-\-animations\fR files can be loaded and referenced by transform placeholders.
+Optional \fB\-\-markers\fR and \fB\-\-animations\fR files add markers (pivots, hitboxes, ...) and animations to the data transforms receive.
 Without them, markers and animations are read from the layout stream.
 A markers \fBpath\fR that matches no sprite is reported and its markers are ignored, rather than made global.
 Animation names must be unique. The \fBfps\fR and \fBloop\fR lines set defaults for every animation without its own, wherever they appear.
 A bare number in \fB\- frame\fR is a sprite index; frames that match no sprite, malformed markers, and alias \fBflip\fR values other than \fBh\fR, \fBv\fR or \fBhv\fR are ignored with a warning.
 .PP
 If \fB\-\-auto\-animations\fR is enabled, frames are automatically grouped into animations based on common name prefixes and numeric suffixes, ordered by name (\fBrun_2\fR before \fBrun_10\fR).
-Layout \fBalias\fR lines are expanded into frames that share the canonical sprite's atlas region; the \fB{{alias_of}}\fR sprite field holds the canonical path (empty for regular sprites).
+Layout \fBalias\fR lines are expanded into frames that share the canonical sprite's atlas region; the \fBalias_of\fR sprite field holds the canonical path (empty for regular sprites).
 .PP
-Transform sections use explicit open/close tags (for example \fB[meta]\fR ... \fB[/meta]\fR) or the modern line-based DSL (for example \fBmeta\fR, \fBheader\fR, \fBsprites\fR, \fB- sprite\fR).
+A transform evaluates to an object with \fBname\fR, \fBdescription\fR, \fBextension\fR, and either \fBcontent\fR (one output, optionally named by \fBfilename\fR with \fB\-\-output\-dir\fR) or \fBfiles\fR, an array of \fB{filename, content}\fR that requires \fB\-\-output\-dir\fR.
+File names must be plain names that are valid on every platform, or nothing is written.
 .PP
-The core structure is defined by iteration blocks:
-.IP "\(bu" 2
-\fBSprites\fR: \fB[sprites]\fR containing \fB[sprite]\fR (or \fBsprites\fR containing \fB- sprite\fR).
-.IP "\(bu" 2
-\fBAnimations\fR: \fB[animations]\fR containing \fB[animation]\fR (or \fBanimations\fR containing \fB- animation\fR).
-.IP "\(bu" 2
-\fBMarkers\fR: \fB[markers]\fR containing \fB[marker]\fR (or \fBmarkers\fR containing \fB- marker\fR).
+The layout data is \fBstd.extVar("sprat")\fR: global fields such as \fBscale\fR (and \fBscale_text\fR, the same value as text), \fBextrude\fR, \fBmultipack\fR, \fBatlases\fR, \fBsprites\fR, \fBanimations\fR and \fBmarkers\fR (each with \fBsprite_index\fR, \-1 for global markers).
+Each sprite has its atlas rect (\fBx\fR, \fBy\fR, \fBw\fR, \fBh\fR, \fBatlas_index\fR), trims, \fBsource_w\fR/\fBsource_h\fR, \fBrotated\fR, \fBhas_pivot\fR and pivot fields (absolute and normalized), nine-slice fields, its \fBmarkers\fR, \fBalias_of\fR, and stable FNV-1a name hashes.
+Marker files use original-image pixels; exported markers, pivots, trims and nine-slice insets are scaled by the layout's \fBscale\fR into atlas pixels.
+Shared helpers live in \fBsprat.libsonnet\fR (\fBimport "sprat.libsonnet"\fR).
+README.md lists every field.
 .PP
-Templates support marker/animation conditional sections (\fB[if_markers]\fR, \fB[if_no_markers]\fR, \fB[if_animations]\fR, \fB[if_no_animations]\fR) and optional separator/header/footer sections.
+The built-in JSON transform produces a top-level \fBatlases\fR array (each entry has \fBwidth\fR, \fBheight\fR, \fBpath\fR), a flat top-level \fBsprites\fR array, and a top-level \fBmarkers\fR array of global markers when there are any. Sprite spatial data is grouped into nested objects: \fBrect\fR (\fBx\fR, \fBy\fR, \fBw\fR, \fBh\fR), \fBpivot\fR (\fBx\fR, \fBy\fR), and \fBtrim\fR (\fBleft\fR, \fBtop\fR, \fBright\fR, \fBbottom\fR). Index fields are omitted from \fBsprites[]\fR and \fBanimations[]\fR entries.
 .PP
-A general conditional syntax \fB[if ATTR="VALUE"]...[/if]\fR (or \fB[if ATTR!="VALUE"]...[/if]\fR) is also supported. At the section level it maps \fBhas_markers\fR and \fBhas_animations\fR to the corresponding conditional blocks. Within section content it can test any current rendering variable (for example \fB[if marker_type="point"]...[/if]\fR).
-.PP
-Placeholders:
-.IP "\(bu" 2
-\fBSprite fields\fR: \fB{{name}}\fR (basename without extension), \fB{{path}}\fR, \fB{{x}}\fR, \fB{{y}}\fR, \fB{{w}}\fR, \fB{{h}}\fR.
-.IP "\(bu" 2
-\fBUnity Y-coordinate\fR: \fB{{unity_y}}\fR \(em Y-coordinate flipped for Unity's bottom-left origin (\fBatlas_height\fR - \fBy\fR - \fBh\fR).
-.IP "\(bu" 2
-\fBSource size\fR: \fB{{source_w}}\fR, \fB{{source_h}}\fR \(em original sprite dimensions before trimming (\fBw\fR + \fBtrim_left\fR + \fBtrim_right\fR, and \fBh\fR + \fBtrim_top\fR + \fBtrim_bottom\fR). Required by formats such as Phaser Atlas JSON and Unity TexturePacker JSON.
-.IP "\(bu" 2
-\fBTrim fields\fR: \fB{{trim_left}}\fR, \fB{{trim_top}}\fR, \fB{{trim_right}}\fR, \fB{{trim_bottom}}\fR (pixels removed from each edge), \fB{{src_x}}\fR/\fB{{src_y}}\fR (aliases for \fBtrim_left\fR/\fBtrim_top\fR), \fB{{has_trim}}\fR (\fBtrue\fR when any trim value is non-zero). Pre-computed plist helpers: \fB{{plist_frame}}\fR (\fB{x,y},{w,h}\fR), \fB{{plist_offset}}\fR (Cocos2d center offset), \fB{{plist_source_color_rect}}\fR (\fB{trim_left,trim_top},{w,h}\fR), \fB{{plist_source_size}}\fR (\fB{source_w,source_h}\fR). \fB{{rotated_plist}}\fR outputs \fB<true/>\fR or \fB<false/>\fR for use in XML/plist boolean elements. \fB{{plist_atlas_size}}\fR is a global field (\fB{atlas_width,atlas_height}\fR).
-.IP "\(bu" 2
-\fBPivot points\fR: \fB{{pivot_x}}\fR, \fB{{pivot_y}}\fR. These are resolved from markers named \fBpivot\fR of type \fBpoint\fR (either per-sprite or global). \fB{{pivot_x_norm}}\fR, \fB{{pivot_y_norm}}\fR provide normalized coordinates (0.0 to 1.0). \fB{{pivot_y_norm}}\fR is flipped for Unity's coordinate system (1.0 - py/source_h). \fB{{pivot_y_norm_raw}}\fR provides normalized Y without flipping. Marker files use original-image pixels; exported markers, pivots, trims and nine-slice insets are scaled by the layout's \fBscale\fR into atlas pixels. Jsonnet transforms also receive \fBhas_pivot\fR and \fBpivot_rect_x_norm\fR/\fBpivot_rect_y_norm\fR (relative to the trimmed rect).
-.IP "\(bu" 2
-\fBStable IDs\fR: \fB{{name_hash}}\fR, \fB{{name_hash_hex}}\fR \(em FNV-1a hash of the sprite name, useful for engine-specific internal IDs (such as Unity's spriteID). Jsonnet transforms also receive \fBname_hash_signed\fR, the same hash as a signed 64-bit integer, for IDs stored as int64 (such as Unity's internalID).
-.IP "\(bu" 2
-\fBSprite rotation\fR: \fB{{rotated}}\fR (\fBtrue\fR when the sprite was packed rotated, else \fBfalse\fR). Jsonnet transforms also receive \fBrotation_direction\fR (\fBcw\fR or \fBccw\fR) and \fBhas_rotated\fR.
-.IP "\(bu" 2
-\fBMarker fields\fR: \fB{{marker_name}}\fR, \fB{{marker_type}}\fR, \fB{{marker_sprite_index}}\fR, \fB{{marker_sprite_name}}\fR.
-.IP "\(bu" 2
-\fBAnimation fields\fR: \fB{{animation_name}}\fR, \fB{{animation_sprite_indexes_json}}\fR, \fB{{sprite_names}}\fR/\fB{{sprite_names_json}}\fR/\fB{{sprite_names_csv}}\fR (display names of frame sprites), \fB{{animation_from}}\fR/\fB{{animation_to}}\fR (first and last sprite index of the animation, useful for range-based formats such as Aseprite frameTags).
-.IP "\(bu" 2
-Typed placeholders (for example \fB{{name_json}}\fR, \fB{{marker_vertices_xml}}\fR) are explicit and recommended.
-.PP
-The built-in JSON transform produces a top-level \fBatlases\fR array (each entry has \fBwidth\fR, \fBheight\fR, \fBpath\fR) and a flat top-level \fBsprites\fR array. Sprite spatial data is grouped into nested objects: \fBrect\fR (\fBx\fR, \fBy\fR, \fBw\fR, \fBh\fR), \fBpivot\fR (\fBx\fR, \fBy\fR), and \fBtrim\fR (\fBleft\fR, \fBtop\fR, \fBright\fR, \fBbottom\fR). Index fields are omitted from \fBsprites[]\fR and \fBanimations[]\fR entries.
-.PP
-The \fBAseprite\fR transform produces an Aseprite JSON Array sprite sheet. When animations are present the \fBframeTags\fR array is populated using \fB{{animation_from}}\fR/\fB{{animation_to}}\fR sprite indices.
+The \fBAseprite\fR transform produces an Aseprite JSON Array sprite sheet. When animations are present the \fBframeTags\fR array is built from them; an animation whose frames are not one ascending run becomes several tags.
 .PP
 The \fBGodot\fR transform produces a JSON file suitable for runtime loading in Godot 4 via GDScript:
 .PP
@@ -262,9 +234,9 @@ func make_sprite_frames(json_path: String) -> SpriteFrames:
 .PP
 Each frame entry contains \fBregion\fR (atlas coordinates), \fBmargin\fR (trim offsets: left/top/right/bottom), \fBsource_size\fR and \fBrotated\fR; multipack layouts add \fBatlas\fR, an index into the top-level \fBatlases\fR list, in place of the top-level \fBimage\fR. \fBAtlasTexture\fR cannot rotate a region, so pack without \fB\-\-rotate\fR for this loader. Animation entries contain \fBframes\fR (indices into \fBframes\fR, in play order), \fBspeed\fR (fps) and \fBloop\fR (false for \fBonce\fR and \fBonce\-pingpong\fR; a ping-pong animation lists its way back in \fBframes\fR), plus \fBfrom\fR/\fBto\fR only when the frames form one ascending run.
 .PP
-The \fBLibGDX\fR transform produces a LibGDX \fBTextureAtlas\fR \fB.atlas\fR file. The \fBoffset\fR field uses LibGDX's y-up convention: \fBoffset: {{trim_left}}, {{trim_bottom}}\fR. Animations are not encoded in the \fB.atlas\fR format; use sprite name suffixes (e.g. \fBwalk_0\fR, \fBwalk_1\fR) and \fBAnimation<TextureRegion>\fR in code instead.
+The \fBLibGDX\fR transform produces a LibGDX \fBTextureAtlas\fR \fB.atlas\fR file. The \fBoffset\fR field uses LibGDX's y-up convention: \fBoffset:\fR \fItrim_left\fR\fB,\fR \fItrim_bottom\fR. Animations are not encoded in the \fB.atlas\fR format; use sprite name suffixes (e.g. \fBwalk_0\fR, \fBwalk_1\fR) and \fBAnimation<TextureRegion>\fR in code instead.
 .PP
-The \fBplist\fR transform produces a Cocos2d-x TextureAtlas property list (format 2). Per-sprite values use Cocos2d's \fB{x,y}\fR and \fB{x,y},{w,h}\fR notation inside \fB<string>\fR elements. The \fBoffset\fR is the center offset of the trimmed region from the original sprite center (y-up): \fB{(trim_left\-trim_right)/2, (trim_bottom\-trim_top)/2}\fR. These values are available as \fB{{plist_frame}}\fR, \fB{{plist_offset}}\fR, \fB{{plist_source_color_rect}}\fR, \fB{{plist_source_size}}\fR, and \fB{{plist_atlas_size}}\fR when writing custom transforms targeting this format.
+The \fBplist\fR transform produces a Cocos2d-x TextureAtlas property list (format 2). Per-sprite values use Cocos2d's \fB{x,y}\fR and \fB{x,y},{w,h}\fR notation inside \fB<string>\fR elements. The \fBoffset\fR is the center offset of the trimmed region from the original sprite center (y-up): \fB{(trim_left\-trim_right)/2, (trim_bottom\-trim_top)/2}\fR. \fBtransforms/plist.jsonnet\fR shows how to compute them in a custom transform.
 .SS spratframes
 Scans \fIinput_image\fR and detects sprite boundaries by finding non-transparent connected components or by detecting rectangles of a specific color.
 Pieces of one sprite are folded into one frame when one box mostly lies inside the other; sprites whose boxes merely clip each other stay separate, so frames may overlap slightly. Frames are listed in reading order (rows top to bottom, left to right). A solid background is assumed when one opaque color makes up at least half of the image edge, so sprites touching the edge or its corners do not hide it; only background pixels connected to the image edge are removed.
@@ -451,16 +423,16 @@ Enable detailed error reporting and debug visualization.
 Transform name or path to a custom transform file. Default: \fBjson\fR.
 .TP
 \fB\-a\fR, \fB\-\-atlas\fR \fIPATTERN\fR
-Atlas path pattern used by \fB{{atlas_path}}\fR/\fB{{atlas_*}}\fR placeholders. Example: \fBatlas_%d.png\fR. It names the per-atlas output files and seeds stable IDs (such as Unity GUIDs), and by default it is also how the metadata refers to the atlas images.
+Atlas path pattern (the \fBatlas_path\fR fields). Example: \fBatlas_%d.png\fR. It names the per-atlas output files and seeds stable IDs (such as Unity GUIDs), and by default it is also how the metadata refers to the atlas images.
 .TP
 \fB\-\-image\-path\fR \fIPATTERN\fR
 Path written into the metadata to refer to each atlas image, with the same \fB%d\fR syntax. Default: the \fB\-\-atlas\fR path as given. Engines usually resolve it relative to the metadata file, so use it when \fB\-\-atlas\fR includes a directory, e.g. \fB\-\-atlas out/atlas_%d.png \-\-image\-path atlas_%d.png \-\-output\-dir out\fR. Without \fB\-\-atlas\fR, it also names the atlas files.
 .TP
 \fB\-\-output\-dir\fR \fIPATH\fR
 Write transform output to \fIPATH/{variant}{extension}\fR instead of stdout.
-When \fB\-\-transform\fR is a plain name without a dot (for example \fBphaser\fR), \fBspratconvert\fR scans the transforms directory for files named \fBphaser.*.transform\fR and renders each one, using the part after the dot as the variant (for example \fBhash\fR becomes \fIPATH/hash.json\fR).
-When a single named or path transform is given, the output stem is derived from the transform filename (for example \fBphaser.hash.transform\fR writes \fIPATH/hash.json\fR).
-The placeholder \fB{{output_stem}}\fR is available inside transform templates and resolves to the variant name.
+When \fB\-\-transform\fR is a plain name without a dot (for example \fBunity\fR), \fBspratconvert\fR scans the transforms directory for files named \fBunity.*.jsonnet\fR and renders each one, using the part after the dot as the variant (for example \fBunity.json.jsonnet\fR writes \fIPATH/json.json\fR unless it names its own file).
+When a single named or path transform is given, the output stem is derived from the transform filename (for example \fBphaser-hash.jsonnet\fR writes \fIPATH/phaser-hash.json\fR).
+Transforms receive the variant name as \fBoutput_stem\fR.
 .TP
 \fB\-\-list\-transforms\fR
 Print available transforms and exit.

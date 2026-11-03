@@ -43,6 +43,9 @@ struct Sprite {
     std::string slice_v = "stretch";
     std::vector<Marker> markers;
     std::string alias_of;  // Non-empty if this is an alias of another sprite
+    // Written in the old numeric form ("x y w h [left top]"), which has no right and
+    // bottom trim, so a trimmed sprite's original size can't be restored.
+    bool legacy_format = false;
 };
 
 // A duplicate sprite that reuses a canonical sprite's atlas region. The alias keeps
@@ -81,6 +84,9 @@ struct Layout {
     std::vector<Sprite> sprites;
     std::vector<Marker> global_markers;
     std::vector<Alias> aliases;
+    // Problems that don't stop the parse (translated, without a "Warning: " prefix),
+    // for the tool to report.
+    std::vector<std::string> warnings;
 };
 
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error);

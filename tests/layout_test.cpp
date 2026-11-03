@@ -107,22 +107,57 @@ void test_parse_layout_rejects_non_positive_atlas_dimensions() {
     std::cout << "test_parse_layout_rejects_non_positive_atlas_dimensions passed" << std::endl;
 }
 
-void test_parse_layout_rejects_negative_sprite_dimensions() {
+void test_parse_layout_rejects_non_positive_sprite_dimensions() {
     sprat::core::Layout layout;
     std::string error;
 
-    // Modern format: negative width
-    std::istringstream nw("atlas 512,512\nsprite \"a.png\" 0,0 -1,10\n");
-    assert(!sprat::core::parse_layout(nw, layout, error));
-    assert(error.find("sprite dimensions must not be negative") != std::string::npos);
+    // spratlayout never writes an empty sprite (a fully transparent image keeps 1x1).
+    for (const char* size : {"-1,10", "10,-1", "0,10", "10,0", "0 0 0 10", "0 0 10 0"}) {
+        error.clear();
+        std::istringstream in(std::string("atlas 512,512\nsprite \"a.png\" ")
+                              + (std::string(size).find(',') != std::string::npos ? "0,0 " : "")
+                              + size + "\n");
+        assert(!sprat::core::parse_layout(in, layout, error));
+        assert(error.find("sprite dimensions must be positive") != std::string::npos);
+    }
 
-    // Modern format: negative height
-    error.clear();
-    std::istringstream nh("atlas 512,512\nsprite \"a.png\" 0,0 10,-1\n");
-    assert(!sprat::core::parse_layout(nh, layout, error));
-    assert(error.find("sprite dimensions must not be negative") != std::string::npos);
+    std::cout << "test_parse_layout_rejects_non_positive_sprite_dimensions passed" << std::endl;
+}
 
-    std::cout << "test_parse_layout_rejects_negative_sprite_dimensions passed" << std::endl;
+// Problems that don't stop the parse come back in layout.warnings, once each; comment
+// lines and the markers and animations lines spratconvert reads are skipped.
+void test_parse_layout_warnings() {
+    sprat::core::Layout layout;
+    std::string error;
+    std::istringstream in(
+        "# made by hand\n"
+        "atlas 64,64\n"
+        "  # indented comment\n"
+        "sprite \"a.png\" 0 0 8 8\n"
+        "sprite \"b.png\" 8 0 8 8 1 1\n"
+        "sprite \"a.png\" 16,0 8,8\n"
+        "path \"a.png\"\n"
+        "- marker \"pivot\" point 1,1\n"
+        "loop once\n");
+    assert(sprat::core::parse_layout(in, layout, error));
+    assert(layout.sprites.size() == 3);
+    assert(layout.sprites[0].legacy_format && !layout.sprites[2].legacy_format);
+    assert(layout.warnings.size() == 2);
+    assert(layout.warnings[0].find("old numeric sprite format") != std::string::npos);
+    assert(layout.warnings[1] == "duplicate sprite path: a.png");
+
+    std::istringstream clean("atlas 64,64\nsprite \"a.png\" 0,0 8,8\n");
+    sprat::core::Layout clean_layout;
+    assert(sprat::core::parse_layout(clean, clean_layout, error));
+    assert(clean_layout.warnings.empty());
+
+    // A line that only starts like a passthrough keyword, and text after root, are errors.
+    std::istringstream junk("atlas 64,64\npathological\n");
+    assert(!sprat::core::parse_layout(junk, layout, error));
+    std::istringstream root("atlas 64,64\nroot \"x\" junk\n");
+    assert(!sprat::core::parse_layout(root, layout, error));
+
+    std::cout << "test_parse_layout_warnings passed" << std::endl;
 }
 
 void test_parse_layout_rejects_sprite_out_of_bounds() {
@@ -479,7 +514,8 @@ int main() {
     test_parse_extrude_line();
     test_parse_layout();
     test_parse_layout_rejects_non_positive_atlas_dimensions();
-    test_parse_layout_rejects_negative_sprite_dimensions();
+    test_parse_layout_rejects_non_positive_sprite_dimensions();
+    test_parse_layout_warnings();
     test_parse_layout_rejects_sprite_out_of_bounds();
     test_parse_sprite_line_rejects_negative_position();
     test_parse_sprite_line_rejects_negative_trim();

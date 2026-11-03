@@ -625,7 +625,7 @@ Transform files are searched in:
 
 | Name | Output | Notes |
 |------|--------|-------|
-| `json` | JSON | Generic metadata: sprites, atlases, animations, markers |
+| `json` | JSON | Generic metadata: sprites, atlases, animations, markers (global markers in a top-level `markers` list) |
 | `raw` | Text | The same metadata as `json` as plain space-separated tokens, for loading from C in one pass with no parser library (used by [sprat-lib](https://github.com/pedroac/sprat-lib)); see below |
 | `csv` | CSV | Flat spreadsheet-friendly list; animation rows are `animation,INDEX,NAME,FPS,FRAMES,FLIP,LOOP` (`FRAMES` separated by `\|`) |
 | `xml` | XML | Generic XML |
@@ -644,28 +644,32 @@ Transform files are searched in:
 `raw` writes a `.sprat` file that a C program can read with a few lines of code: one record
 per line, every value a space-separated token, and every count written before the records
 it counts, so a loader can size each array before filling it. The `sheet` line also carries
-totals for the whole file (`MARKERS`, `VERTICES`, `FRAMES` and `STRING_BYTES`, the UTF-8 bytes
-of every string), so a loader knows the exact size of the model up front and can allocate it
+totals for the whole file (`MARKERS`, global ones included, `VERTICES`, `FRAMES` and
+`STRING_BYTES`, the UTF-8 bytes of every string), so a loader knows the exact size of the model up front and can allocate it
 once; it must reject a file whose records don't match those totals. Strings are length-prefixed (`<UTF-8 byte count>:<bytes>`), so names and
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
-sprat-raw 3
-sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS MARKERS VERTICES FRAMES STRING_BYTES
+sprat-raw 4
+sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS GLOBAL_MARKERS MARKERS VERTICES FRAMES STRING_BYTES
 atlas W H PATH
-sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
+sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
 anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
 ```
 
-`MARKERS` `marker` lines follow their sprite. Enums are numbers: marker types `point`=0,
+`GLOBAL_MARKERS` `marker` lines follow the atlases: the markers file's markers before any
+`path`. Each sprite's `MARKERS` `marker` lines follow it. `HAS_PIVOT` tells a pivot at `0,0`
+from no pivot (then `PIVOT_X` and `PIVOT_Y` are 0). A sprite's `ALIAS` is the index of the
+regular sprite whose atlas region a deduplicated sprite shares, or `-1`. Enums are numbers: marker types `point`=0,
 `circle`=1, `rectangle`=2, `polygon`=3; slice modes `stretch`=0, `repeat`=1, `mirror`=2,
 `fixed`=3; `FLIP` bits `h`=1, `v`=2; `LOOP` bits `once`=1, `pingpong`=2 (so `loop`=0,
 `once`=1, `pingpong`=2, `once-pingpong`=3; an alias has its source's); flags are `0`/`1`. `ROTATION` is in clockwise degrees
 (0, 90 or 270). An alias animation has `ALIAS` set to the index of the animation it replays
 and no frames of its own; otherwise `ALIAS` is `-1`. Values have the same meaning as in
 `json`, and the first line carries the format version (version 2 added `LOOP`; version 3 dropped the normal
-and collision map fields).
+and collision map fields; version 4 added `GLOBAL_MARKERS`, their lines and `HAS_PIVOT`, and
+replaced the sprite's `ALIAS_OF` path with the `ALIAS` index).
 
 Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
 [sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an
@@ -697,7 +701,7 @@ local sprat = std.extVar("sprat");
 | `sprites` | array | All sprites across all atlases |
 | `atlases` | array | Each entry has `index`, `width`, `height`, `path`, `stem`, `filename`, `hash_hex` (FNV-1a of `path`), `sprites` |
 | `animations` | array | Animation definitions |
-| `markers` | array | All markers across all sprites |
+| `markers` | array | Every marker, each with its `sprite_index` (`-1` for a global marker, given before any `path` in the markers file) |
 | `atlas_width`, `atlas_height` | number | First atlas dimensions |
 | `atlas_path`, `atlas_stem` | string | First atlas path and stem |
 | `texture_key` | string | Key for the whole atlas set: `atlas_stem` for one atlas; for multipack, the `-a` pattern's stem without `%d` (`atlas_%d.png` → `atlas`) |
@@ -861,6 +865,8 @@ Column meanings for the `sprite` line in trim mode:
 - `<left>,<top>`: pixels trimmed from the left and top of the original image.
 - `<right>,<bottom>`: pixels trimmed from the right and bottom of the original image.
 - `rotated` (optional trailing token): sprite was packed rotated 90 degrees in the atlas, clockwise unless the layout has a `rotation ccw` line.
+
+Sizes must be positive. The old numeric form `sprite "<path>" x y w h [left top]` still loads, with a warning: it has no right and bottom trim, so a trimmed sprite's original size can't be restored. Regenerate such layouts with `spratlayout`.
 
 `spratpack` reads that layout from stdin and writes the final atlas output:
 - Single atlas: PNG to stdout.

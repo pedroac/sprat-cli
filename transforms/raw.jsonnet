@@ -1,25 +1,31 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 3
-//   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS MARKERS VERTICES FRAMES STRING_BYTES
-//   atlas W H PATH
-//   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B PIVOT_X PIVOT_Y
-//          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V MARKERS NAME PATH ALIAS_OF
-//   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME          (MARKERS lines after a sprite)
+//   sprat-raw 4
+//   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS GLOBAL_MARKERS MARKERS VERTICES
+//         FRAMES STRING_BYTES
+//   atlas W H PATH                                                (ATLASES lines)
+//   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME           (GLOBAL_MARKERS lines)
+//   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y
+//          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
+//   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME           (MARKERS lines after a sprite)
 //   anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
 //
 // Strings are length-prefixed ("<utf8 bytes>:<bytes>"), so they may hold spaces or newlines.
 // An empty string means "none". Enums are numbers: marker type point=0 circle=1 rectangle=2
 // polygon=3; slice mode stretch=0 repeat=1 mirror=2 fixed=3; FLIP bits h=1 v=2; LOOP bits
-// once=1 pingpong=2 (loop=0, once=1, pingpong=2, once-pingpong=3). ALIAS is the index of the
-// animation an alias replays (its FRAMES is 0), or -1; an alias's LOOP is its source's.
-// Version 3 dropped the normal and collision map fields (COLLISION_SCALE and NORMAL_PATH,
+// once=1 pingpong=2 (loop=0, once=1, pingpong=2, once-pingpong=3). On an anim line, ALIAS is
+// the index of the animation an alias replays (its FRAMES is 0), or -1; an alias's LOOP is its
+// source's. On a sprite line, ALIAS is the index of the regular sprite whose atlas region a
+// deduplicated sprite shares, or -1. HAS_PIVOT tells a pivot at 0,0 from no pivot (then
+// PIVOT_X and PIVOT_Y are 0). Global markers are the markers file's markers before any path.
+// Version 4 added GLOBAL_MARKERS and their lines, and HAS_PIVOT, and replaced the sprite's
+// ALIAS_OF path (last on the line) with the ALIAS index. Version 3 dropped the normal and collision map fields (COLLISION_SCALE and NORMAL_PATH,
 // COLLISION_PATH on the sheet and atlas lines). Version 2 added LOOP; version 1 files have
 // none, and play as loop.
 //
 // The sheet line's MARKERS, VERTICES, FRAMES and STRING_BYTES are the totals over the whole
-// file: marker lines, polygon vertices, animation frame indexes, and the UTF-8 bytes of every
+// file: marker lines (global ones included), polygon vertices, animation frame indexes, and the UTF-8 bytes of every
 // string. With them a loader knows the exact size of the model before reading the records, so
 // it can allocate it once; a loader must reject a file whose records don't match them.
 local sprat = std.extVar("sprat");
@@ -42,15 +48,23 @@ local marker_line(m) =
        + std.flattenArrays([[v.x, v.y] for v in vertices])
        + [str(m.name)]);
 
+// Deduplicated sprites name their canonical sprite by path; the raw format uses its index.
+local sprite_index = { [sprat.sprites[i].path]: i for i in std.range(0, std.length(sprat.sprites) - 1) };
+local alias_index(s) =
+  if s.alias_of == "" then -1
+  else if std.objectHas(sprite_index, s.alias_of) then sprite_index[s.alias_of]
+  else error "sprite '" + s.path + "' is an alias of unknown sprite '" + s.alias_of + "'";
+
 local sprite_lines(s) =
   local slice = if s.has_slice then
     [1, s.slice_left, s.slice_top, s.slice_right, s.slice_bottom,
      slice_modes[s.slice_h], slice_modes[s.slice_v]]
   else [0, 0, 0, 0, 0, 0, 0];
   line(["sprite", s.atlas_index, s.x, s.y, s.w, s.h, lib.rotation_degrees(sprat, s),
-        s.trim_left, s.trim_top, s.trim_right, s.trim_bottom, s.pivot_x, s.pivot_y]
+        s.trim_left, s.trim_top, s.trim_right, s.trim_bottom,
+        bool(s.has_pivot), s.pivot_x, s.pivot_y]
        + slice
-       + [std.length(s.markers), str(s.name), str(s.path), str(s.alias_of)])
+       + [alias_index(s), std.length(s.markers), str(s.name), str(s.path)])
   + std.join("", [marker_line(m) for m in s.markers]);
 
 local anim_index = { [sprat.animations[i].name]: i for i in std.range(0, std.length(sprat.animations) - 1) };
@@ -69,21 +83,23 @@ local anim_line(a) =
 
 local animations = if sprat.has_animations then sprat.animations else [];
 
+local global_markers = [m for m in sprat.markers if m.sprite_index < 0];
+
 // Totals for the sheet line, computed from exactly what the records below write.
-local all_markers = [m for s in sprat.sprites for m in s.markers];
+local all_markers = global_markers + [m for s in sprat.sprites for m in s.markers];
 local vertex_count(m) = if std.objectHas(m, "vertices") then std.length(m.vertices) else 0;
 local frame_count(a) = if a.is_alias then 0 else std.length(a.frame_indices);
 local string_bytes =
   sum([str_bytes(at.path) for at in sprat.atlases])
-  + sum([str_bytes(s.name) + str_bytes(s.path) + str_bytes(s.alias_of) for s in sprat.sprites])
+  + sum([str_bytes(s.name) + str_bytes(s.path) for s in sprat.sprites])
   + sum([str_bytes(m.name) for m in all_markers])
   + sum([str_bytes(a.name) for a in animations]);
 
 local header =
-  "sprat-raw 3\n"
+  "sprat-raw 4\n"
   + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
-          std.length(all_markers), sum([vertex_count(m) for m in all_markers]),
+          std.length(global_markers), std.length(all_markers), sum([vertex_count(m) for m in all_markers]),
           sum([frame_count(a) for a in animations]), string_bytes]);
 
 {
@@ -93,6 +109,7 @@ local header =
   content: header
     + std.join("", [line(["atlas", at.width, at.height, str(at.path)])
                     for at in sprat.atlases])
+    + std.join("", [marker_line(m) for m in global_markers])
     + std.join("", [sprite_lines(s) for s in sprat.sprites])
     + std.join("", [anim_line(a) for a in animations]),
 }

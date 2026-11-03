@@ -1788,6 +1788,9 @@ int run_spratconvert(int argc, char** argv) {
         std::cerr << layout_error << "\n";
         return 1;
     }
+    for (const std::string& warning : layout.warnings) {
+        std::cerr << tr("Warning: ") << warning << "\n";
+    }
 
     if (!image_pattern_arg.empty()) {
         std::string image_pattern_error;

@@ -6,7 +6,6 @@
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <iostream>
 #include <limits>
 #include <sstream>
 #include <string_view>
@@ -250,8 +249,8 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
             error = tr("sprite position must not be negative");
             return false;
         }
-        if (parsed.w < 0 || parsed.h < 0) {
-            error = tr("sprite dimensions must not be negative");
+        if (parsed.w <= 0 || parsed.h <= 0) {
+            error = tr("sprite dimensions must be positive");
             return false;
         }
 
@@ -268,6 +267,7 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
             parsed.has_trim = true;
         }
     } else {
+        parsed.legacy_format = true;
         constexpr size_t LEGACY_SPRITE_TOKENS_MIN = 4;
         constexpr size_t LEGACY_SPRITE_TOKENS_MAX = 6;
         if (tokens.size() != LEGACY_SPRITE_TOKENS_MIN && tokens.size() != LEGACY_SPRITE_TOKENS_MAX) {
@@ -285,8 +285,8 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
             error = tr("sprite position must not be negative");
             return false;
         }
-        if (parsed.w < 0 || parsed.h < 0) {
-            error = tr("sprite dimensions must not be negative");
+        if (parsed.w <= 0 || parsed.h <= 0) {
+            error = tr("sprite dimensions must be positive");
             return false;
         }
         if (tokens.size() == LEGACY_SPRITE_TOKENS_MAX) {
@@ -490,6 +490,7 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
     Layout parsed;
     std::string line;
     std::unordered_set<std::string> seen_sprite_paths;
+    bool warned_legacy = false;
 
     while (std::getline(in, line)) {
         const size_t first_char = line.find_first_not_of(" \t\r");
@@ -602,7 +603,13 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
                 return false;
             }
             if (!parsed.multipack && !seen_sprite_paths.insert(s.path).second) {
-                std::cerr << tr("Warning: duplicate sprite path: ") << s.path << "\n";
+                parsed.warnings.push_back(std::string(tr("duplicate sprite path: ")) + s.path);
+            }
+            if (s.legacy_format && !warned_legacy) {
+                parsed.warnings.push_back(tr(
+                    "the layout uses the old numeric sprite format (x y w h [left top]), which "
+                    "has no right and bottom trim; regenerate it with spratlayout"));
+                warned_legacy = true;
             }
             parsed.sprites.push_back(s);
         } else if (line.starts_with("alias")) {

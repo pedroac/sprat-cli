@@ -848,6 +848,9 @@ int run_spratpack(int argc, char** argv) {
         std::cerr << parse_error << "\n";
         return 1;
     }
+    for (const std::string& warning : layout.warnings) {
+        std::cerr << tr("Warning: ") << warning << "\n";
+    }
 
     // Resolve relative sprite paths using the root directory from the layout.
     if (layout.has_root && !layout.root.empty()) {
