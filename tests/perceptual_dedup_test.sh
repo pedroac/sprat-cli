@@ -71,7 +71,7 @@ aliases() {
 expect_aliases() {
     local expected="$1"; shift
     local actual
-    actual="$(aliases "$@" | tr -d '"' | awk '{ print ($2 < $3) ? $2 "=" $3 : $3 "=" $2 }' | sort | tr '\n' ' ')"
+    actual="$(aliases "$@" | tr -d '"' | awk '{ print ($2 < $4) ? $2 "=" $4 : $4 "=" $2 }' | sort | tr '\n' ' ')"
     if [ "$actual" != "$expected" ]; then
         echo "--deduplicate $*: expected [$expected], got [$actual]" >&2
         exit 1
@@ -153,13 +153,13 @@ sprites, aliases = {}, {}
 for line in open(sys.argv[1]):
     parts = line.split()
     if parts and parts[0] == "sprite":
-        sprites[parts[1].strip('"')] = parts[2:]
-    elif parts and parts[0] == "alias":
-        aliases[parts[1].strip('"')] = (parts[2].strip('"'), parts[3:])
+        sprites[parts[1].strip('"')] = dict(t.split(":", 1) for t in parts[2:] if ":" in t)
+    elif parts and parts[0] == "alias":  # alias "ORIGINAL" -> "DUPLICATE" [trim:...]
+        aliases[parts[3].strip('"')] = (parts[1].strip('"'), parts[4:])
 idle = sorted(n for n in sprites if n.startswith("idle"))
 assert len(idle) == 1, (sprites, aliases)
 canonical = idle[0]
-top = int(sprites[canonical][2].split(",")[1])
+top = int(sprites[canonical]["trim"].split(",")[1])
 for name in ("idle_00.png", "idle_01.png", "idle_02.png"):
     if name == canonical:
         continue
@@ -169,7 +169,7 @@ for name in ("idle_00.png", "idle_01.png", "idle_02.png"):
     if own_top == top:
         assert trim == [], (name, trim)  # same offsets: short alias line
     else:
-        assert trim == ["4,%d" % own_top, "4,%d" % (16 - own_top)], (name, trim)
+        assert trim == ["trim:4,%d,4,%d" % (own_top, 16 - own_top)], (name, trim)
 # btn_a and btn_b share pixels and guides; btn_c has the same pixels but other insets
 buttons = sorted(n for n in sprites if n.startswith("btn"))
 assert len(buttons) == 2 and "btn_c.9.png" in buttons, (sprites, aliases)

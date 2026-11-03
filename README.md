@@ -255,14 +255,14 @@ Both modes compare the trimmed pixels, so a frame that only moves within its can
 ./build/spratlayout ./frames --deduplicate exact > layout.txt
 ```
 
-The layout file will contain `alias` lines for duplicates:
+The layout file will contain `alias "ORIGINAL" -> "DUPLICATE"` lines for duplicates:
 ```
-sprite "original.png" 0,0 32,32 4,10 4,6
-alias "duplicate.png" "original.png"
-alias "moved.png" "original.png" 4,4 4,12
+sprite "original.png" rect:0,0,32,32 trim:4,10,4,6
+alias "original.png" -> "duplicate.png"
+alias "original.png" -> "moved.png" trim:4,4,4,12
 ```
 
-An alias whose trim offsets differ from its canonical sprite's carries its own `left,top right,bottom` trim, so engines put it back at its original place in the canvas.
+An alias whose trim offsets differ from its canonical sprite's carries its own `trim:`, so engines put it back at its original place in the canvas.
 
 When converting to JSON/metadata, every alias becomes its own frame that points to the canonical atlas region:
 ```sh
@@ -501,10 +501,10 @@ Pack variants of the same sprites (palette swaps, skins, ...) with one layout, s
 ```
 
 ### Nine-Slice (Slice) Metadata
-Annotate sprites with nine-slice insets and per-axis fill modes for UI scaling. Add a `slice=` token to any sprite line in the layout:
+Annotate sprites with nine-slice insets and per-axis fill modes for UI scaling. Add a `slice:` token to any sprite line in the layout:
 
 ```
-slice=L,T,R,B[,H_MODE,V_MODE]
+slice:L,T,R,B[,H_MODE,V_MODE]
 ```
 
 - `L,T,R,B` — non-negative integer insets (left, top, right, bottom) defining the nine-slice grid,
@@ -520,26 +520,26 @@ slice=L,T,R,B[,H_MODE,V_MODE]
 
 Examples:
 ```
-sprite "panel.png" 0,0 64,64 slice=8,8,8,8
-sprite "border.png" 0,0 64,64 slice=8,8,8,8,repeat,stretch
-sprite "frame.png" 0,0 64,64 slice=10,12,10,12,mirror,mirror
-sprite "button.png" 0,0 32,32 slice=4,4,4,4,fixed,fixed
+sprite "panel.png" rect:0,0,64,64 slice:8,8,8,8
+sprite "border.png" rect:0,0,64,64 slice:8,8,8,8,repeat,stretch
+sprite "frame.png" rect:0,0,64,64 slice:10,12,10,12,mirror,mirror
+sprite "button.png" rect:0,0,32,32 slice:4,4,4,4,fixed,fixed
 ```
 
-When `slice=` is present, `spratconvert` emits `slice_left`, `slice_top`, `slice_right`, `slice_bottom`, `slice_h`, and `slice_v` fields per sprite in the transform data.
+When `slice:` is present, `spratconvert` emits `slice_left`, `slice_top`, `slice_right`, `slice_bottom`, `slice_h`, and `slice_v` fields per sprite in the transform data.
 
 #### Android nine-patch auto-detection
-`spratlayout` automatically detects nine-slice insets from Android [nine-patch](https://developer.android.com/studio/write/draw9patch) images (files ending in `.9.png`). The 1px marker border is stripped and the stretch region is read from the opaque black pixels on the top row and left column. No manual `slice=` annotation is needed — the layout file will contain the correct `slice=` token after generation.
+`spratlayout` automatically detects nine-slice insets from Android [nine-patch](https://developer.android.com/studio/write/draw9patch) images (files ending in `.9.png`). The 1px marker border is stripped and the stretch region is read from the opaque black pixels on the top row and left column. No manual `slice:` annotation is needed — the layout file will contain the correct `slice:` token after generation.
 
-Auto-detected insets always use `stretch` for both fill modes. To use `repeat`, `mirror`, or `fixed`, manually edit the emitted `slice=` token in `layout.txt`.
+Auto-detected insets always use `stretch` for both fill modes. To use `repeat`, `mirror`, or `fixed`, manually edit the emitted `slice:` token in `layout.txt`.
 
 ### Per-sprite Dithering & Quantization
 Advanced users can manually edit `layout.txt` to apply per-sprite effects.
 - `dither`: Enables ordered dithering for the sprite.
-- `colors=N`: Posterizes the sprite to N levels per RGB channel (2-256), i.e. at most N³ colors; alpha is kept.
+- `colors:N`: Posterizes the sprite to N levels per RGB channel (2-256), i.e. at most N³ colors; alpha is kept.
 
 Example layout line:
-`sprite "./frames/robot.png" 0,0 128,128 dither colors=16`
+`sprite "./frames/robot.png" rect:0,0,128,128 dither colors:16`
 
 ---
 
@@ -815,7 +815,7 @@ local sprat = std.extVar("sprat");
 
 Sprite names default to the source file basename without extension (e.g. `./frames/run_01.png` becomes `run_01`).
 
-`--markers` expects a plaintext file using the `path` and `- marker` DSL.
+`--markers` expects a plaintext file using the `path` and `- marker` DSL. Every line must be a `root`, `path` or `- marker` line (or a `#` comment); anything else, a value that doesn't fit, or a second pivot for the same sprite is reported.
 An optional `root` directive sets a base directory; `path` values that are relative are resolved against it.
 Markers before any `path` are global. A `path` that matches no sprite is reported, and its markers are ignored rather than made global, so a mistyped path can't hand its pivot to every sprite. A marker with an unknown type or values that don't match its type is ignored with a warning.
 Supported marker types:
@@ -834,39 +834,37 @@ path "b"
 - marker "foot" rectangle 1,2 3,4
 ```
 
-`--animations` expects a plaintext file using the `animation` and `- frame` DSL. Frame entries are resolved to sprite indexes by path, name, or index: a bare number such as `- frame 1` is an index, so quote the path to name a sprite file such as `"1.png"`. A frame that matches no sprite, or an index outside the layout, is ignored with a warning.
+`--animations` expects a plaintext file using the `animation` and `- frame` DSL. Every line must be a `root`, `fps`, `loop`, `animation` or `- frame` line (or a `#` comment); anything else is reported, and so is an animation with no frames. A `- frame` line lists one or more frames, each a sprite path, name or index: a bare number such as `1` is an index, so quote the path to name a sprite file such as `"1.png"`. A range lists several: `0..7` by index, `run_01..run_08` by name (both ends must differ only in their number, and the first end's zero padding is kept), `"idle 1.png".."idle 4.png"` with quotes. A range may count down (`7..0`). A frame that matches no sprite, or an index outside the layout, is ignored with a warning.
 An optional `root` directive sets a base directory; quoted frame paths that are relative are resolved against it.
 Animation names must be unique; with `--auto-animations`, an animation from the file replaces the automatic one of the same name.
 The `fps` line sets the default speed for every animation that has none of its own, wherever the line appears in the file, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (`12.5` is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
 
 Each animation also has a loop mode: `loop` (the default) repeats it, `once` plays it once and stops on the last frame, `pingpong` plays it forward then backward and repeats, and `once-pingpong` plays forward then backward once and stops on the first frame. The `loop` line sets the default mode (also wherever it appears), and a mode after an animation's name sets its own, before or after its fps (`animation "run" 8 pingpong`). An alias plays the way the animation it replays does. An unknown mode is ignored with a warning. Formats with their own ping-pong use it (Phaser `yoyo`, Aseprite tag `direction` and `repeat`); Godot and Unity only have a loop flag, so their frame lists include the way back (`0 1 2 1` for `pingpong`, `0 1 2 1 0` for `once-pingpong`).
 
-An alias replays another animation instead of listing frames, optionally mirrored: `animation "run-left" alias "run" flip h`. `flip` takes `h`, `v` or `hv`; any other value is ignored with a warning.
+An alias replays another animation instead of listing frames, optionally mirrored: `animation "run-left" alias "run" flip h`. `flip` takes `h`, `v` or `hv`; any other value is ignored with a warning. An alias of an unknown animation, or a cycle of aliases, is an error.
 
 Example `animations.txt`:
 ```txt
 root "./frames"
 fps 12
 animation "run" 8 pingpong
-- frame "a.png"
-- frame "b"
+- frame run_01..run_08
 animation "run-left" alias "run" flip h
 animation "idle"
-- frame 1
+- frame "a.png" b 1
 ```
 
 Without `--markers` or `--animations`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers and animations. Layout files may hold `#` comment lines.
 
-Column meanings for the `sprite` line in trim mode:
+A layout `sprite` line is `sprite "<path>" rect:<x>,<y>,<w>,<h>` followed by optional tokens, in any order and each at most once:
 
 - `"<path>"`: source image path.
-- `<x>,<y>`: top-left position in the output atlas where the trimmed sprite is placed.
-- `<w>,<h>`: trimmed width and height written into the atlas.
-- `<left>,<top>`: pixels trimmed from the left and top of the original image.
-- `<right>,<bottom>`: pixels trimmed from the right and bottom of the original image.
-- `rotated` (optional trailing token): sprite was packed rotated 90 degrees in the atlas, clockwise unless the layout has a `rotation ccw` line.
+- `rect:<x>,<y>,<w>,<h>`: top-left position in the atlas and the size written there (after trimming; for a rotated sprite, the size after rotation). The size must be positive.
+- `trim:<left>,<top>,<right>,<bottom>`: pixels trimmed from each side of the original image.
+- `rotated`: the sprite was packed rotated 90 degrees in the atlas, clockwise unless the layout has a `rotation ccw` line.
+- `dither`, `colors:<N>`, `slice:<L>,<T>,<R>,<B>[,<H>,<V>]`: see above.
 
-Sizes must be positive. The old numeric form `sprite "<path>" x y w h [left top]` still loads, with a warning: it has no right and bottom trim, so a trimmed sprite's original size can't be restored. Regenerate such layouts with `spratlayout`.
+A deduplicated sprite is `alias "<original>" -> "<duplicate>"`, with its own `trim:` when it differs. Other layout lines are `root "<dir>"`, `scale <factor>`, `extrude <n>`, `multipack true|false`, `rotation cw|ccw` and `atlas <width>,<height>`; the sprites after an `atlas` line belong to that atlas. Anything else is an error.
 
 `spratpack` reads that layout from stdin and writes the final atlas output:
 - Single atlas: PNG to stdout.
@@ -946,7 +944,7 @@ Options:
 Supported formats:
 - TexturePacker/sprat JSON (Hash or Array), including `spratconvert` exports such as `phaser-hash`, `phaser-array`, `unity.json` and `aseprite`
 - Phaser multi-atlas JSON (`textures: [...]`): the texture whose `image` matches the atlas file name is unpacked
-- `spratlayout` layouts (including multipack layouts, one atlas at a time, and the `alias` lines of deduplicated sprites), and the minimalist `.spratframes` format
+- `spratlayout` layouts (including multipack layouts, one atlas at a time, and the `alias` lines of deduplicated sprites), and the minimalist `.spratframes` format (`path "<sheet>"`, an optional `background <hex>`, then one `sprite rect:<x>,<y>,<w>,<h>` line per frame)
 
 Rotated sprites are turned back, and trimmed sprites are placed in a transparent canvas of their original size (`sourceSize`/`spriteSourceSize` in JSON, trim offsets in layouts, at the layout's `scale`), so unpacked animation frames stay aligned. Output files are named after the frames, with `.png` added unless the name already ends with it. Every frame is checked before anything is written: frames outside the atlas, frames that don't fit their original size, original sizes beyond 32768 pixels a side or 100 megapixels (usually a corrupt `sourceSize`; `--keep-trim` doesn't restore them), unsafe names or two frames writing the same file make `spratunpack` fail without writing output.
 

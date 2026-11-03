@@ -182,8 +182,8 @@ fi
 
 atlas_dims="$(grep '^atlas ' "$layout_file" | head -n1 | sed -E 's/^atlas ([0-9]+),([0-9]+)$/\1 \2/')"
 read -r atlas_w atlas_h <<< "$atlas_dims"
-max_xw="$(awk '/^sprite "/ { split($3, p, ","); split($4, s, ","); v = p[1] + s[1]; if (v > m) m = v } END { print m + 0 }' "$layout_file")"
-max_yh="$(awk '/^sprite "/ { split($3, p, ","); split($4, s, ","); v = p[2] + s[2]; if (v > m) m = v } END { print m + 0 }' "$layout_file")"
+max_xw="$(awk '/^sprite "/ { match($0, /rect:[0-9,]+/); split(substr($0, RSTART + 5, RLENGTH - 5), r, ","); v = r[1] + r[3]; if (v > m) m = v } END { print m + 0 }' "$layout_file")"
+max_yh="$(awk '/^sprite "/ { match($0, /rect:[0-9,]+/); split(substr($0, RSTART + 5, RLENGTH - 5), r, ","); v = r[2] + r[4]; if (v > m) m = v } END { print m + 0 }' "$layout_file")"
 if [ "$max_xw" -ne "$atlas_w" ] || [ "$max_yh" -ne "$atlas_h" ]; then
     echo "Atlas dimensions include trailing padding-only gap: atlas=${atlas_w}x${atlas_h} used=${max_xw}x${max_yh}" >&2
     exit 1
@@ -302,7 +302,7 @@ trim_source="$trim_dir/frame_trim.png"
 
 cat > "$tmp_dir/seed_layout.txt" <<EOF
 atlas 3,3
-sprite "$(fix_path "$frames_dir/frame_a.png")" 1,1 1,1
+sprite "$(fix_path "$frames_dir/frame_a.png")" rect:1,1,1,1
 EOF
 "$spratpack_bin" < "$tmp_dir/seed_layout.txt" > "$trim_source"
 
@@ -315,7 +315,7 @@ if ! grep -q '^atlas 1,1$' "$trim_layout"; then
     exit 1
 fi
 
-if ! grep -E -q '^sprite ".*frame_trim\.png" [0-9]+,[0-9]+ 1,1 1,1 1,1$' "$trim_layout"; then
+if ! grep -E -q '^sprite ".*frame_trim\.png" rect:[0-9]+,[0-9]+,1,1 trim:1,1,1,1$' "$trim_layout"; then
     echo "Trim mode did not emit expected crop offsets" >&2
     exit 1
 fi
@@ -358,7 +358,7 @@ mkdir -p "$scaled_dir"
 scaled_source="$scaled_dir/frame_large.png"
 cat > "$tmp_dir/seed_large_layout.txt" <<EOF
 atlas 4,4
-sprite "$(fix_path "$frames_dir/frame_a.png")" 0,0 1,1
+sprite "$(fix_path "$frames_dir/frame_a.png")" rect:0,0,1,1
 EOF
 "$spratpack_bin" < "$tmp_dir/seed_large_layout.txt" > "$scaled_source"
 
@@ -452,7 +452,7 @@ mkdir -p "$rotate_dir"
 rotate_source="$rotate_dir/frame_rot_a.png"
 cat > "$tmp_dir/seed_rot_layout.txt" <<EOF
 atlas 3,2
-sprite "$(fix_path "$frames_dir/frame_a.png")" 0,0 1,1
+sprite "$(fix_path "$frames_dir/frame_a.png")" rect:0,0,1,1
 EOF
 "$spratpack_bin" < "$tmp_dir/seed_rot_layout.txt" > "$rotate_source"
 cp "$rotate_source" "$rotate_dir/frame_rot_b.png"

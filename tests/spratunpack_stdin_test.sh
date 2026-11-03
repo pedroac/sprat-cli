@@ -19,7 +19,7 @@ tar_out="out.tar"
 tar_list="tar.list"
 
 cat > "$frames_file" <<'EOF'
-sprite 0,0 1,1
+sprite rect:0,0,1,1
 EOF
 
 png_b64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2WZ6kAAAAASUVORK5CYII='

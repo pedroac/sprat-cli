@@ -69,8 +69,8 @@ CASES = {
     "frames-da9l9w5": ("frames", "da9l9w5-5db4007e-7b57-417d-964c-cc0837ebb65d.png", [], None),
 }
 
-FRAME_RE = re.compile(r"^sprite (\d+),(\d+) (\d+),(\d+)")
-SPRITE_RE = re.compile(r'^sprite "(?:[^"\\]|\\.)*" (\d+),(\d+) (\d+),(\d+)')
+FRAME_RE = re.compile(r"^sprite rect:(\d+),(\d+),(\d+),(\d+)")
+SPRITE_RE = re.compile(r'^sprite "(?:[^"\\]|\\.)*" rect:(\d+),(\d+),(\d+),(\d+)')
 ATLAS_RE = re.compile(r"^atlas (\d+),(\d+)")
 
 

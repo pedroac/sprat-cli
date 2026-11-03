@@ -272,22 +272,91 @@ bool check_marker_limits(const MarkerItem& m, double scale, std::string& error) 
     return true;
 }
 
+// ---- Hand-written markers and animations files ------------------------------------------
+//
+// Both files are written by hand, so every line must mean something: a line that is not
+// one of the file's own is reported, never skipped. Without --markers or --animations,
+// both are read from the layout stream, which also holds layout lines and the other
+// file's lines; only then are those skipped.
+
+// The leading keyword of a line: "- marker" and "- frame" count as one.
+std::string line_keyword(const std::string& trimmed) {
+    std::istringstream liss(trimmed);
+    std::string cmd;
+    liss >> cmd;
+    if (cmd == "-") {
+        std::string sub;
+        liss >> sub;
+        return "- " + sub;
+    }
+    return cmd;
+}
+
+bool is_layout_keyword(const std::string& keyword) {
+    return keyword == "atlas" || keyword == "scale" || keyword == "extrude" || keyword == "multipack"
+        || keyword == "rotation" || keyword == "sprite" || keyword == "alias";
+}
+
+bool is_markers_keyword(const std::string& keyword) {
+    return keyword == "root" || keyword == "path" || keyword == "- marker";
+}
+
+bool is_animations_keyword(const std::string& keyword) {
+    return keyword == "root" || keyword == "fps" || keyword == "loop" || keyword == "animation"
+        || keyword == "- frame";
+}
+
+// Reads a `root "DIR"` line into root. Reports and ignores one that isn't exactly that.
+void read_root_line(const std::string& trimmed, std::string& root, const char* file,
+                    std::vector<std::string>& warnings) {
+    size_t pos = 4;
+    while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
+        ++pos;
+    }
+    std::string value;
+    std::string error;
+    if (pos >= trimmed.size() || trimmed[pos] != '"' || !parse_quoted(trimmed, pos, value, error)
+        || !trim_copy(trimmed.substr(pos)).empty()) {
+        warnings.push_back(sprat::core::tr_format(
+            "{0} line \"{1}\" is not root \"DIRECTORY\"; it is ignored", {file, trimmed}));
+        return;
+    }
+    root = value;
+}
+
+// Reads a name, quoted or as one bare token, starting at `pos` (after any spaces). On
+// success `pos` is just past it.
+bool read_name_at(const std::string& line, size_t& pos, std::string& name) {
+    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) {
+        ++pos;
+    }
+    if (pos < line.size() && line[pos] == '"') {
+        std::string quote_error;
+        return parse_quoted(line, pos, name, quote_error);
+    }
+    const size_t end = std::min(line.size(), line.find_first_of(" \t", pos));
+    name = line.substr(pos, end - pos);
+    pos = end;
+    return !name.empty();
+}
+
 // Reads the shape after a marker's name and type ("x,y", "x,y radius", "x,y w,h" or a
-// list of "x,y" vertices). False when the values don't match the type.
+// list of "x,y" vertices). False when the values don't match the type, extra ones included.
 bool read_marker_shape(std::istringstream& rest, MarkerItem& item) {
     std::string pt;
+    std::string extra;
     if (item.type == "point") {
-        return rest >> pt && parse_pair(pt, item.x, item.y);
+        return rest >> pt && parse_pair(pt, item.x, item.y) && !(rest >> extra);
     }
     if (item.type == "circle") {
         std::string radius;
         return rest >> pt && parse_pair(pt, item.x, item.y)
-            && rest >> radius && parse_int(radius, item.radius);
+            && rest >> radius && parse_int(radius, item.radius) && !(rest >> extra);
     }
     if (item.type == "rectangle") {
         std::string sz;
         return rest >> pt && parse_pair(pt, item.x, item.y)
-            && rest >> sz && parse_pair(sz, item.w, item.h);
+            && rest >> sz && parse_pair(sz, item.w, item.h) && !(rest >> extra);
     }
     if (item.type == "polygon") {
         while (rest >> pt) {
@@ -304,6 +373,7 @@ bool read_marker_shape(std::istringstream& rest, MarkerItem& item) {
 }
 
 std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
+                                           bool from_layout_stream,
                                            const Layout& layout,
                                            const std::unordered_map<std::string, int>& by_path,
                                            const std::unordered_map<std::string, int>& by_name,
@@ -319,82 +389,55 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
     // made global, where a mistyped path would hand its pivot to every sprite.
     bool skipping_unknown_path = false;
     std::string raw_root;
+    // Sprites (-1 for global) that already have a pivot: only the first one is used.
+    std::unordered_set<int> has_pivot;
 
     while (std::getline(iss, line)) {
         std::string trimmed = trim_copy(line);
-        if (trimmed.empty() || (trimmed.length() > 0 && trimmed[0] == '#')) {
+        if (trimmed.empty() || trimmed[0] == '#') {
+            continue;
+        }
+        const std::string keyword = line_keyword(trimmed);
+        if (!is_markers_keyword(keyword)) {
+            if (!from_layout_stream || !(is_layout_keyword(keyword) || is_animations_keyword(keyword))) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Markers file line \"{0}\" is not a root, path or - marker line; it is ignored",
+                    {trimmed}));
+            }
             continue;
         }
 
-        std::istringstream liss(trimmed);
-        std::string cmd;
-        if (!(liss >> cmd)) {
-            continue;
-        }
-
-        if (cmd == "root") {
-            size_t pos = 4;
-            while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
-                ++pos;
-            }
-            if (pos < trimmed.size() && trimmed[pos] == '"') {
-                std::string error;
-                parse_quoted(trimmed, pos, raw_root, error);
-            }
-        } else if (cmd == "path") {
+        if (keyword == "root") {
+            read_root_line(trimmed, raw_root, "Markers file", warnings);
+        } else if (keyword == "path") {
             std::string path;
             size_t pos = 4;
-            while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
-                pos++;
-            }
-            bool has_path = false;
-            if (pos < trimmed.size() && trimmed[pos] == '"') {
-                std::string error;
-                has_path = parse_quoted(trimmed, pos, path, error);
+            const bool has_path = read_name_at(trimmed, pos, path);
+            current_sprite_index = -1;
+            if (!has_path || !trim_copy(trimmed.substr(pos)).empty()) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Markers file line \"{0}\" is not path \"SPRITE\"; its markers are ignored",
+                    {trimmed}));
             } else {
-                has_path = static_cast<bool>(liss >> path);
-            }
-            if (has_path) {
                 current_sprite_index =
                     resolve_sprite_index(join_metadata_root(raw_root, path), by_path, by_name);
-            } else {
-                current_sprite_index = -1;
+                if (current_sprite_index < 0) {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Markers file path \"{0}\" matches no sprite; its markers are ignored",
+                        {path}));
+                }
             }
             skipping_unknown_path = current_sprite_index < 0;
+        } else {
             if (skipping_unknown_path) {
-                warnings.push_back(sprat::core::tr_format(
-                    "Markers file path \"{0}\" matches no sprite; its markers are ignored",
-                    {has_path ? path : trim_copy(trimmed.substr(4))}));
+                continue;  // already reported with the path
             }
-        } else if (cmd == "-") {
-            std::string subcmd;
-            if (!(liss >> subcmd) || subcmd != "marker") {
-                continue;
-            }
-            if (skipping_unknown_path) {
-                continue;
-            }
-
             size_t pos = trimmed.find("marker") + 6;
-            while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
-                pos++;
-            }
-
             std::string name;
-            if (pos < trimmed.size() && trimmed[pos] == '"') {
-                std::string error;
-                if (!parse_quoted(trimmed, pos, name, error)) {
-                    warnings.push_back(sprat::core::tr_format(
-                        "Marker line \"{0}\" has an unterminated name; it is ignored", {trimmed}));
-                    continue;
-                }
-            } else {
-                if (!(liss >> name)) {
-                    warnings.push_back(sprat::core::tr_format(
-                        "Marker line \"{0}\" has no name; it is ignored", {trimmed}));
-                    continue;
-                }
-                pos = trimmed.find(name, pos) + name.length();
+            if (!read_name_at(trimmed, pos, name)) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Marker line \"{0}\" has no valid name; it is ignored", {trimmed}));
+                continue;
             }
 
             MarkerItem item;
@@ -423,6 +466,13 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
                 warnings.push_back(sprat::core::tr_format(
                     "Marker \"{0}\" has invalid {1} values; it is ignored", {name, item.type}));
                 continue;
+            }
+            if (item.name == "pivot" && item.type == "point"
+                && !has_pivot.insert(current_sprite_index).second) {
+                warnings.push_back(current_sprite_index < 0
+                    ? std::string(tr("There is more than one global pivot; only the first is used"))
+                    : sprat::core::tr_format("Sprite \"{0}\" has more than one pivot; only the first is used",
+                                             {item.sprite_path}));
             }
 
             if (current_sprite_index >= 0) {
@@ -480,24 +530,177 @@ std::string normalize_flip(const std::string& value) {
     return {};
 }
 
-// Reads a name, quoted or as one bare token, starting at `pos` (after any spaces). On
-// success `pos` is just past it.
-bool read_name_at(const std::string& line, size_t& pos, std::string& name) {
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) {
-        ++pos;
+// Most frames one range may list. Sprite sheets hold far fewer, so a larger range is a typo.
+constexpr long long k_max_frame_range = 100000;
+
+// One item of a "- frame" line: a sprite (path, name or index), or a range of them.
+struct FrameItem {
+    std::string first;
+    std::string last;  // set for a range "FIRST..LAST"
+    bool quoted = false;
+    bool is_range = false;
+};
+
+// A name split around its last run of digits: "hero/run_01.png" is "hero/run_", "01", ".png".
+struct NumberedName {
+    std::string prefix;
+    std::string digits;
+    std::string suffix;
+};
+
+bool split_numbered_name(const std::string& name, NumberedName& out) {
+    const size_t last_digit = name.find_last_of("0123456789");
+    if (last_digit == std::string::npos) {
+        return false;
     }
-    if (pos < line.size() && line[pos] == '"') {
-        std::string quote_error;
-        return parse_quoted(line, pos, name, quote_error);
+    size_t first_digit = last_digit;
+    while (first_digit > 0 && std::isdigit(static_cast<unsigned char>(name[first_digit - 1]))) {
+        --first_digit;
     }
-    const size_t end = std::min(line.size(), line.find_first_of(" \t", pos));
-    name = line.substr(pos, end - pos);
-    pos = end;
-    return !name.empty();
+    out.prefix = name.substr(0, first_digit);
+    out.digits = name.substr(first_digit, last_digit + 1 - first_digit);
+    out.suffix = name.substr(last_digit + 1);
+    return out.digits.size() <= 9;  // fits an int
+}
+
+// Whether "first..last" reads as a range of sprite names: the same name around a number.
+bool is_name_range(const std::string& first, const std::string& last) {
+    NumberedName a;
+    NumberedName b;
+    return split_numbered_name(first, a) && split_numbered_name(last, b)
+        && a.prefix == b.prefix && a.suffix == b.suffix;
+}
+
+// Splits what follows "- frame" into items: quoted strings, bare words, and ranges
+// "FIRST..LAST" of indexes (0..7) or names (run_01..run_08, "a b_1".."a b_4"). A bare word
+// with ".." that is no range, such as "../a.png", is a path. False on a broken quote.
+bool split_frame_items(const std::string& text, std::vector<FrameItem>& items) {
+    size_t pos = 0;
+    while (true) {
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
+        if (pos >= text.size()) {
+            return true;
+        }
+        FrameItem item;
+        std::string error;
+        if (text[pos] == '"') {
+            item.quoted = true;
+            if (!parse_quoted(text, pos, item.first, error)) {
+                return false;
+            }
+            if (text.compare(pos, 2, "..") == 0) {
+                pos += 2;
+                if (pos >= text.size() || text[pos] != '"' || !parse_quoted(text, pos, item.last, error)) {
+                    return false;
+                }
+                item.is_range = true;
+            }
+        } else {
+            const size_t end = std::min(text.size(), text.find_first_of(" \t", pos));
+            const std::string word = text.substr(pos, end - pos);
+            pos = end;
+            const size_t dots = word.find("..");
+            item.first = word;
+            if (dots != std::string::npos && dots > 0 && dots + 2 < word.size()) {
+                const std::string a = word.substr(0, dots);
+                const std::string b = word.substr(dots + 2);
+                int ia = 0;
+                int ib = 0;
+                if ((parse_int(a, ia) && parse_int(b, ib)) || is_name_range(a, b)) {
+                    item.first = a;
+                    item.last = b;
+                    item.is_range = true;
+                }
+            }
+        }
+        items.push_back(std::move(item));
+    }
+}
+
+// Adds the sprite indexes an item names to `frames`, reporting what names no sprite.
+void add_frame_item(const FrameItem& item, const std::string& anim_name, const std::string& root,
+                    int sprite_count, const std::unordered_map<std::string, int>& by_path,
+                    const std::unordered_map<std::string, int>& by_name, std::vector<int>& frames,
+                    std::vector<std::string>& warnings) {
+    const std::string count = std::to_string(sprite_count);
+    const auto add_index = [&](int idx, const std::string& text) {
+        if (idx >= 0 && idx < sprite_count) {
+            frames.push_back(idx);
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Animation \"{0}\" frame {1} is out of range (the layout has {2} sprites); it is ignored",
+                {anim_name, text, count}));
+        }
+    };
+    const auto add_name = [&](const std::string& name) {
+        const int idx = resolve_sprite_index(join_metadata_root(root, name), by_path, by_name);
+        if (idx >= 0) {
+            frames.push_back(idx);
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Animation \"{0}\" frame \"{1}\" matches no sprite; it is ignored", {anim_name, name}));
+        }
+    };
+
+    if (!item.is_range) {
+        int idx = -1;
+        // A bare number is a sprite index; quote the path to name a sprite such as "1.png".
+        if (!item.quoted && parse_int(item.first, idx)) {
+            add_index(idx, item.first);
+        } else {
+            add_name(item.first);
+        }
+        return;
+    }
+
+    const std::string range = item.first + ".." + item.last;
+    int a = 0;
+    int b = 0;
+    const bool by_index = !item.quoted && parse_int(item.first, a) && parse_int(item.last, b);
+    NumberedName first;
+    NumberedName last;
+    if (!by_index) {
+        if (!is_name_range(item.first, item.last)) {
+            warnings.push_back(sprat::core::tr_format(
+                "Animation \"{0}\" range \"{1}\" must have ends that differ only in their number; it is ignored",
+                {anim_name, range}));
+            return;
+        }
+        split_numbered_name(item.first, first);
+        split_numbered_name(item.last, last);
+        a = std::stoi(first.digits);
+        b = std::stoi(last.digits);
+    }
+    if (std::llabs(static_cast<long long>(b) - a) >= k_max_frame_range) {
+        warnings.push_back(sprat::core::tr_format(
+            "Animation \"{0}\" range \"{1}\" is too long; it is ignored", {anim_name, range}));
+        return;
+    }
+    // Names keep the first end's zero padding: run_01..run_10 lists run_01, run_02, ...
+    const size_t width = (!by_index && first.digits.size() > 1 && first.digits[0] == '0')
+        ? first.digits.size() : 0;
+    const int step = a <= b ? 1 : -1;
+    for (int n = a;; n += step) {
+        if (by_index) {
+            add_index(n, std::to_string(n));
+        } else {
+            std::string digits = std::to_string(n);
+            if (digits.size() < width) {
+                digits.insert(0, width - digits.size(), '0');
+            }
+            add_name(first.prefix + digits + first.suffix);
+        }
+        if (n == b) {
+            break;
+        }
+    }
 }
 
 std::vector<AnimationItem> parse_animations_data(
     const std::string& animations_text,
+    bool from_layout_stream,
     const std::unordered_map<std::string, int>& by_path,
     const std::unordered_map<std::string, int>& by_name,
     int sprite_count,
@@ -512,7 +715,7 @@ std::vector<AnimationItem> parse_animations_data(
     // lines are defaults for the others wherever they appear, so they are applied last.
     std::vector<bool> own_fps;
     std::vector<bool> own_loop;
-    std::unordered_set<std::string> names;
+    std::unordered_map<std::string, size_t> index_by_name;
     std::istringstream iss(animations_text);
     std::string line;
     AnimationItem* current_anim = nullptr;
@@ -520,31 +723,35 @@ std::vector<AnimationItem> parse_animations_data(
 
     while (std::getline(iss, line)) {
         std::string trimmed = trim_copy(line);
-        if (trimmed.empty() || (trimmed.length() > 0 && trimmed[0] == '#')) {
+        if (trimmed.empty() || trimmed[0] == '#') {
+            continue;
+        }
+        const std::string keyword = line_keyword(trimmed);
+        if (!is_animations_keyword(keyword)) {
+            if (!from_layout_stream || !(is_layout_keyword(keyword) || is_markers_keyword(keyword))) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Animations file line \"{0}\" is not a root, fps, loop, animation or - frame line; it is ignored",
+                    {trimmed}));
+            }
             continue;
         }
 
         std::istringstream liss(trimmed);
         std::string cmd;
-        if (!(liss >> cmd)) {
-            continue;
-        }
+        liss >> cmd;
+        std::string extra;
 
-        if (cmd == "root") {
-            size_t pos = 4;
-            while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
-                ++pos;
-            }
-            if (pos < trimmed.size() && trimmed[pos] == '"') {
-                std::string quote_error;
-                parse_quoted(trimmed, pos, raw_root, quote_error);
-            }
-        } else if (cmd == "fps") {
+        if (keyword == "root") {
+            read_root_line(trimmed, raw_root, "Animations file", warnings);
+        } else if (keyword == "fps") {
             std::string fps_token;
             int fps = 0;
             bool partial = false;
             if (!(liss >> fps_token)) {
                 warnings.push_back(tr("Animations file fps has no value; it is ignored"));
+            } else if (liss >> extra) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Animations file line \"{0}\" has more than one fps; it is ignored", {trimmed}));
             } else if (!read_animation_fps(fps_token, fps, partial)) {
                 warnings.push_back(sprat::core::tr_format(
                     "Animations file fps \"{0}\" is not a number; it is ignored", {fps_token}));
@@ -560,10 +767,13 @@ std::vector<AnimationItem> parse_animations_data(
                 }
                 animation_fps_out = fps;
             }
-        } else if (cmd == "loop") {
+        } else if (keyword == "loop") {
             std::string mode;
             if (!(liss >> mode)) {
                 warnings.push_back(tr("Animations file loop has no value; it is ignored"));
+            } else if (liss >> extra) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Animations file line \"{0}\" has more than one loop mode; it is ignored", {trimmed}));
             } else if (!is_animation_loop_mode(mode)) {
                 warnings.push_back(sprat::core::tr_format(
                     "Animations file loop \"{0}\" is not one of {1}; it is ignored",
@@ -571,7 +781,7 @@ std::vector<AnimationItem> parse_animations_data(
             } else {
                 animation_loop_out = mode;
             }
-        } else if (cmd == "animation") {
+        } else if (keyword == "animation") {
             current_anim = nullptr;
             std::string name;
             size_t pos = 9;
@@ -580,7 +790,7 @@ std::vector<AnimationItem> parse_animations_data(
                     "Animation line \"{0}\" has no valid name; the animation is ignored", {trimmed}));
                 continue;
             }
-            if (!names.insert(name).second) {
+            if (index_by_name.contains(name)) {
                 error = sprat::core::tr_format("Animation \"{0}\" is defined more than once", {name});
                 return {};
             }
@@ -609,7 +819,7 @@ std::vector<AnimationItem> parse_animations_data(
                 std::istringstream flip_rest(trimmed.substr(alias_src_pos));
                 while (flip_rest >> tok) {
                     std::string val;
-                    if (tok != "flip") {
+                    if (tok != "flip" || !item.flip.empty()) {
                         warnings.push_back(sprat::core::tr_format(
                             "Animation \"{0}\" has an unknown setting \"{1}\"; it is ignored",
                             {name, tok}));
@@ -641,6 +851,7 @@ std::vector<AnimationItem> parse_animations_data(
                     }
                     int custom_fps = 0;
                     bool partial = false;
+                    has_fps = true;
                     if (read_animation_fps(token, custom_fps, partial)) {
                         if (custom_fps > k_max_animation_fps) {
                             error = sprat::core::tr_format(
@@ -655,72 +866,72 @@ std::vector<AnimationItem> parse_animations_data(
                         }
                         item.fps = custom_fps;
                         sets_fps = custom_fps > 0;
-                        has_fps = true;
                     } else {
                         warnings.push_back(sprat::core::tr_format(
                             "Animation \"{0}\" fps \"{1}\" is not a number; it is ignored",
                             {item.name, token}));
-                        has_fps = true;
                     }
                 }
             }
             const bool is_alias = !item.alias_source.empty();
+            index_by_name.emplace(name, animations.size());
             animations.push_back(std::move(item));
             own_fps.push_back(sets_fps);
             own_loop.push_back(has_loop);
             if (!is_alias) {
                 current_anim = &animations.back();
             }
-        } else if (cmd == "-") {
-            std::string subcmd;
-            if (!(liss >> subcmd) || subcmd != "frame") {
-                continue;
-            }
+        } else {  // "- frame"
             if (!current_anim) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Frame line \"{0}\" is not inside an animation; it is ignored", {trimmed}));
+                    "Frame line \"{0}\" is not inside an animation (or follows an alias, which has no frames of its own); it is ignored",
+                    {trimmed}));
                 continue;
             }
-
-            size_t pos = trimmed.find("frame") + 5;
-            while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
-                pos++;
-            }
-            std::string frame;
-            int idx = -1;
-            bool is_index = false;
-            if (pos < trimmed.size() && trimmed[pos] == '"') {
-                std::string quote_error;
-                if (parse_quoted(trimmed, pos, frame, quote_error)) {
-                    idx = resolve_sprite_index(join_metadata_root(raw_root, frame), by_path, by_name);
-                }
-            } else if (liss >> frame) {
-                // A bare number is a sprite index; quote the path to name a sprite such as "1.png".
-                is_index = parse_int(frame, idx);
-                if (!is_index) {
-                    idx = resolve_sprite_index(join_metadata_root(raw_root, frame), by_path, by_name);
-                }
-            }
-            if (idx >= 0 && idx < sprite_count) {
-                current_anim->sprite_indexes.push_back(idx);
-            } else if (is_index) {
+            std::vector<FrameItem> items;
+            const size_t pos = trimmed.find("frame") + 5;
+            if (!split_frame_items(trimmed.substr(pos), items)) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Animation \"{0}\" frame {1} is out of range (the layout has {2} sprites); it is ignored",
-                    {current_anim->name, frame, std::to_string(sprite_count)}));
-            } else {
+                    "Frame line \"{0}\" has a broken quote or range; it is ignored", {trimmed}));
+                continue;
+            }
+            if (items.empty()) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Animation \"{0}\" frame \"{1}\" matches no sprite; it is ignored",
-                    {current_anim->name, frame.empty() ? trimmed : frame}));
+                    "Frame line \"{0}\" names no frame; it is ignored", {trimmed}));
+                continue;
+            }
+            for (const FrameItem& item : items) {
+                add_frame_item(item, current_anim->name, raw_root, sprite_count, by_path, by_name,
+                               current_anim->sprite_indexes, warnings);
             }
         }
     }
 
     for (size_t i = 0; i < animations.size(); ++i) {
+        AnimationItem& anim = animations[i];
         if (!own_fps[i]) {
-            animations[i].fps = animation_fps_out > 0 ? animation_fps_out : DEFAULT_ANIMATION_FPS;
+            anim.fps = animation_fps_out > 0 ? animation_fps_out : DEFAULT_ANIMATION_FPS;
         }
         if (!own_loop[i]) {
-            animations[i].loop = animation_loop_out;
+            anim.loop = animation_loop_out;
+        }
+        if (anim.alias_source.empty() && anim.sprite_indexes.empty()) {
+            warnings.push_back(sprat::core::tr_format("Animation \"{0}\" has no frames", {anim.name}));
+        }
+        // An alias must lead, maybe through other aliases, to a regular animation.
+        const AnimationItem* at = &anim;
+        for (size_t steps = 0; !at->alias_source.empty(); ++steps) {
+            const auto it = index_by_name.find(at->alias_source);
+            if (it == index_by_name.end()) {
+                error = sprat::core::tr_format("Animation \"{0}\" is an alias of unknown animation \"{1}\"",
+                                               {at->name, at->alias_source});
+                return {};
+            }
+            if (steps >= animations.size()) {
+                error = sprat::core::tr_format("Animation \"{0}\" is part of a cycle of aliases", {anim.name});
+                return {};
+            }
+            at = &animations[it->second];
         }
     }
     return animations;
@@ -1845,7 +2056,8 @@ int run_spratconvert(int argc, char** argv) {
     std::vector<std::vector<MarkerItem>> sprite_markers;
     std::vector<std::string> markers_warnings;
     const std::vector<MarkerItem> marker_items =
-        parse_markers_data(markers_text, layout, sprite_index_by_path, sprite_index_by_name,
+        parse_markers_data(markers_text, markers_path_arg.empty(), layout, sprite_index_by_path,
+                           sprite_index_by_name,
                            sprite_names, sprite_markers, markers_warnings);
     for (const std::string& warning : markers_warnings) {
         std::cerr << tr("Warning: ") << warning << "\n";
@@ -1862,7 +2074,8 @@ int run_spratconvert(int argc, char** argv) {
     std::string animations_error;
     std::vector<std::string> animations_warnings;
     std::vector<AnimationItem> animation_items =
-        parse_animations_data(animations_text, sprite_index_by_path, sprite_index_by_name,
+        parse_animations_data(animations_text, animations_path_arg.empty(), sprite_index_by_path,
+                              sprite_index_by_name,
                                static_cast<int>(layout.sprites.size()), animation_fps, animation_loop, animations_error,
                                animations_warnings);
     for (const std::string& warning : animations_warnings) {

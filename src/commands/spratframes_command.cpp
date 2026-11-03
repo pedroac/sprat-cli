@@ -577,10 +577,10 @@ private:
             std::cout << "background " << color_to_hex(detected_background_color_) << "\n";
         }
         
-        // Each frame: sprite x,y w,h
+        // Each frame: sprite rect:x,y,w,h
         for (const auto& frame : frames) {
-            std::cout << "sprite " << frame.bounds.x << "," << frame.bounds.y 
-                << " " << frame.bounds.w << "," << frame.bounds.h << "\n";
+            std::cout << "sprite rect:" << frame.bounds.x << "," << frame.bounds.y
+                << "," << frame.bounds.w << "," << frame.bounds.h << "\n";
         }
         
         return true;
@@ -817,7 +817,7 @@ void print_usage() {
     std::cout << tr("Usage: spratframes [OPTIONS] <input_image>\n\n")
         << tr("Detect sprite frame rectangles in spritesheets.\n\n")
         << tr("Output format:\n")
-        << tr("  SpratFrames format: path <input>, then sprite x,y w,h\n\n")
+        << tr("  SpratFrames format: path <input>, then sprite rect:x,y,w,h\n\n")
         << tr("Options:\n")
         << tr("  --has-rectangles          Spritesheet has rectangles surrounding sprites\n")
         << tr("  --rectangle-color COLOR   Color of rectangle borders (default: ")

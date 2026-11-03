@@ -13,8 +13,8 @@ void test_parse_atlas_line() {
     assert(sprat::core::parse_atlas_line("atlas 512,512", w, h));
     assert(w == 512 && h == 512);
     
-    assert(sprat::core::parse_atlas_line("atlas 1024 2048", w, h));
-    assert(w == 1024 && h == 2048);
+    // One way to write it: WIDTH,HEIGHT.
+    assert(!sprat::core::parse_atlas_line("atlas 1024 2048", w, h));
     
     assert(!sprat::core::parse_atlas_line("notatlas 512,512", w, h));
     assert(!sprat::core::parse_atlas_line("atlas 512", w, h));
@@ -26,7 +26,7 @@ void test_parse_sprite_line() {
     std::string error;
     
     // Modern format
-    assert(sprat::core::parse_sprite_line("sprite \"path/to/sprite.png\" 10,20 100,200", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"path/to/sprite.png\" rect:10,20,100,200", s, error));
     assert(s.path == "path/to/sprite.png");
     assert(s.x == 10 && s.y == 20);
     assert(s.w == 100 && s.h == 200);
@@ -34,19 +34,29 @@ void test_parse_sprite_line() {
     assert(!s.rotated);
 
     // Modern format with trim
-    assert(sprat::core::parse_sprite_line("sprite \"path/to/sprite.png\" 10,20 100,200 5,5 2,2", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"path/to/sprite.png\" rect:10,20,100,200 trim:5,5,2,2", s, error));
     assert(s.has_trim);
     assert(s.src_x == 5 && s.src_y == 5);
     assert(s.trim_right == 2 && s.trim_bottom == 2);
 
-    // Legacy format
-    assert(sprat::core::parse_sprite_line("sprite \"legacy.png\" 0 0 32 32", s, error));
-    assert(s.path == "legacy.png");
-    assert(s.x == 0 && s.y == 0 && s.w == 32 && s.h == 32);
+    // Rotated; options come in any order
+    assert(sprat::core::parse_sprite_line("sprite \"rot.png\" rotated rect:0,0,32,32 colors:16", s, error));
+    assert(s.rotated && s.w == 32 && s.colors == 16);
 
-    // Rotated
-    assert(sprat::core::parse_sprite_line("sprite \"rot.png\" 0,0 32,32 rotated", s, error));
-    assert(s.rotated);
+    // The old unlabeled forms, a missing or repeated rect, and unknown options are errors.
+    for (const char* line : {"sprite \"a.png\" 0 0 32 32",
+                             "sprite \"a.png\" 0,0 32,32",
+                             "sprite \"a.png\" rect:0,0,32,32 1,2 3,4",
+                             "sprite \"a.png\" trim:1,2,3,4",
+                             "sprite \"a.png\" rect:0,0,32,32 rect:0,0,32,32",
+                             "sprite \"a.png\" rect:0,0,32",
+                             "sprite \"a.png\" rect:0,0,32,32 slice=1,1,1,1",
+                             "sprite \"a.png\" rect:0,0,32,32 rotated:1",
+                             "sprite \"a.png\" rect:0,0,32,32 trim"}) {
+        error.clear();
+        assert(!sprat::core::parse_sprite_line(line, s, error));
+        assert(!error.empty());
+    }
 
     std::cout << "test_parse_sprite_line passed" << std::endl;
 }
@@ -66,8 +76,8 @@ void test_parse_layout() {
     std::string data = "atlas 512,512\n"
                        "scale 2.0\n"
                        "extrude 3\n"
-                       "sprite \"a.png\" 0,0 10,10\n"
-                       "sprite \"b.png\" 10,10 20,20 rotated\n";
+                       "sprite \"a.png\" rect:0,0,10,10\n"
+                       "sprite \"b.png\" rect:10,10,20,20 rotated\n";
     std::istringstream iss(data);
     sprat::core::Layout layout;
     std::string error;
@@ -88,19 +98,19 @@ void test_parse_layout_rejects_non_positive_atlas_dimensions() {
     std::string error;
 
     // Zero dimensions
-    std::istringstream z("atlas 0,0\nsprite \"a.png\" 0,0 0,0\n");
+    std::istringstream z("atlas 0,0\nsprite \"a.png\" rect:0,0,0,0\n");
     assert(!sprat::core::parse_layout(z, layout, error));
     assert(error.find("Atlas dimensions must be positive") != std::string::npos);
 
     // Negative width
     error.clear();
-    std::istringstream nw("atlas -1,100\nsprite \"a.png\" 0,0 1,1\n");
+    std::istringstream nw("atlas -1,100\nsprite \"a.png\" rect:0,0,1,1\n");
     assert(!sprat::core::parse_layout(nw, layout, error));
     assert(error.find("Atlas dimensions must be positive") != std::string::npos);
 
     // Negative height
     error.clear();
-    std::istringstream nh("atlas 100,-1\nsprite \"a.png\" 0,0 1,1\n");
+    std::istringstream nh("atlas 100,-1\nsprite \"a.png\" rect:0,0,1,1\n");
     assert(!sprat::core::parse_layout(nh, layout, error));
     assert(error.find("Atlas dimensions must be positive") != std::string::npos);
 
@@ -112,11 +122,9 @@ void test_parse_layout_rejects_non_positive_sprite_dimensions() {
     std::string error;
 
     // spratlayout never writes an empty sprite (a fully transparent image keeps 1x1).
-    for (const char* size : {"-1,10", "10,-1", "0,10", "10,0", "0 0 0 10", "0 0 10 0"}) {
+    for (const char* size : {"-1,10", "10,-1", "0,10", "10,0"}) {
         error.clear();
-        std::istringstream in(std::string("atlas 512,512\nsprite \"a.png\" ")
-                              + (std::string(size).find(',') != std::string::npos ? "0,0 " : "")
-                              + size + "\n");
+        std::istringstream in(std::string("atlas 512,512\nsprite \"a.png\" rect:0,0,") + size + "\n");
         assert(!sprat::core::parse_layout(in, layout, error));
         assert(error.find("sprite dimensions must be positive") != std::string::npos);
     }
@@ -133,20 +141,21 @@ void test_parse_layout_warnings() {
         "# made by hand\n"
         "atlas 64,64\n"
         "  # indented comment\n"
-        "sprite \"a.png\" 0 0 8 8\n"
-        "sprite \"b.png\" 8 0 8 8 1 1\n"
-        "sprite \"a.png\" 16,0 8,8\n"
+        "sprite \"a.png\" rect:0,0,8,8\n"
+        "sprite \"a.png\" rect:16,0,8,8\n"
         "path \"a.png\"\n"
         "- marker \"pivot\" point 1,1\n"
         "loop once\n");
     assert(sprat::core::parse_layout(in, layout, error));
-    assert(layout.sprites.size() == 3);
-    assert(layout.sprites[0].legacy_format && !layout.sprites[2].legacy_format);
-    assert(layout.warnings.size() == 2);
-    assert(layout.warnings[0].find("old numeric sprite format") != std::string::npos);
-    assert(layout.warnings[1] == "duplicate sprite path: a.png");
+    assert(layout.sprites.size() == 2);
+    assert(layout.warnings.size() == 1);
+    assert(layout.warnings[0] == "duplicate sprite path: a.png");
 
-    std::istringstream clean("atlas 64,64\nsprite \"a.png\" 0,0 8,8\n");
+    // multipack takes true or false only.
+    std::istringstream one("atlas 64,64\nmultipack 1\n");
+    assert(!sprat::core::parse_layout(one, layout, error));
+
+    std::istringstream clean("atlas 64,64\nsprite \"a.png\" rect:0,0,8,8\n");
     sprat::core::Layout clean_layout;
     assert(sprat::core::parse_layout(clean, clean_layout, error));
     assert(clean_layout.warnings.empty());
@@ -165,19 +174,19 @@ void test_parse_layout_rejects_sprite_out_of_bounds() {
     std::string error;
 
     // Sprite extends beyond right edge
-    std::istringstream r("atlas 512,512\nsprite \"a.png\" 500,0 100,100\n");
+    std::istringstream r("atlas 512,512\nsprite \"a.png\" rect:500,0,100,100\n");
     assert(!sprat::core::parse_layout(r, layout, error));
     assert(error.find("extends beyond atlas bounds") != std::string::npos);
 
     // Sprite extends beyond bottom edge
     error.clear();
-    std::istringstream b("atlas 512,512\nsprite \"a.png\" 0,500 100,100\n");
+    std::istringstream b("atlas 512,512\nsprite \"a.png\" rect:0,500,100,100\n");
     assert(!sprat::core::parse_layout(b, layout, error));
     assert(error.find("extends beyond atlas bounds") != std::string::npos);
 
     // Sprite that fits exactly should succeed
     error.clear();
-    std::istringstream ok("atlas 512,512\nsprite \"a.png\" 412,412 100,100\n");
+    std::istringstream ok("atlas 512,512\nsprite \"a.png\" rect:412,412,100,100\n");
     assert(sprat::core::parse_layout(ok, layout, error));
 
     std::cout << "test_parse_layout_rejects_sprite_out_of_bounds passed" << std::endl;
@@ -188,22 +197,12 @@ void test_parse_sprite_line_rejects_negative_position() {
     std::string error;
 
     // Modern format: negative x
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" -1,0 10,10", s, error));
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" rect:-1,0,10,10", s, error));
     assert(error.find("sprite position must not be negative") != std::string::npos);
 
     // Modern format: negative y
     error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,-1 10,10", s, error));
-    assert(error.find("sprite position must not be negative") != std::string::npos);
-
-    // Legacy format: negative x
-    error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" -1 0 10 10", s, error));
-    assert(error.find("sprite position must not be negative") != std::string::npos);
-
-    // Legacy format: negative y
-    error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0 -1 10 10", s, error));
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,-1,10,10", s, error));
     assert(error.find("sprite position must not be negative") != std::string::npos);
 
     std::cout << "test_parse_sprite_line_rejects_negative_position passed" << std::endl;
@@ -213,23 +212,18 @@ void test_parse_sprite_line_rejects_negative_trim() {
     sprat::core::Sprite s;
     std::string error;
 
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 10,10 1,2 3,4", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,10,10 trim:1,2,3,4", s, error));
     assert(s.has_trim && s.src_x == 1 && s.src_y == 2 && s.trim_right == 3 && s.trim_bottom == 4);
 
     // Modern format: any negative trim offset
-    for (const char* line : {"sprite \"a.png\" 0,0 10,10 -1,0 0,0",
-                             "sprite \"a.png\" 0,0 10,10 0,-1 0,0",
-                             "sprite \"a.png\" 0,0 10,10 0,0 -1,0",
-                             "sprite \"a.png\" 0,0 10,10 0,0 0,-2147483648"}) {
+    for (const char* line : {"sprite \"a.png\" rect:0,0,10,10 trim:-1,0,0,0",
+                             "sprite \"a.png\" rect:0,0,10,10 trim:0,-1,0,0",
+                             "sprite \"a.png\" rect:0,0,10,10 trim:0,0,-1,0",
+                             "sprite \"a.png\" rect:0,0,10,10 trim:0,0,0,-2147483648"}) {
         error.clear();
         assert(!sprat::core::parse_sprite_line(line, s, error));
         assert(error.find("trim offsets must not be negative") != std::string::npos);
     }
-
-    // Legacy format: negative crop offset
-    error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0 0 10 10 -1 0", s, error));
-    assert(error.find("trim offsets must not be negative") != std::string::npos);
 
     std::cout << "test_parse_sprite_line_rejects_negative_trim passed" << std::endl;
 }
@@ -238,11 +232,11 @@ void test_parse_layout_rotation_direction() {
     sprat::core::Layout layout;
     std::string error;
 
-    std::istringstream cw_default("atlas 10,10\nsprite \"a.png\" 0,0 10,10 rotated\n");
+    std::istringstream cw_default("atlas 10,10\nsprite \"a.png\" rect:0,0,10,10 rotated\n");
     assert(sprat::core::parse_layout(cw_default, layout, error));
     assert(!layout.rotate_ccw && !layout.has_rotation);
 
-    std::istringstream ccw("rotation ccw\natlas 10,10\nsprite \"a.png\" 0,0 10,10 rotated\n");
+    std::istringstream ccw("rotation ccw\natlas 10,10\nsprite \"a.png\" rect:0,0,10,10 rotated\n");
     assert(sprat::core::parse_layout(ccw, layout, error));
     assert(layout.rotate_ccw && layout.has_rotation);
 
@@ -266,34 +260,34 @@ void test_parse_layout_rejects_oversized_slice() {
     std::string error;
 
     // At scale 1 the bound is exact: 64 = 32 + 32 fits, 33 + 32 does not.
-    std::istringstream fits("atlas 64,64\nsprite \"a.png\" 0,0 64,64 slice=32,0,32,64\n");
+    std::istringstream fits("atlas 64,64\nsprite \"a.png\" rect:0,0,64,64 slice:32,0,32,64\n");
     assert(sprat::core::parse_layout(fits, layout, error));
-    std::istringstream wide("atlas 64,64\nsprite \"a.png\" 0,0 64,64 slice=33,0,32,0\n");
+    std::istringstream wide("atlas 64,64\nsprite \"a.png\" rect:0,0,64,64 slice:33,0,32,0\n");
     assert(!sprat::core::parse_layout(wide, layout, error));
     assert(error.find("wider than the image") != std::string::npos);
-    std::istringstream tall("atlas 64,64\nsprite \"a.png\" 0,0 64,64 slice=0,40,0,25\n");
+    std::istringstream tall("atlas 64,64\nsprite \"a.png\" rect:0,0,64,64 slice:0,40,0,25\n");
     assert(!sprat::core::parse_layout(tall, layout, error));
     assert(error.find("taller than the image") != std::string::npos);
 
     // Trim margins belong to the original image, so insets may reach into them.
-    std::istringstream trimmed("atlas 64,64\nsprite \"a.png\" 0,0 10,10 3,0 2,0 slice=8,0,7,0\n");
+    std::istringstream trimmed("atlas 64,64\nsprite \"a.png\" rect:0,0,10,10 trim:3,0,2,0 slice:8,0,7,0\n");
     assert(sprat::core::parse_layout(trimmed, layout, error));
 
     // A rotated sprite is stored turned, so its original width is the stored height.
-    std::istringstream rotated("atlas 64,64\nsprite \"a.png\" 0,0 10,20 rotated slice=10,0,10,5\n");
+    std::istringstream rotated("atlas 64,64\nsprite \"a.png\" rect:0,0,10,20 rotated slice:10,0,10,5\n");
     assert(sprat::core::parse_layout(rotated, layout, error));
 
     // A nine-patch's 1px marker border is not part of the image the insets refer to.
-    std::istringstream nine("atlas 64,64\nsprite \"p.9.png\" 0,0 10,10 1,1 1,1 slice=5,0,5,0\n");
+    std::istringstream nine("atlas 64,64\nsprite \"p.9.png\" rect:0,0,10,10 trim:1,1,1,1 slice:5,0,5,0\n");
     assert(sprat::core::parse_layout(nine, layout, error));
-    std::istringstream nine_wide("atlas 64,64\nsprite \"p.9.png\" 0,0 10,10 1,1 1,1 slice=6,0,5,0\n");
+    std::istringstream nine_wide("atlas 64,64\nsprite \"p.9.png\" rect:0,0,10,10 trim:1,1,1,1 slice:6,0,5,0\n");
     assert(!sprat::core::parse_layout(nine_wide, layout, error));
 
     // Scaled: 5 packed pixels at 0.5 may come from an original up to 11 pixels wide. The
     // scale line may follow the sprites.
-    std::istringstream scaled("atlas 64,64\nsprite \"a.png\" 0,0 5,5 slice=6,0,5,0\nscale 0.5\n");
+    std::istringstream scaled("atlas 64,64\nsprite \"a.png\" rect:0,0,5,5 slice:6,0,5,0\nscale 0.5\n");
     assert(sprat::core::parse_layout(scaled, layout, error));
-    std::istringstream scaled_wide("atlas 64,64\nsprite \"a.png\" 0,0 5,5 slice=6,0,6,0\nscale 0.5\n");
+    std::istringstream scaled_wide("atlas 64,64\nsprite \"a.png\" rect:0,0,5,5 slice:6,0,6,0\nscale 0.5\n");
     assert(!sprat::core::parse_layout(scaled_wide, layout, error));
     std::cout << "test_parse_layout_rejects_oversized_slice passed" << std::endl;
 }
@@ -313,19 +307,19 @@ void test_parse_layout_enforces_coordinate_limit() {
     assert(!sprat::core::parse_layout(big_extrude, layout, error));
 
     // The source size counts the trim the sprite had before packing.
-    std::istringstream full("atlas 16777216,8\nsprite \"a.png\" 0,0 16777216,8\n");
+    std::istringstream full("atlas 16777216,8\nsprite \"a.png\" rect:0,0,16777216,8\n");
     assert(sprat::core::parse_layout(full, layout, error));
-    std::istringstream trimmed("atlas 16777216,8\nsprite \"a.png\" 0,0 16777216,8 1,0 0,0\n");
+    std::istringstream trimmed("atlas 16777216,8\nsprite \"a.png\" rect:0,0,16777216,8 trim:1,0,0,0\n");
     assert(!sprat::core::parse_layout(trimmed, layout, error));
     assert(error.find("once its trim is restored") != std::string::npos);
 
     // Trims are scaled before the check: 8388607 * 2 + 4 = 16777218.
-    std::istringstream scaled("scale 2\natlas 8,8\nsprite \"a.png\" 0,0 4,4 8388607,0 0,0\n");
+    std::istringstream scaled("scale 2\natlas 8,8\nsprite \"a.png\" rect:0,0,4,4 trim:8388607,0,0,0\n");
     assert(!sprat::core::parse_layout(scaled, layout, error));
 
     // An alias keeps its own trim, so it is checked after expansion.
-    std::istringstream alias("atlas 8,8\nsprite \"a.png\" 0,0 4,4\n"
-                             "alias \"b.png\" \"a.png\" 16777216,0 0,0\n");
+    std::istringstream alias("atlas 8,8\nsprite \"a.png\" rect:0,0,4,4\n"
+                             "alias \"a.png\" -> \"b.png\" trim:16777216,0,0,0\n");
     assert(sprat::core::parse_layout(alias, layout, error));
     assert(!sprat::core::expand_layout_aliases(layout, error));
     assert(error.find("b.png") != std::string::npos);
@@ -355,38 +349,38 @@ void test_parse_sprite_line_slice() {
     std::string error;
 
     // Basic slice
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,10,10,10", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:10,10,10,10", s, error));
     assert(s.has_slice);
     assert(s.slice_left == 10 && s.slice_top == 10 && s.slice_right == 10 && s.slice_bottom == 10);
 
     // Zero insets
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=0,0,0,0", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:0,0,0,0", s, error));
     assert(s.has_slice);
     assert(s.slice_left == 0 && s.slice_top == 0 && s.slice_right == 0 && s.slice_bottom == 0);
 
     // Asymmetric insets
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,20,30,40", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:10,20,30,40", s, error));
     assert(s.has_slice);
     assert(s.slice_left == 10 && s.slice_top == 20 && s.slice_right == 30 && s.slice_bottom == 40);
 
     // Combined with rotated
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,10,10,10 rotated", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:10,10,10,10 rotated", s, error));
     assert(s.has_slice);
     assert(s.rotated);
     assert(s.slice_left == 10 && s.slice_top == 10);
 
     // Invalid: non-numeric
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=abc", s, error));
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:abc", s, error));
     assert(error.find("invalid slice value") != std::string::npos);
 
     // Invalid: negative value
     error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=-1,0,0,0", s, error));
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:-1,0,0,0", s, error));
     assert(error.find("invalid slice value") != std::string::npos);
 
     // Invalid: too few values
     error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=10,10,10", s, error));
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:10,10,10", s, error));
     assert(error.find("invalid slice value") != std::string::npos);
 
     std::cout << "test_parse_sprite_line_slice passed" << std::endl;
@@ -397,47 +391,47 @@ void test_parse_sprite_line_slice_fill_modes() {
     std::string error;
 
     // Explicit per-axis modes: repeat,stretch
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,repeat,stretch", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8,repeat,stretch", s, error));
     assert(s.has_slice);
     assert(s.slice_left == 8 && s.slice_top == 8 && s.slice_right == 8 && s.slice_bottom == 8);
     assert(s.slice_h == "repeat");
     assert(s.slice_v == "stretch");
 
     // Both mirror
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,mirror,mirror", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8,mirror,mirror", s, error));
     assert(s.has_slice);
     assert(s.slice_h == "mirror");
     assert(s.slice_v == "mirror");
 
     // 4 values only — modes default to stretch
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8", s, error));
     assert(s.has_slice);
     assert(s.slice_h == "stretch");
     assert(s.slice_v == "stretch");
 
     // Invalid mode name
     error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,invalid,stretch", s, error));
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8,invalid,stretch", s, error));
     assert(error.find("invalid slice value") != std::string::npos);
 
     // Fixed mode on both axes
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,fixed,fixed", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8,fixed,fixed", s, error));
     assert(s.has_slice);
     assert(s.slice_h == "fixed");
     assert(s.slice_v == "fixed");
 
     // Fixed on one axis, stretch on the other
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,fixed,stretch", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8,fixed,stretch", s, error));
     assert(s.slice_h == "fixed");
     assert(s.slice_v == "stretch");
 
-    assert(sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,repeat,fixed", s, error));
+    assert(sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8,repeat,fixed", s, error));
     assert(s.slice_h == "repeat");
     assert(s.slice_v == "fixed");
 
     // Only one mode provided (5 values) — should fail
     error.clear();
-    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" 0,0 64,64 slice=8,8,8,8,repeat", s, error));
+    assert(!sprat::core::parse_sprite_line("sprite \"a.png\" rect:0,0,64,64 slice:8,8,8,8,repeat", s, error));
     assert(error.find("invalid slice value") != std::string::npos);
 
     std::cout << "test_parse_sprite_line_slice_fill_modes passed" << std::endl;
@@ -447,28 +441,34 @@ void test_parse_alias_line() {
     sprat::core::Alias alias;
     std::string error;
 
-    assert(sprat::core::parse_alias_line("alias \"b.png\" \"a.png\"", alias, error));
+    assert(sprat::core::parse_alias_line("alias \"a.png\" -> \"b.png\"", alias, error));
     assert(alias.path == "b.png" && alias.canonical_path == "a.png");
     assert(!alias.has_trim);
 
-    assert(sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 3,4", alias, error));
+    assert(sprat::core::parse_alias_line("alias \"a.png\" -> \"b.png\" trim:1,2,3,4", alias, error));
     assert(alias.has_trim);
     assert(alias.trim_left == 1 && alias.trim_top == 2);
     assert(alias.trim_right == 3 && alias.trim_bottom == 4);
 
-    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2", alias, error));
-    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 x,4", alias, error));
-    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" -1,2 3,4", alias, error));
-    assert(!sprat::core::parse_alias_line("alias \"b.png\" \"a.png\" 1,2 3,4 5,6", alias, error));
+    for (const char* line : {"alias \"a.png\" -> \"b.png\" 1,2",
+                             "alias \"a.png\" -> \"b.png\" 1,2 3,4",
+                             "alias \"a.png\" -> \"b.png\" trim:1,2,x,4",
+                             "alias \"a.png\" -> \"b.png\" trim:-1,2,3,4",
+                             "alias \"a.png\" -> \"b.png\" trim:1,2,3,4 trim:1,2,3,4",
+                             "alias \"b.png\" \"a.png\"",
+                             "alias \"a.png\" > \"b.png\"",
+                             "alias \"a.png\" ->"}) {
+        assert(!sprat::core::parse_alias_line(line, alias, error));
+    }
     std::cout << "test_parse_alias_line passed" << std::endl;
 }
 
 void test_expand_layout_aliases() {
     std::istringstream iss("atlas 16,16\n"
                            "atlas 16,16\n"
-                           "sprite \"a.png\" 2,3 4,5 1,6 2,0 rotated\n"
-                           "alias \"b.png\" \"a.png\"\n"
-                           "alias \"c.png\" \"a.png\" 1,0 2,6\n");
+                           "sprite \"a.png\" rect:2,3,4,5 trim:1,6,2,0 rotated\n"
+                           "alias \"a.png\" -> \"b.png\"\n"
+                           "alias \"a.png\" -> \"c.png\" trim:1,0,2,6\n");
     sprat::core::Layout layout;
     std::string error;
     assert(sprat::core::parse_layout(iss, layout, error));
@@ -488,7 +488,7 @@ void test_expand_layout_aliases() {
     assert(c.x == 2 && c.y == 3 && c.w == 4 && c.h == 5 && c.rotated);
     assert(c.src_x == 1 && c.src_y == 0 && c.trim_right == 2 && c.trim_bottom == 6);
 
-    std::istringstream missing("atlas 4,4\nsprite \"a.png\" 0,0 4,4\nalias \"b.png\" \"x.png\"\n");
+    std::istringstream missing("atlas 4,4\nsprite \"a.png\" rect:0,0,4,4\nalias \"x.png\" -> \"b.png\"\n");
     assert(sprat::core::parse_layout(missing, layout, error));
     assert(!sprat::core::expand_layout_aliases(layout, error));
     assert(error.find("x.png") != std::string::npos);

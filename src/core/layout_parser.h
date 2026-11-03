@@ -43,9 +43,6 @@ struct Sprite {
     std::string slice_v = "stretch";
     std::vector<Marker> markers;
     std::string alias_of;  // Non-empty if this is an alias of another sprite
-    // Written in the old numeric form ("x y w h [left top]"), which has no right and
-    // bottom trim, so a trimmed sprite's original size can't be restored.
-    bool legacy_format = false;
 };
 
 // A duplicate sprite that reuses a canonical sprite's atlas region. The alias keeps
@@ -89,12 +86,17 @@ struct Layout {
     std::vector<std::string> warnings;
 };
 
+// Reads the value of a "rect:X,Y,WIDTH,HEIGHT" token: a position that isn't negative and a
+// positive size.
+bool parse_rect_value(const std::string& value, int& x, int& y, int& w, int& h, std::string& error);
+// sprite "PATH" rect:X,Y,W,H [trim:L,T,R,B] [rotated] [dither] [colors:N] [slice:L,T,R,B[,H,V]]
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error);
 bool parse_atlas_line(const std::string& line, int& width, int& height);
 bool parse_scale_line(const std::string& line, double& scale);
 bool parse_extrude_line(const std::string& line, int& extrude);
 bool parse_multipack_line(const std::string& line, bool& multipack);
 bool parse_rotation_line(const std::string& line, bool& rotate_ccw);
+// alias "ORIGINAL" -> "DUPLICATE" [trim:L,T,R,B]
 bool parse_alias_line(const std::string& line, Alias& out, std::string& error);
 bool parse_layout(std::istream& in, Layout& out, std::string& error);
 // Appends one sprite per alias, sharing its canonical sprite's atlas region, and

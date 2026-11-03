@@ -14,7 +14,7 @@ layout_file="$tmp_dir/layout.txt"
 cat > "$layout_file" <<'LAYOUT'
 atlas 100,200
 scale 1
-sprite "player.png" 10,20 30,40 5,5 5,5
+sprite "player.png" rect:10,20,30,40 trim:5,5,5,5
 LAYOUT
 
 markers_file="$tmp_dir/markers.txt"
@@ -53,7 +53,7 @@ grep -q "nhh=" "$tmp_dir/out.txt"
 
 # unity.meta has no rotation field: rotated sprites are refused, and the unity group
 # writes nothing at all when one of its members refuses the layout.
-printf 'atlas 100,50\nsprite "rot.png" 0,0 30,50 rotated\n' > "$tmp_dir/rotated.txt"
+printf 'atlas 100,50\nsprite "rot.png" rect:0,0,30,50 rotated\n' > "$tmp_dir/rotated.txt"
 if "$convert_bin" --transform unity.meta < "$tmp_dir/rotated.txt" > /dev/null 2>&1; then
   echo "unity.meta must refuse rotated sprites" >&2
   exit 1
@@ -66,12 +66,12 @@ if [ -e "$tmp_dir/unity_rotated" ]; then
   echo "unity group left partial output after a member failed" >&2
   exit 1
 fi
-printf 'atlas 100,50\nsprite "a.png" 0,0 30,50\n' | "$convert_bin" --transform unity --output-dir "$tmp_dir/unity_ok" > /dev/null
+printf 'atlas 100,50\nsprite "a.png" rect:0,0,30,50\n' | "$convert_bin" --transform unity --output-dir "$tmp_dir/unity_ok" > /dev/null
 [ -f "$tmp_dir/unity_ok/meta.meta" ] && [ -f "$tmp_dir/unity_ok/json.json" ]
 
 # The .anim clips must reference the GUID that the group's .meta gives the texture, with or
 # without --atlas; with --atlas the .meta is named after the texture, as Unity requires.
-printf 'atlas 16,8\nsprite "walk_1.png" 0,0 8,8\nsprite "walk_2.png" 8,0 8,8\n' > "$tmp_dir/walk.txt"
+printf 'atlas 16,8\nsprite "walk_1.png" rect:0,0,8,8\nsprite "walk_2.png" rect:8,0,8,8\n' > "$tmp_dir/walk.txt"
 check_unity_guids() {
   local dir="$1" meta="$2" meta_guid anim_guids
   meta_guid="$(sed -n 's/^guid: //p' "$dir/$meta")"
@@ -89,7 +89,7 @@ check_unity_guids "$tmp_dir/unity_guid_atlas" atlas.png.meta
 
 # unity.meta: the sprite rect is the trimmed content, so pivot and border are relative to it;
 # IDs are signed 64-bit and spriteID a 32-hex GUID; names that YAML would misread are quoted.
-printf 'atlas 64,64\nsprite "c.png" 0,0 10,10 10,10 10,10\n' > "$tmp_dir/trimmed.txt"
+printf 'atlas 64,64\nsprite "c.png" rect:0,0,10,10 trim:10,10,10,10\n' > "$tmp_dir/trimmed.txt"
 printf 'path "c.png"\n- marker "pivot" point 10,10\n' > "$tmp_dir/trimmed.markers"
 "$convert_bin" --transform unity.meta --markers "$tmp_dir/trimmed.markers" < "$tmp_dir/trimmed.txt" > "$tmp_dir/trimmed.meta"
 grep -qF 'pivot: {x: 0, y: 1}' "$tmp_dir/trimmed.meta"
@@ -106,17 +106,17 @@ if [ -n "$dupes" ]; then
   echo "unity.meta has duplicate TextureImporter keys: $dupes" >&2
   exit 1
 fi
-printf 'atlas 8,8\nsprite "a: b.png" 0,0 8,8\n' | "$convert_bin" --transform unity.meta | grep -qF 'name: "a: b"'
-printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/anim.txt"
+printf 'atlas 8,8\nsprite "a: b.png" rect:0,0,8,8\n' | "$convert_bin" --transform unity.meta | grep -qF 'name: "a: b"'
+printf 'atlas 8,8\nsprite "a.png" rect:0,0,8,8\n' > "$tmp_dir/anim.txt"
 printf 'animation "#idle"\n- frame 0\n' > "$tmp_dir/anim.anims"
 "$convert_bin" --transform unity.anim --animations "$tmp_dir/anim.anims" --output-dir "$tmp_dir/anim_out" < "$tmp_dir/anim.txt" > /dev/null
-anim_meta="$(printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' | "$convert_bin" --transform unity.meta | sed -n 's/^      internalID: //p')"
+anim_meta="$(printf 'atlas 8,8\nsprite "a.png" rect:0,0,8,8\n' | "$convert_bin" --transform unity.meta | sed -n 's/^      internalID: //p')"
 grep -qF 'm_Name: "#idle"' "$tmp_dir/anim_out/"*.anim
 grep -qF "value: {fileID: $anim_meta," "$tmp_dir/anim_out/"*.anim
 
 # multipack: one <atlas>.meta per atlas with its own GUID; .anim frames reference the GUID of
 # the atlas their sprite was packed into
-printf 'atlas 32,32\nsprite "a.png" 0,0 16,16\natlas 32,32\nsprite "c.png" 0,0 8,8\n' > "$tmp_dir/mp.txt"
+printf 'atlas 32,32\nsprite "a.png" rect:0,0,16,16\natlas 32,32\nsprite "c.png" rect:0,0,8,8\n' > "$tmp_dir/mp.txt"
 printf 'animation "walk"\n- frame 0\n- frame 1\n' > "$tmp_dir/mp.anims"
 "$convert_bin" --transform unity --animations "$tmp_dir/mp.anims" --output-dir "$tmp_dir/mp_unity" < "$tmp_dir/mp.txt" > /dev/null
 [ -f "$tmp_dir/mp_unity/atlas_0.png.meta" ] && [ -f "$tmp_dir/mp_unity/atlas_1.png.meta" ]
@@ -142,18 +142,18 @@ grep -qF 'm_Name: ../up' "$tmp_dir/paths/out/_._up.anim"
 grep -qF 'm_Name: sub/dir' "$tmp_dir/paths/out/sub_dir.anim"
 
 # unity.meta without a pivot marker: the original image's center, relative to the trimmed rect
-printf 'atlas 64,64\nsprite "plain.png" 0,0 10,10\nsprite "trim.png" 10,0 10,10 10,0 0,10\n' > "$tmp_dir/nopivot.txt"
+printf 'atlas 64,64\nsprite "plain.png" rect:0,0,10,10\nsprite "trim.png" rect:10,0,10,10 trim:10,0,0,10\n' > "$tmp_dir/nopivot.txt"
 "$convert_bin" --transform unity.meta < "$tmp_dir/nopivot.txt" > "$tmp_dir/nopivot.meta"
 grep -qF 'pivot: {x: 0.5, y: 0.5}' "$tmp_dir/nopivot.meta"
 grep -qF 'pivot: {x: 0, y: 0}' "$tmp_dir/nopivot.meta"
 
 # unity.meta nine-patch: border is relative to the trimmed rect inside the content, not the file
-printf 'atlas 16,16\nsprite "padded.9.png" 0,0 8,8 4,3 4,3 slice=4,4,2,2\n' \
+printf 'atlas 16,16\nsprite "padded.9.png" rect:0,0,8,8 trim:4,3,4,3 slice:4,4,2,2\n' \
   | "$convert_bin" --transform unity.meta | grep -qF 'border: {x: 1, y: 0, z: 0, w: 2}'
 
 # Animation names that Windows treats as devices ("con", "lpt1") or trims ("aux.") still get
 # a clip file each, with a name every platform can write.
-printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' > "$tmp_dir/reserved.txt"
+printf 'atlas 8,8\nsprite "a.png" rect:0,0,8,8\n' > "$tmp_dir/reserved.txt"
 printf 'animation "con"\n- frame 0\nanimation "lpt1"\n- frame 0\nanimation "aux."\n- frame 0\n' \
   > "$tmp_dir/reserved.anims"
 "$convert_bin" --transform unity.anim --animations "$tmp_dir/reserved.anims" \

@@ -85,8 +85,11 @@ atlas \fIwidth,height\fR
 .br
 scale \fIfactor\fR
 .br
-sprite "\fIpath\fR" \fIx,y\fR \fIw,h\fR [\fIleft,top right,bottom\fR] [rotated] [dither] [colors=N] [slice=L,T,R,B[,H,V]]
+sprite "\fIpath\fR" rect:\fIx,y,w,h\fR [trim:\fIleft,top,right,bottom\fR] [rotated] [dither] [colors:\fIN\fR] [slice:\fIL,T,R,B\fR[,\fIH,V\fR]]
+.br
+alias "\fIoriginal\fR" -> "\fIduplicate\fR" [trim:\fIleft,top,right,bottom\fR]
 .PP
+The tokens after a sprite's path come in any order, each at most once; \fBrect:\fR is required and its size must be positive.
 If \fB\-\-trim\-transparent\fR is enabled, trim offsets are included per sprite.
 .PP
 Atlas sides, the extrude, and each sprite's size with its trim restored must not exceed
@@ -95,8 +98,8 @@ marker values. This matches the limit sprat-lib enforces when loading raw metada
 .PP
 If rotation is used for a sprite, the sprite line includes the \fBrotated\fR token. Rotated sprites are turned 90 degrees clockwise, or counter-clockwise when the layout contains a \fBrotation ccw\fR line (written by \fB\-\-rotate\-direction ccw\fR).
 .PP
-The optional \fBslice=\fR token defines nine-slice insets and per-axis fill modes.
-The format is \fBslice=L,T,R,B[,H_MODE,V_MODE]\fR where \fBL\fR, \fBT\fR, \fBR\fR, \fBB\fR are
+The optional \fBslice:\fR token defines nine-slice insets and per-axis fill modes.
+The format is \fBslice:L,T,R,B[,H_MODE,V_MODE]\fR where \fBL\fR, \fBT\fR, \fBR\fR, \fBB\fR are
 non-negative integer insets and \fBH_MODE\fR/\fBV_MODE\fR are optional fill modes for the
 horizontal and vertical stretchable regions (\fBstretch\fR, \fBrepeat\fR, \fBmirror\fR, or \fBfixed\fR;
 default: \fBstretch\fR).
@@ -108,7 +111,7 @@ rounding excess from the right and bottom insets, so exported insets always fit 
 .PP
 Android nine-patch images (\fB*.9.png\fR) are detected automatically: the 1-pixel marker
 border is stripped and the stretch region is read from the opaque black pixels on the top
-row and left column.  A \fBslice=\fR token is emitted in the output layout without any manual
+row and left column.  A \fBslice:\fR token is emitted in the output layout without any manual
 annotation.
 .PP
 Input modes:
@@ -155,11 +158,9 @@ rotation \fBcw\fR|\fBccw\fR (direction of rotated sprites; default \fBcw\fR)
 .br
 scale \fIfactor\fR
 .br
-sprite lines (the old numeric format \fIx y w h\fR [\fIleft top\fR] still loads, with a warning: it has no right and bottom trim)
+sprite and alias lines, as written by \fBspratlayout\fR
 .br
-current sprite lines may include \fBrotated\fR, \fBdither\fR, \fBcolors=N\fR, and \fBslice=L,T,R,B[,H,V]\fR tokens.
-.br
-\fBcolors=N\fR posterizes to N levels per RGB channel (2-256), i.e. at most N\(ha3 colors. Trim offsets must not be negative.
+\fBcolors:N\fR posterizes to N levels per RGB channel (2-256), i.e. at most N\(ha3 colors. Trim offsets must not be negative.
 .PP
 Unknown options, and options missing their value, are rejected with an error.
 .PP
@@ -183,7 +184,8 @@ Optional \fB\-\-markers\fR and \fB\-\-animations\fR files add markers (pivots, h
 Without them, markers and animations are read from the layout stream.
 A markers \fBpath\fR that matches no sprite is reported and its markers are ignored, rather than made global.
 Animation names must be unique. The \fBfps\fR and \fBloop\fR lines set defaults for every animation without its own, wherever they appear.
-A bare number in \fB\- frame\fR is a sprite index; frames that match no sprite, malformed markers, and alias \fBflip\fR values other than \fBh\fR, \fBv\fR or \fBhv\fR are ignored with a warning.
+A \fB\- frame\fR line lists one or more frames: sprite paths, names, or indexes (a bare number), and ranges such as \fB0..7\fR or \fBrun_01..run_08\fR.
+No line is skipped silently: a line a file doesn't know, values that don't fit, frames that match no sprite, a second pivot for a sprite, an animation without frames, and alias \fBflip\fR values other than \fBh\fR, \fBv\fR or \fBhv\fR are reported. An alias of an unknown animation, or a cycle of aliases, is an error.
 .PP
 If \fB\-\-auto\-animations\fR is enabled, frames are automatically grouped into animations based on common name prefixes and numeric suffixes, ordered by name (\fBrun_2\fR before \fBrun_10\fR).
 Layout \fBalias\fR lines are expanded into frames that share the canonical sprite's atlas region; the \fBalias_of\fR sprite field holds the canonical path (empty for regular sprites).
@@ -326,7 +328,7 @@ Split into multiple atlases if they don't fit in the specified max dimensions.
 Reuse positions of unchanged sprites from the previous run and pack only new or changed sprites into the remaining space, keeping coordinates stable across iterations. Single atlas only; falls back to a full repack if the incremental fit fails. In \fBpot\fR mode the atlas keeps power-of-two sides (a full repack runs when the reused positions cannot fit them within the limits); \fBgrid\fR mode ignores this option. Also available as profile key \fBincremental=true\fR.
 .TP
 \fB\-\-deduplicate\fR none|exact|perceptual
-Pack one copy of duplicate sprites and emit \fBalias\fR lines for the rest. \fBexact\fR merges pixel-identical sprites (content hash). \fBperceptual\fR merges near-identical sprites: a dHash selects candidate pairs, which are merged only if every RGBA channel of every pixel is within \fB\-\-dedup\-tolerance\fR (pixels fully transparent in both are ignored). Each duplicate is compared against its group's canonical sprite, so differences do not accumulate across chains. Sprites with different nine-slice insets are never merged. An alias whose trim offsets differ from its canonical sprite's keeps its own: \fBalias "b.png" "a.png" \fIleft\fB,\fItop right\fB,\fIbottom\fR. Default: \fBnone\fR.
+Pack one copy of duplicate sprites and emit \fBalias\fR lines for the rest. \fBexact\fR merges pixel-identical sprites (content hash). \fBperceptual\fR merges near-identical sprites: a dHash selects candidate pairs, which are merged only if every RGBA channel of every pixel is within \fB\-\-dedup\-tolerance\fR (pixels fully transparent in both are ignored). Each duplicate is compared against its group's canonical sprite, so differences do not accumulate across chains. Sprites with different nine-slice insets are never merged. An alias whose trim offsets differ from its canonical sprite's keeps its own: \fBalias "a.png" -> "b.png" trim:\fIleft\fB,\fItop\fB,\fIright\fB,\fIbottom\fR. Default: \fBnone\fR.
 .TP
 \fB\-\-dedup\-threshold\fR \fIN\fR
 Maximum Hamming distance (0-64) between perceptual hashes for a pair to be compared by \fB\-\-deduplicate perceptual\fR. Higher values consider more pairs (slower) but never merge sprites that fail the pixel check. Default: \fB5\fR.

@@ -45,8 +45,8 @@ layout_file="$tmp_dir/edge_layout.txt"
 cat > "$layout_file" <<EOF
 atlas 10,2
 scale 1
-sprite "$(fix_path "$frames_dir/green5x2.png")" 0,0 5,2
-sprite "$(fix_path "$frames_dir/red5x2.png")" 5,0 5,2
+sprite "$(fix_path "$frames_dir/green5x2.png")" rect:0,0,5,2
+sprite "$(fix_path "$frames_dir/red5x2.png")" rect:5,0,5,2
 EOF
 
 edge_sheet="$tmp_dir/edge.png"
@@ -78,8 +78,8 @@ cat > "$layout_file" <<EOF
 atlas 16,4
 scale 1
 extrude 2
-sprite "$(fix_path "$frames_dir/green4x4.png")" 2,0 4,4
-sprite "$(fix_path "$frames_dir/red4x4.png")" 10,0 4,4
+sprite "$(fix_path "$frames_dir/green4x4.png")" rect:2,0,4,4
+sprite "$(fix_path "$frames_dir/red4x4.png")" rect:10,0,4,4
 EOF
 
 extrude_sheet="$tmp_dir/extrude.png"
@@ -122,7 +122,7 @@ expect_reject() {
 layout_file="$tmp_dir/overflow_scaled.txt"
 cat > "$layout_file" <<EOF
 atlas 1952257862,1
-sprite "$(fix_path "$frames_dir/red5x2.png")" 1952257861,0 1,1
+sprite "$(fix_path "$frames_dir/red5x2.png")" rect:1952257861,0,1,1
 EOF
 expect_reject "scaled atlas overflow" "$layout_file" --output-scale 1.1
 
@@ -130,7 +130,7 @@ expect_reject "scaled atlas overflow" "$layout_file" --output-scale 1.1
 layout_file="$tmp_dir/overflow_parser.txt"
 cat > "$layout_file" <<EOF
 atlas 16,16
-sprite "$(fix_path "$frames_dir/red5x2.png")" 2147483647,0 1,1
+sprite "$(fix_path "$frames_dir/red5x2.png")" rect:2147483647,0,1,1
 EOF
 expect_reject "layout x+w overflow" "$layout_file"
 

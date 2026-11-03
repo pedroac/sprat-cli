@@ -87,18 +87,18 @@ img.save(sys.argv[1])
 PYEOF
 
 output=$("$spratlayout_bin" "$nine_patch_dir" 2>&1)
-if echo "$output" | grep -q "slice=2,2,2,2"; then
+if echo "$output" | grep -q "slice:2,2,2,2"; then
     echo "  PASS: nine-patch slice insets detected correctly"
 else
-    echo "  FAILED: expected 'slice=2,2,2,2' in output, got:"
+    echo "  FAILED: expected 'slice:2,2,2,2' in output, got:"
     echo "$output"
     exit 1
 fi
 # Content should be 10x8 (12-2 x 10-2), not the full 12x10
-if echo "$output" | grep -q "0,0 10,8"; then
+if echo "$output" | grep -q "rect:0,0,10,8"; then
     echo "  PASS: content dimensions (10x8) are correct"
 else
-    echo "  FAILED: expected '0,0 10,8' in output, got:"
+    echo "  FAILED: expected 'rect:0,0,10,8' in output, got:"
     echo "$output"
     exit 1
 fi
@@ -110,7 +110,7 @@ fi
 #                  left-col rows 5..10 → slice_top=4, slice_bottom=2.
 # Trim values include the 1px nine-patch border offset:
 #   trim_left=1+3=4, trim_top=1+2=3, trim_right=1+(14-1-10)=4, trim_bottom=1+(12-1-9)=3
-# Expected: sprite "..." 0,0 8,8 4,3 4,3 slice=4,4,2,2
+# Expected: sprite "..." rect:0,0,8,8 trim:4,3,4,3 slice:4,4,2,2
 echo "Test 7: nine-patch with --trim-transparent"
 trim_nine_dir="$tmp_dir/nine_patch_trim"
 mkdir -p "$trim_nine_dir"
@@ -139,18 +139,18 @@ img.save(sys.argv[1])
 PYEOF
 
 output=$("$spratlayout_bin" --trim-transparent "$trim_nine_dir" 2>&1)
-if echo "$output" | grep -q "slice=4,4,2,2"; then
+if echo "$output" | grep -q "slice:4,4,2,2"; then
     echo "  PASS: nine-patch slice insets detected correctly with --trim-transparent"
 else
-    echo "  FAILED: expected 'slice=4,4,2,2' in output, got:"
+    echo "  FAILED: expected 'slice:4,4,2,2' in output, got:"
     echo "$output"
     exit 1
 fi
 # After trimming, content is 8x8 with trim offsets 3,2 3,2
-if echo "$output" | grep -qE "0,0 8,8 4,3 4,3"; then
+if echo "$output" | grep -qE "rect:0,0,8,8 trim:4,3,4,3"; then
     echo "  PASS: trimmed dimensions and offsets are correct"
 else
-    echo "  FAILED: expected '0,0 8,8 4,3 4,3' in output, got:"
+    echo "  FAILED: expected 'rect:0,0,8,8 trim:4,3,4,3' in output, got:"
     echo "$output"
     exit 1
 fi
@@ -168,10 +168,9 @@ PYEOF
 
 output=$("$spratlayout_bin" "$tiny_nine_dir" 2>&1)
 # Must produce a sprite entry with positive w and h (2x2, not 0x0)
-if echo "$output" | grep -qP "sprite .* 0,0 [1-9]\d*,[1-9]\d*" 2>/dev/null ||
-   echo "$output" | grep -qE "sprite .* 0,0 [0-9]+,[0-9]+" 2>/dev/null; then
+if echo "$output" | grep -qE "sprite .* rect:0,0,[1-9][0-9]*,[1-9][0-9]*" 2>/dev/null; then
     # Extract just the dimensions to confirm they're non-zero
-    dims=$(echo "$output" | grep -oE "0,0 [0-9]+,[0-9]+" | head -1)
+    dims=$(echo "$output" | grep -oE "rect:0,0,[0-9]+,[0-9]+" | head -1)
     echo "  PASS: tiny .9.png processed without crash, dimensions: $dims"
 else
     echo "  FAILED: expected a sprite line in output, got:"
@@ -184,7 +183,7 @@ for name in "nul.txt" "COM3.json" "trailing." "trailing " "a?b.txt"; do
     cat > "$tmp_dir/badname.jsonnet" <<EOF
 { extension: ".txt", files: [{ filename: "$name", content: "x" }] }
 EOF
-    if printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' | "$spratconvert_bin" --transform "$tmp_dir/badname.jsonnet" \
+    if printf 'atlas 8,8\nsprite "a.png" rect:0,0,8,8\n' | "$spratconvert_bin" --transform "$tmp_dir/badname.jsonnet" \
         --output-dir "$tmp_dir/badname_out" > /dev/null 2> "$tmp_dir/badname.err"; then
         echo "  FAILED: output file name '$name' was accepted"
         exit 1
@@ -195,7 +194,7 @@ done
 cat > "$tmp_dir/goodname.jsonnet" <<'EOF'
 { extension: ".txt", files: [{ filename: "console.txt", content: "x" }, { filename: "com10.txt", content: "y" }] }
 EOF
-printf 'atlas 8,8\nsprite "a.png" 0,0 8,8\n' | "$spratconvert_bin" --transform "$tmp_dir/goodname.jsonnet" \
+printf 'atlas 8,8\nsprite "a.png" rect:0,0,8,8\n' | "$spratconvert_bin" --transform "$tmp_dir/goodname.jsonnet" \
     --output-dir "$tmp_dir/goodname_out" > /dev/null
 [ -f "$tmp_dir/goodname_out/console.txt" ] && [ -f "$tmp_dir/goodname_out/com10.txt" ]
 

@@ -124,12 +124,12 @@ EOF
 echo "Test 1: frames are numbered in reading order"
 "$frames_bin" "$(fix_path "$tmp_dir/rows.png")" | grep '^sprite' > "$tmp_dir/rows.txt"
 cat > "$tmp_dir/rows.expected" <<'EOF'
-sprite 2,2 6,6
-sprite 27,2 8,8
-sprite 52,2 10,10
-sprite 77,2 12,12
-sprite 2,22 12,12
-sprite 27,22 6,6
+sprite rect:2,2,6,6
+sprite rect:27,2,8,8
+sprite rect:52,2,10,10
+sprite rect:77,2,12,12
+sprite rect:2,22,12,12
+sprite rect:27,22,6,6
 EOF
 diff "$tmp_dir/rows.expected" "$tmp_dir/rows.txt"
 
@@ -140,35 +140,35 @@ if grep -q '^background' "$tmp_dir/packed.txt"; then
     exit 1
 fi
 [ "$(grep -c '^sprite' "$tmp_dir/packed.txt")" -eq 2 ]
-grep -qx 'sprite 0,0 8,8' "$tmp_dir/packed.txt"
+grep -qx 'sprite rect:0,0,8,8' "$tmp_dir/packed.txt"
 
 echo "Test 3: background-colored pixels inside a sprite are kept"
 "$frames_bin" "$(fix_path "$tmp_dir/magenta.png")" > "$tmp_dir/magenta.txt"
 grep -qx 'background ff00ff' "$tmp_dir/magenta.txt"
 [ "$(grep -c '^sprite' "$tmp_dir/magenta.txt")" -eq 1 ]
-grep -qx 'sprite 4,4 16,16' "$tmp_dir/magenta.txt"
+grep -qx 'sprite rect:4,4,16,16' "$tmp_dir/magenta.txt"
 
 echo "Test 3b: a frame covering a corner does not hide a solid background"
 "$frames_bin" "$(fix_path "$tmp_dir/corner_sprite.png")" > "$tmp_dir/corner_sprite.txt"
 grep -qx 'background ff00ff' "$tmp_dir/corner_sprite.txt"
 grep '^sprite' "$tmp_dir/corner_sprite.txt" > "$tmp_dir/corner_sprite.sprites"
-printf 'sprite 2,2 11,11\nsprite 30,10 10,10\n' | diff - "$tmp_dir/corner_sprite.sprites"
+printf 'sprite rect:2,2,11,11\nsprite rect:30,10,10,10\n' | diff - "$tmp_dir/corner_sprite.sprites"
 
 echo "Test 4: --has-rectangles finds grid cells that share border lines"
 "$frames_bin" --has-rectangles "$(fix_path "$tmp_dir/grid.png")" | grep '^sprite' > "$tmp_dir/grid.txt"
 cat > "$tmp_dir/grid.expected" <<'EOF'
-sprite 2,2 12,12
-sprite 16,2 12,12
-sprite 30,2 12,12
-sprite 2,16 12,12
-sprite 16,16 12,12
+sprite rect:2,2,12,12
+sprite rect:16,2,12,12
+sprite rect:30,2,12,12
+sprite rect:2,16,12,12
+sprite rect:16,16,12,12
 EOF
 diff "$tmp_dir/grid.expected" "$tmp_dir/grid.txt"
 
 echo "Test 5: --tolerance bridges gaps without growing frames or passing --min-size"
 for t in 1 2 3; do
     "$frames_bin" --tolerance "$t" "$(fix_path "$tmp_dir/tolerance.png")" | grep '^sprite' > "$tmp_dir/tolerance_$t.txt"
-    if [ "$(cat "$tmp_dir/tolerance_$t.txt")" != "sprite 3,3 6,4" ]; then
+    if [ "$(cat "$tmp_dir/tolerance_$t.txt")" != "sprite rect:3,3,6,4" ]; then
         echo "FAILED: --tolerance $t gave:" >&2
         cat "$tmp_dir/tolerance_$t.txt" >&2
         exit 1
@@ -178,30 +178,30 @@ done
 echo "Test 6: a tall frame does not swallow the rows below it"
 "$frames_bin" "$(fix_path "$tmp_dir/tall.png")" | grep '^sprite' > "$tmp_dir/tall.txt"
 cat > "$tmp_dir/tall.expected" <<'EOF'
-sprite 2,1 8,55
-sprite 20,3 10,20
-sprite 40,3 10,20
-sprite 60,3 10,20
-sprite 20,33 10,20
-sprite 40,33 10,20
-sprite 60,33 10,20
+sprite rect:2,1,8,55
+sprite rect:20,3,10,20
+sprite rect:40,3,10,20
+sprite rect:60,3,10,20
+sprite rect:20,33,10,20
+sprite rect:40,33,10,20
+sprite rect:60,33,10,20
 EOF
 diff "$tmp_dir/tall.expected" "$tmp_dir/tall.txt"
 
 echo "Test 7: boxes merge only when one mostly covers the other"
 "$frames_bin" "$(fix_path "$tmp_dir/merge.png")" | grep '^sprite' > "$tmp_dir/merge.txt"
 cat > "$tmp_dir/merge.expected" <<'EOF'
-sprite 2,2 13,19
-sprite 8,10 11,19
-sprite 30,2 20,20
+sprite rect:2,2,13,19
+sprite rect:8,10,11,19
+sprite rect:30,2,20,20
 EOF
 diff "$tmp_dir/merge.expected" "$tmp_dir/merge.txt"
 
 echo "Test 8: --has-rectangles skips empty boxes on a solid background"
 "$frames_bin" --has-rectangles "$(fix_path "$tmp_dir/whiteboxes.png")" | grep '^sprite' > "$tmp_dir/whiteboxes.txt"
 cat > "$tmp_dir/whiteboxes.expected" <<'EOF'
-sprite 5,5 16,16
-sprite 49,5 16,16
+sprite rect:5,5,16,16
+sprite rect:49,5,16,16
 EOF
 diff "$tmp_dir/whiteboxes.expected" "$tmp_dir/whiteboxes.txt"
 

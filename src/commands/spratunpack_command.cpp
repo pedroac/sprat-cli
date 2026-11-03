@@ -387,22 +387,34 @@ private:
                 continue;
             }
 
-            // spratframes line: "sprite x,y w,h [rotated]", named by position.
-            std::vector<std::string> tokens;
+            // spratframes line: "sprite rect:X,Y,W,H [rotated]", named by position.
+            SpriteFrame frame;
+            bool has_rect = false;
             std::istringstream liss(line.substr(pos));
             std::string token;
             while (liss >> token) {
-                tokens.push_back(token);
+                std::string error;
+                if (token.starts_with("rect:") && !has_rect) {
+                    if (!sprat::core::parse_rect_value(token.substr(5), frame.frame.x, frame.frame.y,
+                                                       frame.frame.w, frame.frame.h, error)) {
+                        std::cerr << tr("Error: Invalid sprite line: ") << line << " (" << error << ")\n";
+                        return false;
+                    }
+                    has_rect = true;
+                } else if (token == "rotated" && !frame.rotated) {
+                    frame.rotated = true;
+                } else {
+                    std::cerr << tr("Error: Invalid sprite line: ") << line << " ("
+                              << tr("unexpected ") << token << ")\n";
+                    return false;
+                }
             }
-            SpriteFrame frame;
-            if (tokens.size() < 2 ||
-                !sprat::core::parse_pair(tokens[0], frame.frame.x, frame.frame.y) ||
-                !sprat::core::parse_pair(tokens[1], frame.frame.w, frame.frame.h)) {
-                std::cerr << tr("Error: Invalid sprite line: ") << line << "\n";
+            if (!has_rect) {
+                std::cerr << tr("Error: Invalid sprite line: ") << line << " ("
+                          << tr("sprite line has no rect:X,Y,WIDTH,HEIGHT") << ")\n";
                 return false;
             }
             frame.name = "sprite_" + std::to_string(index++);
-            frame.rotated = std::ranges::find(tokens, "rotated") != tokens.end();
             frames_.push_back(frame);
         }
         for (auto& frame : frames_) {

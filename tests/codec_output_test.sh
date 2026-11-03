@@ -48,7 +48,7 @@ for y in range(30):
             im.putpixel((x, y), (30, 160, 220, int(255 * y / 29)))
 im.save(sys.argv[1])
 EOF
-printf 'atlas 61,30\nsprite "%s" 0,0 61,30\n' "$(fix_path "$tmp_dir/tex.png")" > "$tmp_dir/layout.txt"
+printf 'atlas 61,30\nsprite "%s" rect:0,0,61,30\n' "$(fix_path "$tmp_dir/tex.png")" > "$tmp_dir/layout.txt"
 "$pack_bin" < "$tmp_dir/layout.txt" > "$tmp_dir/ref.png"
 
 available() {

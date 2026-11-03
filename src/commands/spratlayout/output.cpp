@@ -22,7 +22,7 @@ std::string relative_layout_path(const std::string& path, const fs::path& root) 
 }
 
 void write_trim(std::ostream& output, int left, int top, int right, int bottom) {
-    output << " " << left << "," << top << " " << right << "," << bottom;
+    output << " trim:" << left << "," << top << "," << right << "," << bottom;
 }
 
 } // namespace
@@ -63,9 +63,8 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
         output << "atlas " << atlases[i].width << "," << atlases[i].height << "\n";
         for (size_t si : sprites_by_atlas[i]) {
             const auto& s = sprites[si];
-            output << "sprite " << to_quoted(relative_layout_path(s.path, options.root)) << " "
-                   << s.x << "," << s.y << " "
-                   << s.w << "," << s.h;
+            output << "sprite " << to_quoted(relative_layout_path(s.path, options.root))
+                   << " rect:" << s.x << "," << s.y << "," << s.w << "," << s.h;
             if (s.trim_left || s.trim_top || s.trim_right || s.trim_bottom) {
                 write_trim(output, s.trim_left, s.trim_top, s.trim_right, s.trim_bottom);
             }
@@ -73,15 +72,15 @@ std::string build_layout_output_text(const std::vector<Atlas>& atlases,
                 output << " rotated";
             }
             if (s.has_slice) {
-                output << " slice=" << s.slice_left << "," << s.slice_top
+                output << " slice:" << s.slice_left << "," << s.slice_top
                        << "," << s.slice_right << "," << s.slice_bottom;
             }
             output << "\n";
         }
     }
     for (const auto& alias : aliases) {
-        output << "alias " << to_quoted(relative_layout_path(alias.path, options.root))
-               << " " << to_quoted(relative_layout_path(alias.canonical_path, options.root));
+        output << "alias " << to_quoted(relative_layout_path(alias.canonical_path, options.root))
+               << " -> " << to_quoted(relative_layout_path(alias.path, options.root));
         if (alias.has_trim) {
             write_trim(output, alias.trim_left, alias.trim_top, alias.trim_right, alias.trim_bottom);
         }

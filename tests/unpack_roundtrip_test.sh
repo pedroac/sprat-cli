@@ -70,8 +70,8 @@ layout="$tmp_dir/layout.txt"
 {
     echo "root \"$(fix_path "$tmp_dir")\""
     echo "atlas 16,8"
-    echo "sprite \"a.png\" 0,0 3,6 rotated"
-    echo "sprite \"b.png\" 4,0 3,4 1,2 4,2"
+    echo "sprite \"a.png\" rect:0,0,3,6 rotated"
+    echo "sprite \"b.png\" rect:4,0,3,4 trim:1,2,4,2"
 } > "$layout"
 "$pack_bin" < "$layout" > "$tmp_dir/atlas.png"
 
@@ -102,12 +102,12 @@ sed 's/^atlas 16,8$/scale 0.5\natlas 16,8/' "$layout" > "$tmp_dir/scaled.txt"
 same_images "$tmp_dir/out_scaled_layout/b.png" "$tmp_dir/out_scaled_json/b.png"
 
 echo "Test 5: nine-patch frames drop the 1px marker border"
-printf 'atlas 16,8\nsprite "n.9.png" 0,0 3,4 2,2 2,2\n' > "$tmp_dir/ninepatch.txt"
+printf 'atlas 16,8\nsprite "n.9.png" rect:0,0,3,4 trim:2,2,2,2\n' > "$tmp_dir/ninepatch.txt"
 "$unpack_bin" "$(fix_path "$tmp_dir/atlas.png")" -f "$(fix_path "$tmp_dir/ninepatch.txt")" -o "$(fix_path "$tmp_dir/out_nine")" > /dev/null
 [ "$(image_size "$tmp_dir/out_nine/n.9.png")" = "5x6" ]
 
 echo "Test 6: Phaser multi-atlas JSON unpacks the texture that matches the atlas"
-printf 'atlas 16,8\nsprite "a.png" 0,0 3,6 rotated\nsprite "b.png" 4,0 3,4 1,2 4,2\natlas 4,4\nsprite "c.png" 0,0 2,2\n' \
+printf 'atlas 16,8\nsprite "a.png" rect:0,0,3,6 rotated\nsprite "b.png" rect:4,0,3,4 trim:1,2,4,2\natlas 4,4\nsprite "c.png" rect:0,0,2,2\n' \
     | "$convert_bin" --transform phaser-hash -a 'sheet%d.png' > "$tmp_dir/multi.json"
 cp "$tmp_dir/atlas.png" "$tmp_dir/sheet0.png"
 "$unpack_bin" "$(fix_path "$tmp_dir/sheet0.png")" -f "$(fix_path "$tmp_dir/multi.json")" -o "$(fix_path "$tmp_dir/out_multi")" > /dev/null
@@ -155,10 +155,10 @@ mp_layout="$tmp_dir/multipack.txt"
     echo "root \"$(fix_path "$tmp_dir")\""
     echo "multipack true"
     echo "atlas 16,8"
-    echo "sprite \"a.png\" 0,0 3,6 rotated"
+    echo "sprite \"a.png\" rect:0,0,3,6 rotated"
     echo "atlas 8,8"
-    echo "sprite \"b.png\" 0,0 3,4 1,2 4,2"
-    echo "alias \"a_copy.png\" \"a.png\""
+    echo "sprite \"b.png\" rect:0,0,3,4 trim:1,2,4,2"
+    echo "alias \"a.png\" -> \"a_copy.png\""
 } > "$mp_layout"
 "$pack_bin" -a "$(fix_path "$tmp_dir/mp_%d.png")" < "$mp_layout"
 # atlases have different sizes: the image size picks the atlas
@@ -169,7 +169,7 @@ same_images "$tmp_dir/out_mp0/a_copy.png" "$tmp_dir/a.png"
 same_images "$tmp_dir/out_mp1/b.png" "$tmp_dir/b.png"
 [ ! -e "$tmp_dir/out_mp0/b.png" ] && [ ! -e "$tmp_dir/out_mp1/a.png" ]
 # same-size atlases are ambiguous without --atlas-index
-sed 's/^atlas 16,8$/atlas 8,8/; s/^sprite "a.png" 0,0 3,6 rotated$/sprite "a.png" 0,0 3,6 rotated/' "$mp_layout" > "$tmp_dir/same_size.txt"
+sed 's/^atlas 16,8$/atlas 8,8/; s/^sprite "a.png" rect:0,0,3,6 rotated$/sprite "a.png" rect:0,0,3,6 rotated/' "$mp_layout" > "$tmp_dir/same_size.txt"
 "$pack_bin" -a "$(fix_path "$tmp_dir/same_%d.png")" < "$tmp_dir/same_size.txt"
 if "$unpack_bin" "$(fix_path "$tmp_dir/same_1.png")" -f "$(fix_path "$tmp_dir/same_size.txt")" -o "$(fix_path "$tmp_dir/out_ambiguous")" > /dev/null 2>&1; then
     echo "FAILED: same-size atlases must require --atlas-index" >&2
@@ -182,7 +182,7 @@ same_images "$tmp_dir/out_same1/b.png" "$tmp_dir/b.png"
 echo "Test 10: a relative path line is also looked up next to the frames file"
 mkdir -p "$tmp_dir/sheets"
 cp "$tmp_dir/atlas.png" "$tmp_dir/sheets/sheet.png"
-printf 'path "sheet.png"\nsprite 4,0 3,4\n' > "$tmp_dir/sheets/sheet.spratframes"
+printf 'path "sheet.png"\nsprite rect:4,0,3,4\n' > "$tmp_dir/sheets/sheet.spratframes"
 (cd "$tmp_dir" && "$unpack_bin" -f "$(fix_path "sheets/sheet.spratframes")" -o "$(fix_path "out_pathline")" > /dev/null)
 [ -f "$tmp_dir/out_pathline/sprite_0.png" ]
 

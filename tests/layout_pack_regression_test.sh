@@ -104,7 +104,7 @@ echo "Test 3: a scaled, trimmed sprite keeps round(original size x scale)"
 "$convert_bin" --transform phaser-hash < "$tmp_dir/scaled.txt" | tr -d ' \n' | grep -qF '"sourceSize":{"h":23,"w":12}'
 
 echo "Test 4: --dilate N spreads colors N pixels and keeps them transparent"
-printf 'atlas 10,4\nsprite "%s" 0,0 10,4\n' "$(fix_path "$tmp_dir/px/edge.png")" > "$tmp_dir/dilate.txt"
+printf 'atlas 10,4\nsprite "%s" rect:0,0,10,4\n' "$(fix_path "$tmp_dir/px/edge.png")" > "$tmp_dir/dilate.txt"
 "$pack_bin" --dilate 3 < "$tmp_dir/dilate.txt" > "$tmp_dir/dilate.png"
 "$python_bin" - "$(fix_path "$tmp_dir/dilate.png")" <<'EOF'
 import sys
@@ -116,7 +116,7 @@ if row != [(255, 0, 0, 0)] * 3 + [(0, 0, 0, 0)]:
 EOF
 
 echo "Test 5: --extrude never overwrites a neighbouring sprite"
-printf 'atlas 8,4\nsprite "%s" 0,0 4,4\nsprite "%s" 4,0 4,4\n' \
+printf 'atlas 8,4\nsprite "%s" rect:0,0,4,4\nsprite "%s" rect:4,0,4,4\n' \
     "$(fix_path "$tmp_dir/px/a.png")" "$(fix_path "$tmp_dir/px/b.png")" > "$tmp_dir/extrude.txt"
 "$pack_bin" --extrude 2 --dilate 2 < "$tmp_dir/extrude.txt" > "$tmp_dir/extrude.png"
 "$python_bin" - "$(fix_path "$tmp_dir/extrude.png")" <<'EOF'

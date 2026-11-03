@@ -12,49 +12,79 @@
 #include <unordered_map>
 #include <unordered_set>
 
-static bool parse_slice(const std::string& val, int& left, int& top, int& right, int& bottom,
-                        std::string& h_mode, std::string& v_mode) {
-    // Expect "L,T,R,B" or "L,T,R,B,H_MODE,V_MODE"
-    size_t p1 = val.find(',');
-    if (p1 == std::string::npos) return false;
-    size_t p2 = val.find(',', p1 + 1);
-    if (p2 == std::string::npos) return false;
-    size_t p3 = val.find(',', p2 + 1);
-    if (p3 == std::string::npos) return false;
-
-    size_t p4 = val.find(',', p3 + 1);
-    if (p4 == std::string::npos) {
-        // 4 values only
-        if (!sprat::core::parse_non_negative_int(val.substr(0, p1), left)
-            || !sprat::core::parse_non_negative_int(val.substr(p1 + 1, p2 - p1 - 1), top)
-            || !sprat::core::parse_non_negative_int(val.substr(p2 + 1, p3 - p2 - 1), right)
-            || !sprat::core::parse_non_negative_int(val.substr(p3 + 1), bottom)) {
-            return false;
+// Splits "a,b,c" into its comma-separated parts (empty parts kept, so "1,,2" fails later).
+static std::vector<std::string> split_commas(const std::string& value) {
+    std::vector<std::string> parts;
+    size_t start = 0;
+    while (true) {
+        const size_t comma = value.find(',', start);
+        parts.push_back(value.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        if (comma == std::string::npos) {
+            return parts;
         }
-        h_mode = "stretch";
-        v_mode = "stretch";
-        return true;
+        start = comma + 1;
     }
+}
 
-    size_t p5 = val.find(',', p4 + 1);
-    if (p5 == std::string::npos) return false;
-    // No more commas after p5
-    if (val.find(',', p5 + 1) != std::string::npos) return false;
-
-    if (!sprat::core::parse_non_negative_int(val.substr(0, p1), left)
-        || !sprat::core::parse_non_negative_int(val.substr(p1 + 1, p2 - p1 - 1), top)
-        || !sprat::core::parse_non_negative_int(val.substr(p2 + 1, p3 - p2 - 1), right)
-        || !sprat::core::parse_non_negative_int(val.substr(p3 + 1, p4 - p3 - 1), bottom)) {
+// Reads exactly out.size() comma-separated integers.
+static bool parse_int_list(const std::string& value, std::vector<int>& out) {
+    const std::vector<std::string> parts = split_commas(value);
+    if (parts.size() != out.size()) {
         return false;
     }
-
-    h_mode = val.substr(p4 + 1, p5 - p4 - 1);
-    v_mode = val.substr(p5 + 1);
-
-    if (h_mode != "stretch" && h_mode != "repeat" && h_mode != "mirror" && h_mode != "fixed") return false;
-    if (v_mode != "stretch" && v_mode != "repeat" && v_mode != "mirror" && v_mode != "fixed") return false;
-
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (!sprat::core::parse_int(parts[i], out[i])) {
+            return false;
+        }
+    }
     return true;
+}
+
+static bool is_slice_mode(const std::string& mode) {
+    return mode == "stretch" || mode == "repeat" || mode == "mirror" || mode == "fixed";
+}
+
+// "L,T,R,B" or "L,T,R,B,H_MODE,V_MODE": non-negative insets and optional fill modes.
+static bool parse_slice(const std::string& val, int& left, int& top, int& right, int& bottom,
+                        std::string& h_mode, std::string& v_mode) {
+    const std::vector<std::string> parts = split_commas(val);
+    if (parts.size() != 4 && parts.size() != 6) {
+        return false;
+    }
+    if (!sprat::core::parse_non_negative_int(parts[0], left)
+        || !sprat::core::parse_non_negative_int(parts[1], top)
+        || !sprat::core::parse_non_negative_int(parts[2], right)
+        || !sprat::core::parse_non_negative_int(parts[3], bottom)) {
+        return false;
+    }
+    h_mode = parts.size() == 6 ? parts[4] : "stretch";
+    v_mode = parts.size() == 6 ? parts[5] : "stretch";
+    return is_slice_mode(h_mode) && is_slice_mode(v_mode);
+}
+
+// Reads "trim:L,T,R,B" (the value after "trim:"): non-negative margins.
+static bool parse_trim_value(const std::string& value, int& left, int& top, int& right, int& bottom,
+                             std::string& error) {
+    std::vector<int> v(4);
+    if (!parse_int_list(value, v)) {
+        error = std::string(sprat::core::tr("invalid trim (expected trim:LEFT,TOP,RIGHT,BOTTOM): ")) + value;
+        return false;
+    }
+    if (v[0] < 0 || v[1] < 0 || v[2] < 0 || v[3] < 0) {
+        error = sprat::core::tr("trim offsets must not be negative");
+        return false;
+    }
+    left = v[0];
+    top = v[1];
+    right = v[2];
+    bottom = v[3];
+    return true;
+}
+
+static void skip_spaces(const std::string& line, size_t& pos) {
+    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
+        ++pos;
+    }
 }
 
 // Returns true for the markers and animations lines that spratconvert also reads from the
@@ -172,6 +202,27 @@ bool check_slice_fits(const Sprite& s, double scale, std::string& error) {
     return true;
 }
 
+bool parse_rect_value(const std::string& value, int& x, int& y, int& w, int& h, std::string& error) {
+    std::vector<int> v(4);
+    if (!parse_int_list(value, v)) {
+        error = std::string(tr("invalid rect (expected rect:X,Y,WIDTH,HEIGHT): ")) + value;
+        return false;
+    }
+    if (v[0] < 0 || v[1] < 0) {
+        error = tr("sprite position must not be negative");
+        return false;
+    }
+    if (v[2] <= 0 || v[3] <= 0) {
+        error = tr("sprite dimensions must be positive");
+        return false;
+    }
+    x = v[0];
+    y = v[1];
+    w = v[2];
+    h = v[3];
+    return true;
+}
+
 bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error) {
     constexpr std::string_view prefix = "sprite";
     if (!line.starts_with(prefix)) {
@@ -180,126 +231,69 @@ bool parse_sprite_line(const std::string& line, Sprite& out, std::string& error)
     }
 
     size_t pos = prefix.size();
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
-        ++pos;
-    }
-
-    std::string path;
+    skip_spaces(line, pos);
     if (pos >= line.size() || line[pos] != '"') {
         error = tr("sprite path must be quoted");
         return false;
     }
-
-    if (!parse_quoted(line, pos, path, error)) {
+    Sprite parsed;
+    if (!parse_quoted(line, pos, parsed.path, error)) {
         return false;
     }
 
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
-        ++pos;
-    }
-
-    Sprite parsed;
-    parsed.path = path;
-    std::vector<std::string> tokens;
+    // After the path: rect:X,Y,W,H, then any of trim:L,T,R,B, rotated, dither, colors:N
+    // and slice:L,T,R,B[,H,V], each at most once and in any order.
+    bool has_rect = false;
+    std::unordered_set<std::string> seen;
     std::istringstream tail(line.substr(pos));
     std::string token;
     while (tail >> token) {
-        if (token == "rotated") {
-            parsed.rotated = true;
-        } else if (token == "dither") {
-            parsed.dither = true;
-        } else if (token.starts_with("colors=")) {
-            std::string val = token.substr(7);
-            if (!parse_int(val, parsed.colors) || (parsed.colors != 0 && (parsed.colors < 2 || parsed.colors > 256))) {
-                error = std::string(tr("invalid colors value (must be 0 or 2-256): ")) + val;
+        const size_t colon = token.find(':');
+        const std::string key = token.substr(0, colon);
+        const std::string value = colon == std::string::npos ? std::string() : token.substr(colon + 1);
+        const bool takes_value = key == "rect" || key == "trim" || key == "colors" || key == "slice";
+        const bool is_flag = key == "rotated" || key == "dither";
+        if ((!takes_value && !is_flag) || (takes_value == (colon == std::string::npos))) {
+            error = std::string(tr("unknown sprite option (expected rect:, trim:, rotated, dither, colors: or slice:): ")) + token;
+            return false;
+        }
+        if (!seen.insert(key).second) {
+            error = std::string(tr("sprite option given twice: ")) + key;
+            return false;
+        }
+        if (key == "rect") {
+            if (!parse_rect_value(value, parsed.x, parsed.y, parsed.w, parsed.h, error)) {
                 return false;
             }
-        } else if (token.starts_with("slice=")) {
-            std::string val = token.substr(6);
-            if (!parse_slice(val, parsed.slice_left, parsed.slice_top,
+            has_rect = true;
+        } else if (key == "trim") {
+            if (!parse_trim_value(value, parsed.src_x, parsed.src_y, parsed.trim_right,
+                                  parsed.trim_bottom, error)) {
+                return false;
+            }
+            parsed.has_trim = true;
+        } else if (key == "rotated") {
+            parsed.rotated = true;
+        } else if (key == "dither") {
+            parsed.dither = true;
+        } else if (key == "colors") {
+            if (!parse_int(value, parsed.colors) || (parsed.colors != 0 && (parsed.colors < 2 || parsed.colors > 256))) {
+                error = std::string(tr("invalid colors value (must be 0 or 2-256): ")) + value;
+                return false;
+            }
+        } else {
+            if (!parse_slice(value, parsed.slice_left, parsed.slice_top,
                              parsed.slice_right, parsed.slice_bottom,
                              parsed.slice_h, parsed.slice_v)) {
-                error = std::string(tr("invalid slice value (expected L,T,R,B[,H_MODE,V_MODE] with non-negative integers and optional stretch/repeat/mirror/fixed modes): ")) + val;
+                error = std::string(tr("invalid slice value (expected L,T,R,B[,H_MODE,V_MODE] with non-negative integers and optional stretch/repeat/mirror/fixed modes): ")) + value;
                 return false;
             }
             parsed.has_slice = true;
-        } else {
-            tokens.push_back(token);
         }
     }
-
-    if (tokens.empty()) {
-        error = tr("sprite line is missing numeric fields");
+    if (!has_rect) {
+        error = tr("sprite line has no rect:X,Y,WIDTH,HEIGHT");
         return false;
-    }
-
-    if (tokens[0].find(',') != std::string::npos) {
-        constexpr size_t MODERN_SPRITE_TOKENS_MIN = 2;
-        constexpr size_t MODERN_SPRITE_TOKENS_MAX = 4;
-        if (tokens.size() != MODERN_SPRITE_TOKENS_MIN && tokens.size() != MODERN_SPRITE_TOKENS_MAX) {
-            error = tr("sprite line must contain position/size and optional trim offsets");
-            return false;
-        }
-
-        if (!parse_pair(tokens[0], parsed.x, parsed.y) || !parse_pair(tokens[1], parsed.w, parsed.h)) {
-            error = tr("invalid position or size pair");
-            return false;
-        }
-        if (parsed.x < 0 || parsed.y < 0) {
-            error = tr("sprite position must not be negative");
-            return false;
-        }
-        if (parsed.w <= 0 || parsed.h <= 0) {
-            error = tr("sprite dimensions must be positive");
-            return false;
-        }
-
-        if (tokens.size() == MODERN_SPRITE_TOKENS_MAX) {
-            if (!parse_pair(tokens[2], parsed.src_x, parsed.src_y)
-                || !parse_pair(tokens[3], parsed.trim_right, parsed.trim_bottom)) {
-                error = tr("invalid trim offset pair");
-                return false;
-            }
-            if (parsed.src_x < 0 || parsed.src_y < 0 || parsed.trim_right < 0 || parsed.trim_bottom < 0) {
-                error = tr("trim offsets must not be negative");
-                return false;
-            }
-            parsed.has_trim = true;
-        }
-    } else {
-        parsed.legacy_format = true;
-        constexpr size_t LEGACY_SPRITE_TOKENS_MIN = 4;
-        constexpr size_t LEGACY_SPRITE_TOKENS_MAX = 6;
-        if (tokens.size() != LEGACY_SPRITE_TOKENS_MIN && tokens.size() != LEGACY_SPRITE_TOKENS_MAX) {
-            error = tr("legacy sprite line has invalid field count");
-            return false;
-        }
-        if (!parse_int(tokens[0], parsed.x)
-            || !parse_int(tokens[1], parsed.y)
-            || !parse_int(tokens[2], parsed.w)
-            || !parse_int(tokens[3], parsed.h)) {
-            error = tr("legacy sprite line has invalid numeric fields");
-            return false;
-        }
-        if (parsed.x < 0 || parsed.y < 0) {
-            error = tr("sprite position must not be negative");
-            return false;
-        }
-        if (parsed.w <= 0 || parsed.h <= 0) {
-            error = tr("sprite dimensions must be positive");
-            return false;
-        }
-        if (tokens.size() == LEGACY_SPRITE_TOKENS_MAX) {
-            if (!parse_int(tokens[4], parsed.src_x) || !parse_int(tokens[5], parsed.src_y)) {
-                error = tr("legacy sprite line has invalid crop offsets");
-                return false;
-            }
-            if (parsed.src_x < 0 || parsed.src_y < 0) {
-                error = tr("trim offsets must not be negative");
-                return false;
-            }
-            parsed.has_trim = true;
-        }
     }
 
     out = parsed;
@@ -319,10 +313,7 @@ bool parse_atlas_line(const std::string& line, int& width, int& height) {
         return false;
     }
     if (!parse_pair(size_token, width, height)) {
-        // Backward compatibility: atlas <w> <h>
-        if (!parse_int(size_token, width) || !(iss >> height)) {
-            return false;
-        }
+        return false;
     }
     if (iss >> extra) {
         return false;
@@ -385,9 +376,9 @@ bool parse_multipack_line(const std::string& line, bool& multipack) {
     if (tag != "multipack") {
         return false;
     }
-    if (value_token == "true" || value_token == "1") {
+    if (value_token == "true") {
         multipack = true;
-    } else if (value_token == "false" || value_token == "0") {
+    } else if (value_token == "false") {
         multipack = false;
     } else {
         return false;
@@ -430,56 +421,44 @@ bool parse_alias_line(const std::string& line, Alias& out, std::string& error) {
         return false;
     }
 
+    // alias "ORIGINAL" -> "DUPLICATE" [trim:L,T,R,B]
     size_t pos = prefix.size();
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
-        ++pos;
-    }
-
+    skip_spaces(line, pos);
+    Alias parsed;
     if (pos >= line.size() || line[pos] != '"') {
-        error = tr("alias path must be quoted");
+        error = tr("original path must be quoted");
         return false;
     }
-
-    Alias parsed;
+    if (!parse_quoted(line, pos, parsed.canonical_path, error)) {
+        return false;
+    }
+    skip_spaces(line, pos);
+    if (line.compare(pos, 2, "->") != 0) {
+        error = tr("expected -> between the original and the duplicate path");
+        return false;
+    }
+    pos += 2;
+    skip_spaces(line, pos);
+    if (pos >= line.size() || line[pos] != '"') {
+        error = tr("duplicate path must be quoted");
+        return false;
+    }
     if (!parse_quoted(line, pos, parsed.path, error)) {
         return false;
     }
 
-    while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos])) != 0) {
-        ++pos;
-    }
-
-    if (pos >= line.size() || line[pos] != '"') {
-        error = tr("canonical path must be quoted");
-        return false;
-    }
-
-    if (!parse_quoted(line, pos, parsed.canonical_path, error)) {
-        return false;
-    }
-
-    // Optional trim offsets, same syntax as on sprite lines: L,T R,B
     std::istringstream tail(line.substr(pos));
-    std::vector<std::string> tokens;
     std::string token;
     while (tail >> token) {
-        tokens.push_back(token);
-    }
-    if (tokens.size() == 2) {
-        if (!parse_pair(tokens[0], parsed.trim_left, parsed.trim_top)
-            || !parse_pair(tokens[1], parsed.trim_right, parsed.trim_bottom)) {
-            error = tr("invalid alias trim offset pair");
+        if (!token.starts_with("trim:") || parsed.has_trim) {
+            error = std::string(tr("unexpected alias option (expected one trim:LEFT,TOP,RIGHT,BOTTOM): ")) + token;
             return false;
         }
-        if (parsed.trim_left < 0 || parsed.trim_top < 0
-            || parsed.trim_right < 0 || parsed.trim_bottom < 0) {
-            error = tr("alias trim offsets must not be negative");
+        if (!parse_trim_value(token.substr(5), parsed.trim_left, parsed.trim_top,
+                              parsed.trim_right, parsed.trim_bottom, error)) {
             return false;
         }
         parsed.has_trim = true;
-    } else if (!tokens.empty()) {
-        error = tr("extra content after canonical path");
-        return false;
     }
 
     out = std::move(parsed);
@@ -490,7 +469,6 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
     Layout parsed;
     std::string line;
     std::unordered_set<std::string> seen_sprite_paths;
-    bool warned_legacy = false;
 
     while (std::getline(in, line)) {
         const size_t first_char = line.find_first_not_of(" \t\r");
@@ -605,12 +583,7 @@ bool parse_layout(std::istream& in, Layout& out, std::string& error) {
             if (!parsed.multipack && !seen_sprite_paths.insert(s.path).second) {
                 parsed.warnings.push_back(std::string(tr("duplicate sprite path: ")) + s.path);
             }
-            if (s.legacy_format && !warned_legacy) {
-                parsed.warnings.push_back(tr(
-                    "the layout uses the old numeric sprite format (x y w h [left top]), which "
-                    "has no right and bottom trim; regenerate it with spratlayout"));
-                warned_legacy = true;
-            }
+
             parsed.sprites.push_back(s);
         } else if (line.starts_with("alias")) {
             Alias alias;

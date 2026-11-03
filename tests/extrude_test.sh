@@ -52,7 +52,7 @@ cat > "$layout_file" <<EOF
 atlas 4,4
 scale 1
 extrude 1
-sprite "$(fix_path "$frames_dir/red.png")" 1,1 2,2
+sprite "$(fix_path "$frames_dir/red.png")" rect:1,1,2,2
 EOF
 
 sheet_file="$tmp_dir/sheet.png"
@@ -103,7 +103,7 @@ cat > "$layout_file" <<EOF
 atlas 4,3
 scale 1
 extrude 1
-sprite "$(fix_path "$frames_dir/rg.png")" 1,1 2,1 rotated
+sprite "$(fix_path "$frames_dir/rg.png")" rect:1,1,2,1 rotated
 EOF
 
 "$spratpack_bin" < "$layout_file" > "$tmp_dir/rotated_extrude.png"

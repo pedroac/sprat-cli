@@ -31,7 +31,7 @@ fi
 layout="$tmp_dir/layout.txt"
 cat > "$layout" <<EOF
 atlas 1,1
-sprite "$(fix_path "$tmp_dir/pixel.png")" 0,0 1,1
+sprite "$(fix_path "$tmp_dir/pixel.png")" rect:0,0,1,1
 EOF
 
 echo "Test 1: valid invocation succeeds"

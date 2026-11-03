@@ -55,7 +55,7 @@ for case in "cw 9,0" "ccw 0,19"; do
         echo "root \"$(fix_path "$tmp_dir")\""
         echo "rotation $direction"
         echo "atlas 10,20"
-        echo "sprite \"src.png\" 0,0 10,20 rotated"
+        echo "sprite \"src.png\" rect:0,0,10,20 rotated"
     } > "$layout"
     "$pack_bin" < "$layout" > "$tmp_dir/atlas_$direction.png"
     "$unpack_bin" "$(fix_path "$tmp_dir/atlas_$direction.png")" -f "$(fix_path "$layout")" \

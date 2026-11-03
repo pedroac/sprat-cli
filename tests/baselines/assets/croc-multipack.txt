@@ -6,22 +6,22 @@ root "<assets>"
 scale 1
 multipack true
 atlas 995,906
-sprite "Crocodile Mascot Running Game/transparent PNG/dizzy/frame-1.png" 0,0 321,456 4,5 2,0
-sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-3.png" 321,0 374,387 5,25 98,0
-sprite "Crocodile Mascot Running Game/transparent PNG/dizzy/frame-2.png" 0,456 321,450 4,11 2,0
-sprite "Crocodile Mascot Running Game/transparent PNG/jump up/frame.png" 321,387 294,442 7,5 3,0
-sprite "Crocodile Mascot Running Game/transparent PNG/jump fall/frame.png" 695,0 300,410 4,21 0,16
-sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-2.png" 695,410 296,404 7,5 4,0
+sprite "Crocodile Mascot Running Game/transparent PNG/dizzy/frame-1.png" rect:0,0,321,456 trim:4,5,2,0
+sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-3.png" rect:321,0,374,387 trim:5,25,98,0
+sprite "Crocodile Mascot Running Game/transparent PNG/dizzy/frame-2.png" rect:0,456,321,450 trim:4,11,2,0
+sprite "Crocodile Mascot Running Game/transparent PNG/jump up/frame.png" rect:321,387,294,442 trim:7,5,3,0
+sprite "Crocodile Mascot Running Game/transparent PNG/jump fall/frame.png" rect:695,0,300,410 trim:4,21,0,16
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-2.png" rect:695,410,296,404 trim:7,5,4,0
 atlas 883,807
-sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-4.png" 0,0 296,403 7,6 4,0
-sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-2.png" 296,0 294,405 104,7 79,0
-sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-1.png" 0,403 294,401 9,0 4,8
-sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-3.png" 590,0 293,400 10,0 4,9
-sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-1.png" 590,400 284,407 173,5 20,0
-sprite "Crocodile Mascot Running Game/transparent PNG/idle/frame-2.png" 296,405 287,400 9,10 8,0
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-4.png" rect:0,0,296,403 trim:7,6,4,0
+sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-2.png" rect:296,0,294,405 trim:104,7,79,0
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-1.png" rect:0,403,294,401 trim:9,0,4,8
+sprite "Crocodile Mascot Running Game/transparent PNG/run/frame-3.png" rect:590,0,293,400 trim:10,0,4,9
+sprite "Crocodile Mascot Running Game/transparent PNG/faint/frame-1.png" rect:590,400,284,407 trim:173,5,20,0
+sprite "Crocodile Mascot Running Game/transparent PNG/idle/frame-2.png" rect:296,405,287,400 trim:9,10,8,0
 atlas 420,661
-sprite "Crocodile Mascot Running Game/transparent PNG/sliding/frame.png" 0,0 420,256 4,3 5,0
-sprite "Crocodile Mascot Running Game/transparent PNG/idle/frame-1.png" 0,256 283,405 13,5 8,0
+sprite "Crocodile Mascot Running Game/transparent PNG/sliding/frame.png" rect:0,0,420,256 trim:4,3,5,0
+sprite "Crocodile Mascot Running Game/transparent PNG/idle/frame-1.png" rect:0,256,283,405 trim:13,5,8,0
 [pack]
 atlas 0 995x906 rgba-sha256 308d6521316b76ce080ee59bfcd997b4119826829f89568be515d96adf1429c8
 atlas 1 883x807 rgba-sha256 cbf62e3471293f3d4e204030848765ab61f0a4fb508cf67ccdf304a43fb3a895
