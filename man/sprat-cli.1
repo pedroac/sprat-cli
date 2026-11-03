@@ -244,11 +244,11 @@ Scans \fIinput_image\fR and detects sprite boundaries by finding non-transparent
 Pieces of one sprite are folded into one frame when one box mostly lies inside the other; sprites whose boxes merely clip each other stay separate, so frames may overlap slightly. Frames are listed in reading order (rows top to bottom, left to right). A solid background is assumed when one opaque color makes up at least half of the image edge, so sprites touching the edge or its corners do not hide it; only background pixels connected to the image edge are removed.
 Prints layout-compatible lines to stdout:
 .PP
-path \fIinput_image\fR
+path "\fIinput_image\fR"
 .br
-[background \fIr,g,b\fR]
+[background \fIrrggbb\fR]
 .br
-sprite \fIx,y\fR \fIw,h\fR
+sprite rect:\fIx,y,w,h\fR
 .SS spratunpack
 Extracts individual sprites from an \fIatlas.png\fR using a frames definition: TexturePacker-style JSON (Hash, Array or Phaser multi-atlas), a \fBspratlayout\fR layout, or \fB.spratframes\fR. Rotated sprites are turned back and trimmed sprites are restored to their original size, which may be at most 32768 pixels a side and 100 megapixels. All frames are validated before any output is written.
 .PP
