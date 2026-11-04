@@ -28,7 +28,7 @@ mkdir -p "$frames_dir"
 cat > "$tmp_dir/pixel.b64" <<'EOF'
 iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7ZxaoAAAAASUVORK5CYII=
 EOF
-base64 -d "$tmp_dir/pixel.b64" > "$frames_dir/frame_a.png"
+base64 --decode < "$tmp_dir/pixel.b64" > "$frames_dir/frame_a.png"
 cp "$frames_dir/frame_a.png" "$frames_dir/frame_b.png"
 
 frames_list_file="$tmp_dir/frames_list.txt"
