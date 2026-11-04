@@ -483,15 +483,20 @@ attach "\fIchild\fR":"\fImarker\fR" to "\fIparent\fR":"\fImarker\fR" [leeway:\fI
 pose "\fIname\fR"
 .br
 \- part "\fIpart\fR" [variant:\fIname\fR] [angle:\fIdegrees\fR] [offset:\fIX\fR,\fIY\fR] [at:\fIX\fR,\fIY\fR]
+.br
+sequence "\fIname\fR" [fps:\fIN\fR] [loop:\fImode\fR]
+.br
+\- pose "\fIpose\fR" [in:\fIframes\fR] [hold:\fIframes\fR] [ease:linear|step]
 .PP
 Parts are drawn in file order, back first.
 Every part is placed one way: attached to another part, or by \fBat:\fIX\fB,\fIY\fR, where its sprite's pivot goes in the puppet's space, whose origin is the puppet's pivot (Y down, original-image pixels). Any number of parts may be positioned.
 A part's first \fBattach\fR is its parent; further ones, and every \fBattach\fR of a positioned part, are constraints that may close loops. Two positioned parts can't be attached.
 A \fBpose\fR sets only the parts it names, so poses layer: a variant, an angle relative to the parent (within its joint's limits) or around a positioned part's pivot, an attached part's offset from the parent marker, or a positioned part's position.
+A \fBsequence\fR plays poses at its \fBfps\fR (default 8, up to 100) with the animation loop modes: each step reaches its pose in \fBin\fR frames, tweened with \fBease:linear\fR or snapped at the end with \fBease:step\fR, then holds it \fBhold\fR frames; variants snap when the pose arrives. Only what a step's pose sets changes, so sequences on different parts combine.
 A part's variants are sprites (path, name or index) or animations, interchangeable, named after them unless \fB\->\fR names them.
 An \fBattach\fR line pins the child part's point marker, in every sprite it shows, to the parent part's marker, whose shape (a point, or the inside of a circle, rectangle or polygon) is where the child's point may be.
 \fBleeway\fR lets it drift up to \fIN\fR original-image pixels beyond that (default 0); \fBangle\fR limits how far, in degrees clockwise, the child turns relative to its parent (between \-360 and 360; default free).
-Missing markers, parts without variants, puppets without parts and empty poses are reported. Attaching an unknown part, a part to itself or two positioned parts, a cycle of parents, repeated puppet, part, variant or pose names, a part with neither a position nor a parent, and a pose that sets an unknown part or variant, sets a part twice, turns it beyond its joint's limits, moves an attached part or offsets a positioned one are errors.
+Missing markers, parts without variants, puppets without parts, empty poses and sequences, and steps that last no frame are reported. Attaching an unknown part, a part to itself or two positioned parts, a cycle of parents, repeated puppet, part, variant or pose names, a part with neither a position nor a parent, and a pose that sets an unknown part or variant, sets a part twice, turns it beyond its joint's limits, moves an attached part or offsets a positioned one, and a sequence that plays an unknown pose, repeats a sequence name or has an fps above 100 are errors.
 Currently the \fBraw\fR transform writes puppets; custom transforms read \fBsprat.puppets\fR.
 .RE
 .SS spratframes

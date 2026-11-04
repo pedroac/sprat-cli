@@ -113,7 +113,7 @@ bool is_animations_keyword(std::string_view keyword) {
 bool is_puppets_keyword(std::string_view keyword) {
     return keyword == "root" || keyword == "puppet" || keyword == "part" || keyword == "attach"
         || keyword == "- sprite" || keyword == "- animation" || keyword == "pose"
-        || keyword == "- part";
+        || keyword == "- part" || keyword == "sequence" || keyword == "- pose";
 }
 
 bool is_metadata_keyword(std::string_view keyword) {

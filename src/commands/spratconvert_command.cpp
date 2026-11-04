@@ -971,11 +971,18 @@ void resolve_alias_sources(std::vector<AnimationItem>& animations) {
 //
 // A pose sets some parts: a variant, an angle relative to the parent (or around its own
 // pivot for a positioned part), an offset within its joint's allowed area, or a position.
-// Poses only name what they change, so they layer (walk + smile). sprat describes the rig
-// and its poses; engines play them.
+// Poses only name what they change, so they layer (walk + smile).
+//
+// A sequence plays poses one after another at its own fps: each step reaches its pose in
+// `in` frames (tweened, or snapped at the end with ease:step) and holds it for `hold`
+// frames. Only what a step's pose sets moves, and variants snap when the step's pose
+// arrives. sprat describes the rig, its poses and sequences; engines play them.
 
 // Most degrees a joint's angle range, or a pose's angle, may reach either way.
 constexpr int k_max_joint_angle = 360;
+// Most frames a sequence step's in or hold may take. Cutout sequences are far shorter, so
+// a larger value is a typo; it also keeps sums of a few steps within an int.
+constexpr int k_max_step_frames = 100000;
 
 struct PuppetVariant {
     std::string name;
@@ -1026,11 +1033,27 @@ struct PuppetPose {
     std::vector<PoseSetting> settings;  // in part order
 };
 
+// One step of a sequence: reach a pose in `in` frames, then hold it `hold` frames.
+struct SequenceStep {
+    size_t pose = 0;
+    int in = 0;
+    int hold = 0;
+    bool snap = false;  // ease:step: keep the old pose through `in`, then snap
+};
+
+struct PuppetSequence {
+    std::string name;
+    int fps = DEFAULT_ANIMATION_FPS;
+    std::string loop = DEFAULT_ANIMATION_LOOP;
+    std::vector<SequenceStep> steps;
+};
+
 struct PuppetItem {
     std::string name;
     std::vector<PuppetPart> parts;
     std::vector<PuppetJoint> joints;
     std::vector<PuppetPose> poses;
+    std::vector<PuppetSequence> sequences;
 };
 
 // Reads `PART:MARKER` (either name quoted or bare) starting at `pos`.
@@ -1107,13 +1130,20 @@ struct PendingPose {
     std::vector<PendingPosePart> parts;
 };
 
+// A sequence before its poses are known: steps name them.
+struct PendingSequence {
+    PuppetSequence sequence;
+    std::vector<std::string> step_poses;  // in step order, beside sequence.steps
+};
+
 // Resolves a puppet's attach lines into parents, joints and constraints, places every
 // part, and checks its poses against the rig. False (with `error`) when something names an
 // unknown part or variant, attaches a part to itself, attaches two positioned parts,
 // closes a cycle of parents, leaves a part unplaced, or poses a part in a way its rig
 // doesn't allow.
 bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attaches,
-                   const std::vector<PendingPose>& poses, std::string& error,
+                   const std::vector<PendingPose>& poses,
+                   const std::vector<PendingSequence>& sequences, std::string& error,
                    std::vector<std::string>& warnings) {
     std::unordered_map<std::string, size_t> part_index;
     for (size_t i = 0; i < puppet.parts.size(); ++i) {
@@ -1235,6 +1265,28 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
         }
         std::ranges::sort(pose.settings, {}, &PoseSetting::part);
         puppet.poses.push_back(std::move(pose));
+    }
+
+    std::unordered_map<std::string, size_t> pose_index;
+    for (size_t i = 0; i < puppet.poses.size(); ++i) {
+        pose_index.emplace(puppet.poses[i].name, i);
+    }
+    for (const PendingSequence& pending : sequences) {
+        PuppetSequence sequence = pending.sequence;
+        for (size_t i = 0; i < sequence.steps.size(); ++i) {
+            const auto it = pose_index.find(pending.step_poses[i]);
+            if (it == pose_index.end()) {
+                error = sprat::core::tr_format("Puppet \"{0}\" sequence \"{1}\" plays unknown pose \"{2}\"",
+                                               {puppet.name, sequence.name, pending.step_poses[i]});
+                return false;
+            }
+            sequence.steps[i].pose = it->second;
+        }
+        if (sequence.steps.empty()) {
+            warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" sequence \"{1}\" has no steps",
+                                                      {puppet.name, sequence.name}));
+        }
+        puppet.sequences.push_back(std::move(sequence));
     }
     return true;
 }
@@ -1429,6 +1481,98 @@ bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::
     return true;
 }
 
+// Reads the settings after a sequence's name: fps:N and loop:MODE, each at most once. An
+// fps above k_max_animation_fps is an error, as in the animations file; what else doesn't
+// fit is reported and ignored.
+bool read_sequence_settings(const std::string& settings, const std::string& line, PuppetSequence& sequence,
+                            std::string& error, std::vector<std::string>& warnings) {
+    std::vector<std::pair<std::string, std::string>> items;
+    split_settings(settings, items);
+    bool has_fps = false;
+    bool has_loop = false;
+    for (const auto& [key, value] : items) {
+        int fps = 0;
+        if (key == "fps" && !has_fps) {
+            has_fps = true;
+            if (!parse_int(value, fps) || fps < 1) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Sequence line \"{0}\" fps \"{1}\" is not a whole number of frames per second, 1 or more; it is ignored",
+                    {line, value}));
+            } else if (fps > k_max_animation_fps) {
+                error = sprat::core::tr_format("Sequence line \"{0}\" has fps {1}, above the limit of {2}",
+                                               {line, value, std::to_string(k_max_animation_fps)});
+                return false;
+            } else {
+                sequence.fps = fps;
+            }
+        } else if (key == "loop" && !has_loop) {
+            has_loop = true;
+            if (is_animation_loop_mode(value)) {
+                sequence.loop = value;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Sequence line \"{0}\" loop \"{1}\" is not one of {2}; it is ignored",
+                    {line, value, k_animation_loop_modes}));
+            }
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Sequence line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {line, key.empty() ? value : key + ":" + value}));
+        }
+    }
+    return true;
+}
+
+// Reads a sequence's "- pose" line: the pose, then in:FRAMES, hold:FRAMES and
+// ease:linear|step, each at most once. False, with a warning, when it names no pose or
+// lasts no frame; a setting that doesn't fit is reported and ignored.
+bool read_sequence_step_line(const std::string& trimmed, std::string& pose, SequenceStep& step,
+                             std::vector<std::string>& warnings) {
+    size_t pos = trimmed.find("pose") + 4;
+    std::vector<std::pair<std::string, std::string>> items;
+    if (!read_name_at(trimmed, pos, pose) || !split_settings(trimmed.substr(pos), items)) {
+        warnings.push_back(sprat::core::tr_format(
+            "Puppets file line \"{0}\" is not - pose \"POSE\" [in:FRAMES] [hold:FRAMES] [ease:linear|step]; it is ignored",
+            {trimmed}));
+        return false;
+    }
+    bool has_in = false;
+    bool has_hold = false;
+    bool has_ease = false;
+    for (const auto& [key, value] : items) {
+        int frames = 0;
+        const auto read_frames = [&](int& out) {
+            if (parse_int(value, frames) && frames >= 0 && frames <= k_max_step_frames) {
+                out = frames;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Step line \"{0}\" {1} \"{2}\" is not a whole number of frames from 0 to {3}; it is ignored",
+                    {trimmed, key, value, std::to_string(k_max_step_frames)}));
+            }
+        };
+        if (key == "in" && !has_in) {
+            has_in = true;
+            read_frames(step.in);
+        } else if (key == "hold" && !has_hold) {
+            has_hold = true;
+            read_frames(step.hold);
+        } else if (key == "ease" && !has_ease && (value == "linear" || value == "step")) {
+            has_ease = true;
+            step.snap = value == "step";
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Step line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {trimmed, key.empty() ? value : key + ":" + value}));
+        }
+    }
+    if (step.in + step.hold == 0) {
+        warnings.push_back(sprat::core::tr_format(
+            "Step line \"{0}\" lasts no frame; give it in:FRAMES or hold:FRAMES; it is ignored", {trimmed}));
+        return false;
+    }
+    return true;
+}
+
 std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool from_layout_stream,
                                            const std::unordered_map<std::string, int>& by_path,
                                            const std::unordered_map<std::string, int>& by_name,
@@ -1445,8 +1589,11 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
     std::vector<PendingAttach> attaches;  // of the current puppet
     std::vector<PendingPose> poses;       // of the current puppet
     std::unordered_set<std::string> pose_names;
+    std::vector<PendingSequence> sequences;  // of the current puppet
+    std::unordered_set<std::string> sequence_names;
     PuppetPart* current_part = nullptr;
     PendingPose* current_pose = nullptr;
+    PendingSequence* current_sequence = nullptr;
     std::unordered_set<std::string> part_names;
     std::unordered_set<std::string> variant_names;
     // Set after a part line that couldn't be read: its variants are dropped with it.
@@ -1454,12 +1601,15 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
     std::string raw_root;
 
     const auto end_puppet = [&]() {
-        if (!puppets.empty() && !finish_puppet(puppets.back(), attaches, poses, error, warnings)) {
+        if (!puppets.empty()
+            && !finish_puppet(puppets.back(), attaches, poses, sequences, error, warnings)) {
             return false;
         }
         attaches.clear();
         poses.clear();
         pose_names.clear();
+        sequences.clear();
+        sequence_names.clear();
         return true;
     };
 
@@ -1474,7 +1624,7 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
         if (!is_puppets_keyword(keyword)) {
             if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Puppets file line \"{0}\" is not a root, puppet, part, - sprite, - animation, attach, pose or - part line; it is ignored",
+                    "Puppets file line \"{0}\" is not a root, puppet, part, - sprite, - animation, attach, pose, - part, sequence or - pose line; it is ignored",
                     {trimmed}));
             }
             continue;
@@ -1489,6 +1639,7 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
             }
             current_part = nullptr;
             current_pose = nullptr;
+            current_sequence = nullptr;
             skipping_part = false;
             std::string name;
             size_t pos = keyword.size();
@@ -1500,7 +1651,7 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
                 error = sprat::core::tr_format("Puppet \"{0}\" is defined more than once", {name});
                 return {};
             }
-            puppets.push_back({name, {}, {}, {}});
+            puppets.push_back({name, {}, {}, {}, {}});
             part_names.clear();
             continue;
         }
@@ -1513,7 +1664,43 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
         if (keyword != "- part") {
             current_pose = nullptr;  // a pose's "- part" lines follow it directly
         }
-        if (keyword == "pose") {
+        if (keyword != "- pose") {
+            current_sequence = nullptr;  // and a sequence's "- pose" lines follow it
+        }
+        if (keyword == "sequence") {
+            current_part = nullptr;
+            skipping_part = false;
+            PendingSequence sequence;
+            size_t pos = keyword.size();
+            if (!read_name_at(trimmed, pos, sequence.sequence.name)) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not sequence \"NAME\" [fps:N] [loop:MODE]; the sequence is ignored",
+                    {trimmed}));
+                continue;
+            }
+            if (!sequence_names.insert(sequence.sequence.name).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" has more than one sequence \"{1}\"",
+                                               {puppet.name, sequence.sequence.name});
+                return {};
+            }
+            if (!read_sequence_settings(trimmed.substr(pos), trimmed, sequence.sequence, error, warnings)) {
+                return {};
+            }
+            sequences.push_back(std::move(sequence));
+            current_sequence = &sequences.back();
+        } else if (keyword == "- pose") {
+            if (current_sequence == nullptr) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not inside a sequence; it is ignored", {trimmed}));
+                continue;
+            }
+            std::string pose;
+            SequenceStep step;
+            if (read_sequence_step_line(trimmed, pose, step, warnings)) {
+                current_sequence->sequence.steps.push_back(step);
+                current_sequence->step_poses.push_back(std::move(pose));
+            }
+        } else if (keyword == "pose") {
             current_part = nullptr;
             skipping_part = false;
             std::string name;
@@ -2260,6 +2447,34 @@ std::string build_sprat_json(
             }
             j += "]}";
         }
+        // Sequences: steps in play order; a step lasts in + hold frames at the sequence's fps.
+        j += "],\"sequences\":[";
+        for (size_t qi = 0; qi < puppet.sequences.size(); ++qi) {
+            if (qi > 0) j += ',';
+            const PuppetSequence& sequence = puppet.sequences[qi];
+            long long frames = 0;
+            for (const SequenceStep& step : sequence.steps) {
+                frames += step.in + step.hold;
+            }
+            j += "{\"index\":" + std::to_string(qi);
+            j += ",\"name\":\"" + escape_json(sequence.name) + "\"";
+            j += ",\"fps\":" + std::to_string(sequence.fps);
+            j += ",\"loop\":\"" + sequence.loop + "\"";
+            j += ",\"frame_count\":" + std::to_string(frames);
+            j += ",\"duration\":" + format_double(static_cast<double>(frames) / sequence.fps);
+            j += ",\"steps\":[";
+            for (size_t ti = 0; ti < sequence.steps.size(); ++ti) {
+                if (ti > 0) j += ',';
+                const SequenceStep& step = sequence.steps[ti];
+                j += "{\"pose\":" + std::to_string(step.pose);
+                j += ",\"pose_name\":\"" + escape_json(puppet.poses[step.pose].name) + "\"";
+                j += ",\"in\":" + std::to_string(step.in);
+                j += ",\"hold\":" + std::to_string(step.hold);
+                j += ",\"ease\":\"" + std::string(step.snap ? "step" : "linear") + "\"";
+                j += "}";
+            }
+            j += "]}";
+        }
         j += "]}";
     }
     j += "]";
@@ -2742,7 +2957,7 @@ void print_usage() {
               << tr("  --animations PATH          Load external animations file (fps up to 100)\n")
               << tr("                             loop modes: loop, once, pingpong, once-pingpong\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
-              << tr("  --puppets PATH             Load external puppets file (cutout rigs and their poses)\n")
+              << tr("  --puppets PATH             Load external puppets file (cutout rigs, poses and sequences)\n")
               << tr("  --help, -h                 Show this help message\n")
               << tr("  --version, -v              Show version\n");
 }
