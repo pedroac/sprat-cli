@@ -519,6 +519,12 @@ grep -qF 'Puppets file line "- pose" is not - pose "POSE"' "$tmp_dir/sequence.er
 grep -qF 'Puppet "p" sequence "empty" has no steps' "$tmp_dir/sequence.err"
 grep -qF 'Puppets file line "sequence """ is not sequence "NAME"' "$tmp_dir/sequence.err"
 grep -qF 'Puppets file line "- pose q hold:1" is not inside a sequence' "$tmp_dir/sequence.err"
+printf '%s\n' 'puppet "p"' 'part "x" at:0,0' 'pose "q"' '- part x angle:1' 'sequence "s" fps:12 loop:"ping' \
+  '- pose q hold:1' > "$tmp_dir/quote.puppets.txt"
+"$convert_bin" --transform raw --puppets "$(fix_path "$tmp_dir/quote.puppets.txt")" < "$raw_layout_file" \
+  > "$tmp_dir/quote.sprat" 2> "$tmp_dir/quote.err"
+grep -qF 'Sequence line "sequence "s" fps:12 loop:"ping" has a broken quote' "$tmp_dir/quote.err"
+grep -qF 'sequence 12 0 1 1:s' "$tmp_dir/quote.sprat"
 
 # A positioned part may turn freely, and a pose's lines are checked one by one.
 printf '%s\n' 'puppet "p"' 'part "x" at:0,0' 'pose "q"' '- part x angle:360 variant:"" spin:1 at:1' \

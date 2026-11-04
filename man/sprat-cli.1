@@ -69,7 +69,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 .PP
 \fBspratpack\fR reads the layout from standard input and writes one or more PNG atlases to standard output (or to files when \fB\-a\fR is used).
 .PP
-\fBspratconvert\fR reads the same layout format from standard input and transforms it into text formats (for example JSON, CSV, XML, CSS) using template-driven transforms, writing the result to standard output.
+\fBspratconvert\fR reads the same layout format from standard input and transforms it into text formats (for example JSON, CSV, XML, CSS) using template-driven transforms, writing the result to standard output. Markers, animations and cutout puppets come from their own files or from the layout stream.
 .PP
 \fBspratframes\fR detects sprite rectangles in a sprite sheet and writes them to standard output in the spratframes format.
 .PP
@@ -493,6 +493,7 @@ Every part is placed one way: attached to another part, or by \fBat:\fIX\fB,\fIY
 A part's first \fBattach\fR is its parent; further ones, and every \fBattach\fR of a positioned part, are constraints that may close loops. Two positioned parts can't be attached.
 A \fBpose\fR sets only the parts it names, so poses layer: a variant, an angle relative to the parent (within its joint's limits) or around a positioned part's pivot, an attached part's offset from the parent marker, or a positioned part's position.
 A \fBsequence\fR plays poses at its \fBfps\fR (default 8, up to 100) with the animation loop modes: each step reaches its pose in \fBin\fR frames, tweened with \fBease:linear\fR or snapped at the end with \fBease:step\fR, then holds it \fBhold\fR frames; variants snap when the pose arrives. Only what a step's pose sets changes, so sequences on different parts combine.
+In the rest pose every part shows its first variant with angle and offset 0. A positioned part's sprite pivot goes at its position; an attached part's child marker goes where its parent's marker lands, moved by its offset, and it turns by its parent's turn plus its own angle. Parts are drawn in file order.
 A part's variants are sprites (path, name or index) or animations, interchangeable, named after them unless \fB\->\fR names them.
 An \fBattach\fR line pins the child part's point marker, in every sprite it shows, to the parent part's marker, whose shape (a point, or the inside of a circle, rectangle or polygon) is where the child's point may be.
 \fBleeway\fR lets it drift up to \fIN\fR original-image pixels beyond that (default 0); \fBangle\fR limits how far, in degrees clockwise, the child turns relative to its parent (between \-360 and 360; default free).

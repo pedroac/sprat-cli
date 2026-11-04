@@ -1487,7 +1487,10 @@ bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::
 bool read_sequence_settings(const std::string& settings, const std::string& line, PuppetSequence& sequence,
                             std::string& error, std::vector<std::string>& warnings) {
     std::vector<std::pair<std::string, std::string>> items;
-    split_settings(settings, items);
+    if (!split_settings(settings, items)) {
+        warnings.push_back(sprat::core::tr_format(
+            "Sequence line \"{0}\" has a broken quote; the settings after it are ignored", {line}));
+    }
     bool has_fps = false;
     bool has_loop = false;
     for (const auto& [key, value] : items) {

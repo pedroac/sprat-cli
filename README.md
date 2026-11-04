@@ -8,7 +8,7 @@
 
 *   **CI/CD Pipelines**: Automate asset generation in your build process.
 *   **Shell Scripting**: Integrate naturally with `|`, `>`, and standard text tools.
-*   **Game Development**: Optimized packing algorithms for GPU memory.
+*   **Game Development**: Optimized packing algorithms for GPU memory, plus markers, animations and cutout puppets (rigs, poses and pose sequences) for engines.
 *   **Web & Apps**: Export to CSS, JSON, XML, or custom formats.
 
 ---
@@ -148,7 +148,7 @@ Reads the layout text from stdin, loads the images, and blits them into a single
 ```
 
 ### 3. Transforming (`spratconvert`)
-Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, etc.) for your game engine.
+Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, etc.) for your game engine, adding markers, animations and puppets from their own files.
 ```sh
 ./build/spratconvert --transform json < layout.txt > layout.json
 ```
@@ -954,6 +954,18 @@ sequence "fuss" fps:12 loop:pingpong
 ```
 
 Here the face is placed 40 pixels above the puppet's pivot, and the fly is free. `face.png` has `nose`, `mouth` and `eye` point markers, `eye.png` a `socket` circle, and every other sprite (each frame of `talk` too) a `pivot` point. For now, the `raw` transform writes puppets; custom transforms get them in `sprat.puppets`.
+
+#### Playing a puppet
+
+`spratconvert` only describes puppets; this is what the data means for an engine (or [sprat-lib](https://github.com/pedroac/sprat-lib) user) that draws them:
+
+1. **Rest pose.** Every part shows its first variant, with angle 0 and offset 0, and every positioned part sits at its `at:`. An animation variant plays on its own clock at its own fps.
+2. **Poses.** Apply poses in order, each over the result of the ones before: a pose changes only what it sets. A sequence does the same over time: at its fps, each step tweens the values its pose sets from where they are to the pose's over `in` frames (or keeps them and snaps at the end, with `ease:step`), switches variants when the pose arrives, then holds for `hold` frames.
+3. **Placement.** Each part's transform maps the original-image coordinates of the sprite it shows (the space markers and pivots are in, trim included) into the puppet's space:
+   - A positioned part's sprite pivot goes at its position, and the part turns `angle` degrees around it.
+   - An attached part's child marker goes where its parent's marker (in the sprite the parent shows) lands under the parent's transform, moved by `offset` turned with the parent; the part turns by its parent's total turn plus its own `angle`, around that point.
+   - Place a part's parent before the part itself; a parent may come later in draw order.
+4. **Drawing.** Draw the parts in file order with their transforms, the puppet's origin (its pivot) at the puppet's place in the world. Constraints, marker shapes and leeways aren't needed to draw: an editor, or an engine's physics step, keeps poses within them.
 
 Without `--markers`, `--animations` or `--puppets`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers, animations and puppets. There they share the layout's own `root` line, so leave out theirs: a second `root` line is an error. Layout files may hold `#` comment lines.
 
