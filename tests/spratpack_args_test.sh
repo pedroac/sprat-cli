@@ -22,11 +22,7 @@ fi
 cat > "$tmp_dir/pixel.b64" <<'EOF'
 iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7ZxaoAAAAASUVORK5CYII=
 EOF
-if base64 --version 2>&1 | grep -q "GNU"; then
-    base64 -d "$tmp_dir/pixel.b64" > "$tmp_dir/pixel.png"
-else
-    base64 -D -i "$tmp_dir/pixel.b64" -o "$tmp_dir/pixel.png"
-fi
+base64 --decode < "$tmp_dir/pixel.b64" > "$tmp_dir/pixel.png"
 
 layout="$tmp_dir/layout.txt"
 cat > "$layout" <<EOF

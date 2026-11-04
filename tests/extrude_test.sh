@@ -32,11 +32,7 @@ cat > "$tmp_dir/red2x2.b64" <<'EOF'
 iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8Dwn4GBgYGJAQoAHxcCAk+Uzr4AAAAASUVORK5CYII=
 EOF
 
-if base64 --version 2>&1 | grep -q "GNU"; then
-    base64 -d "$tmp_dir/red2x2.b64" > "$frames_dir/red.png"
-else
-    base64 -D -i "$tmp_dir/red2x2.b64" -o "$frames_dir/red.png"
-fi
+base64 --decode < "$tmp_dir/red2x2.b64" > "$frames_dir/red.png"
 
 layout_file="$tmp_dir/layout.txt"
 # Use --extrude 1. Padding will be auto-set to 2.

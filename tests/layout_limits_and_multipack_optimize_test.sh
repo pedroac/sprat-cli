@@ -25,11 +25,7 @@ mkdir -p "$frames_limits"
 cat > "$tmp_dir/pixel.b64" <<'EOF'
 iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7ZxaoAAAAASUVORK5CYII=
 EOF
-if base64 --version 2>&1 | grep -q "GNU"; then
-    base64 -d "$tmp_dir/pixel.b64" > "$frames_limits/f1.png"
-else
-    base64 -D -i "$tmp_dir/pixel.b64" -o "$frames_limits/f1.png"
-fi
+base64 --decode < "$tmp_dir/pixel.b64" > "$frames_limits/f1.png"
 cp "$frames_limits/f1.png" "$frames_limits/f2.png"
 
 profiles_cfg="$tmp_dir/profiles.cfg"
@@ -62,15 +58,9 @@ EOF
 cat > "$tmp_dir/s1x30.b64" <<'EOF'
 Qk2uAAAAAAAAADYAAAAoAAAAAQAAAB4AAAABABgAAAAAAHgAAAATCwAAEwsAAAAAAAAAAAAAAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8AAAD/AAAA/wAAAP8A
 EOF
-if base64 --version 2>&1 | grep -q "GNU"; then
-    base64 -d "$tmp_dir/s10.b64" > "$frames_multi/a.bmp"
-    base64 -d "$tmp_dir/s10.b64" > "$frames_multi/b.bmp"
-    base64 -d "$tmp_dir/s1x30.b64" > "$frames_multi/c.bmp"
-else
-    base64 -D -i "$tmp_dir/s10.b64" -o "$frames_multi/a.bmp"
-    base64 -D -i "$tmp_dir/s10.b64" -o "$frames_multi/b.bmp"
-    base64 -D -i "$tmp_dir/s1x30.b64" -o "$frames_multi/c.bmp"
-fi
+base64 --decode < "$tmp_dir/s10.b64" > "$frames_multi/a.bmp"
+base64 --decode < "$tmp_dir/s10.b64" > "$frames_multi/b.bmp"
+base64 --decode < "$tmp_dir/s1x30.b64" > "$frames_multi/c.bmp"
 
 "$spratlayout_bin" "$(fix_path "$frames_multi")" --mode compact --multipack --max-width 30 --max-height 30 --optimize gpu > "$tmp_dir/multipack_gpu.txt"
 "$spratlayout_bin" "$(fix_path "$frames_multi")" --mode compact --multipack --max-width 30 --max-height 30 --optimize space > "$tmp_dir/multipack_space.txt"
