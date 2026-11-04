@@ -963,12 +963,18 @@ void resolve_alias_sources(std::vector<AnimationItem>& animations) {
 // point marker of the child part's variant to a marker of the parent part's variant. The
 // parent marker's shape is where the child's point may go (a point, or anywhere in a
 // circle, rectangle or polygon); leeway lets it drift that many pixels further, and angle
-// limits how far the child turns relative to the parent. A part that isn't attached is
-// placed by its own position (at:X,Y) in the puppet's space, whose origin is the puppet's
-// pivot; several parts may be, and one of them is the reference, the part that stands for
-// the puppet. sprat only describes the rig; engines pose it.
+// limits how far the child turns relative to the parent. A part's first attach is its
+// parent, so parents form a tree; further attach lines are constraints, which an editor
+// (or an engine that wants live physics) honors while posing, and which may close loops.
+// A part with no parent is placed by its own position (at:X,Y) in the puppet's space, whose
+// origin is the puppet's pivot; all its attach lines are constraints.
+//
+// A pose sets some parts: a variant, an angle relative to the parent (or around its own
+// pivot for a positioned part), an offset within its joint's allowed area, or a position.
+// Poses only name what they change, so they layer (walk + smile). sprat describes the rig
+// and its poses; engines play them.
 
-// Most degrees a joint's angle range may reach either way.
+// Most degrees a joint's angle range, or a pose's angle, may reach either way.
 constexpr int k_max_joint_angle = 360;
 
 struct PuppetVariant {
@@ -979,14 +985,14 @@ struct PuppetVariant {
 
 struct PuppetPart {
     std::string name;
-    int parent = -1;  // index of the part it is attached to, or -1
+    int parent = -1;  // index of the part it is attached to first, or -1
+    int joint = -1;   // index of the joint that attaches it to its parent, or -1
     std::vector<PuppetVariant> variants;
-    // Where a part that isn't attached goes: its sprite's pivot at x,y in the puppet's
-    // space, whose origin is the puppet's pivot (original-image pixels, Y down).
+    // Where a part with no parent goes: its sprite's pivot at x,y in the puppet's space,
+    // whose origin is the puppet's pivot (original-image pixels, Y down).
     bool has_position = false;
     int x = 0;
     int y = 0;
-    bool is_reference = false;  // marked "reference" in the file
 };
 
 struct PuppetJoint {
@@ -994,19 +1000,37 @@ struct PuppetJoint {
     std::string child_marker;
     size_t parent = 0;
     std::string parent_marker;
+    bool is_constraint = false;  // a further attach of its child, not its parent
     int leeway = 0;
     bool has_angle = false;
     int angle_min = 0;
     int angle_max = 0;
 };
 
+// What a pose sets for one part; each value only when its has_ flag is set.
+struct PoseSetting {
+    size_t part = 0;
+    int variant = -1;  // index into the part's variants, or -1 to keep it
+    bool has_angle = false;
+    int angle = 0;
+    bool has_offset = false;
+    int offset_x = 0;
+    int offset_y = 0;
+    bool has_position = false;
+    int x = 0;
+    int y = 0;
+};
+
+struct PuppetPose {
+    std::string name;
+    std::vector<PoseSetting> settings;  // in part order
+};
+
 struct PuppetItem {
     std::string name;
     std::vector<PuppetPart> parts;
     std::vector<PuppetJoint> joints;
-    // The positioned part that stands for the puppet (the hand in a hand puppet): the one
-    // marked "reference", else the first positioned part; -1 when there are no parts.
-    int reference = -1;
+    std::vector<PuppetPose> poses;
 };
 
 // Reads `PART:MARKER` (either name quoted or bare) starting at `pos`.
@@ -1029,18 +1053,68 @@ bool parse_angle_range(const std::string& value, int& min, int& max) {
         && max <= k_max_joint_angle;
 }
 
+// Splits "KEY:VALUE" settings, where a value may be quoted to hold spaces
+// (variant:"run back"). A word without a colon has an empty key. False on a broken quote.
+bool split_settings(const std::string& text, std::vector<std::pair<std::string, std::string>>& out) {
+    size_t pos = 0;
+    while (true) {
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
+        if (pos >= text.size()) {
+            return true;
+        }
+        const size_t end = std::min(text.size(), text.find_first_of(" \t:", pos));
+        if (end >= text.size() || text[end] != ':') {
+            out.emplace_back("", text.substr(pos, end - pos));
+            pos = end;
+            continue;
+        }
+        std::string key = text.substr(pos, end - pos);
+        pos = end + 1;
+        std::string value;
+        if (pos < text.size() && text[pos] == '"') {
+            std::string quote_error;
+            if (!parse_quoted(text, pos, value, quote_error)) {
+                return false;
+            }
+        } else {
+            const size_t value_end = std::min(text.size(), text.find_first_of(" \t", pos));
+            value = text.substr(pos, value_end - pos);
+            pos = value_end;
+        }
+        out.emplace_back(std::move(key), std::move(value));
+    }
+}
+
 // An attach line before its parts are known: they are looked up when the puppet ends.
 struct PendingAttach {
-    std::string line;
     std::string child;
     std::string parent;
     PuppetJoint joint;
 };
 
-// Resolves a puppet's attach lines into joints and part parents. False (with `error`) when
-// one names an unknown part, attaches a part to itself or twice, or closes a cycle.
+// A "- part" line of a pose before its part is known.
+struct PendingPosePart {
+    std::string line;
+    std::string part;
+    std::string variant;  // empty to keep it
+    PoseSetting setting;
+};
+
+struct PendingPose {
+    std::string name;
+    std::vector<PendingPosePart> parts;
+};
+
+// Resolves a puppet's attach lines into parents, joints and constraints, places every
+// part, and checks its poses against the rig. False (with `error`) when something names an
+// unknown part or variant, attaches a part to itself, attaches two positioned parts,
+// closes a cycle of parents, leaves a part unplaced, or poses a part in a way its rig
+// doesn't allow.
 bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attaches,
-                   std::string& error, std::vector<std::string>& warnings) {
+                   const std::vector<PendingPose>& poses, std::string& error,
+                   std::vector<std::string>& warnings) {
     std::unordered_map<std::string, size_t> part_index;
     for (size_t i = 0; i < puppet.parts.size(); ++i) {
         part_index.emplace(puppet.parts[i].name, i);
@@ -1062,17 +1136,21 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
             return false;
         }
         PuppetPart& child = puppet.parts[joint.child];
-        if (child.parent >= 0) {
-            error = sprat::core::tr_format("Puppet \"{0}\" attaches part \"{1}\" more than once",
-                                           {puppet.name, attach.child});
+        if (child.has_position && puppet.parts[joint.parent].has_position) {
+            error = sprat::core::tr_format(
+                "Puppet \"{0}\" attaches \"{1}\" to \"{2}\", and both have a position; one of them must be placed by the joint",
+                {puppet.name, attach.child, attach.parent});
             return false;
         }
-        child.parent = static_cast<int>(joint.parent);
+        // The first attach of a part without a position is its parent; the rest constrain it.
+        joint.is_constraint = child.has_position || child.parent >= 0;
+        if (!joint.is_constraint) {
+            child.parent = static_cast<int>(joint.parent);
+            child.joint = static_cast<int>(puppet.joints.size());
+        }
         puppet.joints.push_back(std::move(joint));
     }
-    // Every part is placed one way: by its own position, or by the joint that attaches it.
-    for (size_t i = 0; i < puppet.parts.size(); ++i) {
-        const PuppetPart& part = puppet.parts[i];
+    for (const PuppetPart& part : puppet.parts) {
         // Each part has one parent at most, so walking up either reaches a root or loops.
         const PuppetPart* at = &part;
         for (size_t steps = 0; at->parent >= 0; ++steps) {
@@ -1083,34 +1161,11 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
             }
             at = &puppet.parts[static_cast<size_t>(at->parent)];
         }
-        if (part.parent >= 0 && part.has_position) {
-            error = sprat::core::tr_format(
-                "Puppet \"{0}\" part \"{1}\" is attached to \"{2}\" and has a position; an attached part is placed by its joint",
-                {puppet.name, part.name, puppet.parts[static_cast<size_t>(part.parent)].name});
-            return false;
-        }
         if (part.parent < 0 && !part.has_position) {
             error = sprat::core::tr_format(
                 "Puppet \"{0}\" part \"{1}\" has no position and is attached to no part; give it at:X,Y or attach it",
                 {puppet.name, part.name});
             return false;
-        }
-        if (part.is_reference && !part.has_position) {
-            error = sprat::core::tr_format(
-                "Puppet \"{0}\" part \"{1}\" is the reference but has no position; the reference is placed by at:X,Y",
-                {puppet.name, part.name});
-            return false;
-        }
-        if (part.is_reference) {
-            if (puppet.reference >= 0 && puppet.parts[static_cast<size_t>(puppet.reference)].is_reference) {
-                error = sprat::core::tr_format(
-                    "Puppet \"{0}\" has more than one reference part (\"{1}\" and \"{2}\")",
-                    {puppet.name, puppet.parts[static_cast<size_t>(puppet.reference)].name, part.name});
-                return false;
-            }
-            puppet.reference = static_cast<int>(i);
-        } else if (puppet.reference < 0 && part.has_position) {
-            puppet.reference = static_cast<int>(i);
         }
         if (part.variants.empty()) {
             warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has no sprites or animations",
@@ -1119,6 +1174,67 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
     }
     if (puppet.parts.empty()) {
         warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" has no parts", {puppet.name}));
+    }
+
+    for (const PendingPose& pending : poses) {
+        PuppetPose pose;
+        pose.name = pending.name;
+        std::unordered_set<size_t> posed;
+        for (const PendingPosePart& pp : pending.parts) {
+            const auto it = part_index.find(pp.part);
+            if (it == part_index.end()) {
+                error = sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" sets unknown part \"{2}\"",
+                                               {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            if (!posed.insert(it->second).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" sets part \"{2}\" more than once",
+                                               {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            const PuppetPart& part = puppet.parts[it->second];
+            PoseSetting setting = pp.setting;
+            setting.part = it->second;
+            if (!pp.variant.empty()) {
+                const auto variant = std::find_if(part.variants.begin(), part.variants.end(),
+                                                  [&](const PuppetVariant& v) { return v.name == pp.variant; });
+                if (variant == part.variants.end()) {
+                    error = sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" part \"{2}\" has no variant \"{3}\"",
+                                                   {puppet.name, pose.name, pp.part, pp.variant});
+                    return false;
+                }
+                setting.variant = static_cast<int>(variant - part.variants.begin());
+            }
+            if (setting.has_position && !part.has_position) {
+                error = sprat::core::tr_format(
+                    "Puppet \"{0}\" pose \"{1}\" moves part \"{2}\", which its joint places; turn it with angle: or shift it with offset:",
+                    {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            if (setting.has_offset && part.has_position) {
+                error = sprat::core::tr_format(
+                    "Puppet \"{0}\" pose \"{1}\" offsets part \"{2}\", which has no joint to drift in; move it with at:X,Y",
+                    {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            if (setting.has_angle && part.joint >= 0) {
+                const PuppetJoint& joint = puppet.joints[static_cast<size_t>(part.joint)];
+                if (joint.has_angle && (setting.angle < joint.angle_min || setting.angle > joint.angle_max)) {
+                    error = sprat::core::tr_format(
+                        "Puppet \"{0}\" pose \"{1}\" turns part \"{2}\" {3} degrees, outside its joint's {4}..{5}",
+                        {puppet.name, pose.name, pp.part, std::to_string(setting.angle),
+                         std::to_string(joint.angle_min), std::to_string(joint.angle_max)});
+                    return false;
+                }
+            }
+            pose.settings.push_back(setting);
+        }
+        if (pose.settings.empty()) {
+            warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" sets no part",
+                                                      {puppet.name, pose.name}));
+        }
+        std::ranges::sort(pose.settings, {}, &PoseSetting::part);
+        puppet.poses.push_back(std::move(pose));
     }
     return true;
 }
@@ -1229,8 +1345,8 @@ void read_attach_settings(const std::string& settings, const std::string& line, 
     }
 }
 
-// Reads the settings after a part's name: at:X,Y and reference, in any order, each at
-// most once. What doesn't fit is reported and ignored.
+// Reads the settings after a part's name: at:X,Y, at most once. What doesn't fit is
+// reported and ignored.
 void read_part_settings(const std::string& settings, const std::string& line, PuppetPart& part,
                         std::vector<std::string>& warnings) {
     std::istringstream iss(settings);
@@ -1238,9 +1354,7 @@ void read_part_settings(const std::string& settings, const std::string& line, Pu
     while (iss >> token) {
         int x = 0;
         int y = 0;
-        if (token == "reference" && !part.is_reference) {
-            part.is_reference = true;
-        } else if (token.starts_with("at:") && !part.has_position) {
+        if (token.starts_with("at:") && !part.has_position) {
             if (parse_pair(token.substr(3), x, y)) {
                 part.has_position = true;
                 part.x = x;
@@ -1258,6 +1372,63 @@ void read_part_settings(const std::string& settings, const std::string& line, Pu
     }
 }
 
+// Reads a pose's "- part" line: the part, then variant:NAME, angle:DEGREES, offset:X,Y and
+// at:X,Y, in any order, each at most once. False, with a warning, when it names no part;
+// a setting that doesn't fit is reported and ignored.
+bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::vector<std::string>& warnings) {
+    out.line = trimmed;
+    size_t pos = trimmed.find("part") + 4;
+    std::vector<std::pair<std::string, std::string>> settings;
+    if (!read_name_at(trimmed, pos, out.part) || !split_settings(trimmed.substr(pos), settings)) {
+        warnings.push_back(sprat::core::tr_format(
+            "Puppets file line \"{0}\" is not - part \"PART\" [variant:NAME] [angle:DEGREES] [offset:X,Y] [at:X,Y]; it is ignored",
+            {trimmed}));
+        return false;
+    }
+    PoseSetting& s = out.setting;
+    for (const auto& [key, value] : settings) {
+        const auto bad = [&](const char* expected) {
+            warnings.push_back(sprat::core::tr_format(
+                "Pose line \"{0}\" {1} \"{2}\" is not {3}; it is ignored", {trimmed, key, value, expected}));
+        };
+        if (key == "variant" && out.variant.empty()) {
+            if (value.empty()) {
+                bad("a variant name");
+            } else {
+                out.variant = value;
+            }
+        } else if (key == "angle" && !s.has_angle) {
+            if (parse_int(value, s.angle) && s.angle >= -k_max_joint_angle && s.angle <= k_max_joint_angle) {
+                s.has_angle = true;
+            } else {
+                s.angle = 0;
+                bad("whole degrees between -360 and 360");
+            }
+        } else if (key == "offset" && !s.has_offset) {
+            s.has_offset = parse_pair(value, s.offset_x, s.offset_y);
+            if (!s.has_offset) {
+                s.offset_x = s.offset_y = 0;
+                bad("X,Y in whole pixels");
+            }
+        } else if (key == "at" && !s.has_position) {
+            s.has_position = parse_pair(value, s.x, s.y);
+            if (!s.has_position) {
+                s.x = s.y = 0;
+                bad("X,Y in whole pixels");
+            }
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Pose line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {trimmed, key.empty() ? value : key + ":" + value}));
+        }
+    }
+    if (out.variant.empty() && !s.has_angle && !s.has_offset && !s.has_position) {
+        warnings.push_back(sprat::core::tr_format("Pose line \"{0}\" sets nothing; it is ignored", {trimmed}));
+        return false;
+    }
+    return true;
+}
+
 std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool from_layout_stream,
                                            const std::unordered_map<std::string, int>& by_path,
                                            const std::unordered_map<std::string, int>& by_name,
@@ -1272,7 +1443,10 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
     std::vector<PuppetItem> puppets;
     std::unordered_set<std::string> puppet_names;
     std::vector<PendingAttach> attaches;  // of the current puppet
+    std::vector<PendingPose> poses;       // of the current puppet
+    std::unordered_set<std::string> pose_names;
     PuppetPart* current_part = nullptr;
+    PendingPose* current_pose = nullptr;
     std::unordered_set<std::string> part_names;
     std::unordered_set<std::string> variant_names;
     // Set after a part line that couldn't be read: its variants are dropped with it.
@@ -1280,10 +1454,12 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
     std::string raw_root;
 
     const auto end_puppet = [&]() {
-        if (!puppets.empty() && !finish_puppet(puppets.back(), attaches, error, warnings)) {
+        if (!puppets.empty() && !finish_puppet(puppets.back(), attaches, poses, error, warnings)) {
             return false;
         }
         attaches.clear();
+        poses.clear();
+        pose_names.clear();
         return true;
     };
 
@@ -1298,7 +1474,7 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
         if (!is_puppets_keyword(keyword)) {
             if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Puppets file line \"{0}\" is not a root, puppet, part, - sprite, - animation or attach line; it is ignored",
+                    "Puppets file line \"{0}\" is not a root, puppet, part, - sprite, - animation, attach, pose or - part line; it is ignored",
                     {trimmed}));
             }
             continue;
@@ -1312,6 +1488,7 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
                 return {};
             }
             current_part = nullptr;
+            current_pose = nullptr;
             skipping_part = false;
             std::string name;
             size_t pos = keyword.size();
@@ -1323,7 +1500,7 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
                 error = sprat::core::tr_format("Puppet \"{0}\" is defined more than once", {name});
                 return {};
             }
-            puppets.push_back({name, {}, {}});
+            puppets.push_back({name, {}, {}, {}});
             part_names.clear();
             continue;
         }
@@ -1333,14 +1510,44 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
             continue;
         }
         PuppetItem& puppet = puppets.back();
-        if (keyword == "part") {
+        if (keyword != "- part") {
+            current_pose = nullptr;  // a pose's "- part" lines follow it directly
+        }
+        if (keyword == "pose") {
+            current_part = nullptr;
+            skipping_part = false;
+            std::string name;
+            size_t pos = keyword.size();
+            if (!read_name_at(trimmed, pos, name) || !trim_copy(trimmed.substr(pos)).empty()) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not pose \"NAME\"; the pose is ignored", {trimmed}));
+                continue;
+            }
+            if (!pose_names.insert(name).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" has more than one pose \"{1}\"",
+                                               {puppet.name, name});
+                return {};
+            }
+            poses.push_back({name, {}});
+            current_pose = &poses.back();
+        } else if (keyword == "- part") {
+            if (current_pose == nullptr) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not inside a pose; it is ignored", {trimmed}));
+                continue;
+            }
+            PendingPosePart pose_part;
+            if (read_pose_part_line(trimmed, pose_part, warnings)) {
+                current_pose->parts.push_back(std::move(pose_part));
+            }
+        } else if (keyword == "part") {
             current_part = nullptr;
             PuppetPart part;
             size_t pos = keyword.size();
             skipping_part = !read_name_at(trimmed, pos, part.name);
             if (skipping_part) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Puppets file line \"{0}\" is not part \"NAME\" [at:X,Y] [reference]; the part is ignored",
+                    "Puppets file line \"{0}\" is not part \"NAME\" [at:X,Y]; the part is ignored",
                     {trimmed}));
                 continue;
             }
@@ -1355,7 +1562,6 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
             variant_names.clear();
         } else if (keyword == "attach") {
             PendingAttach attach;
-            attach.line = trimmed;
             size_t pos = keyword.size();
             std::string to;
             bool ok = read_part_marker(trimmed, pos, attach.child, attach.joint.child_marker);
@@ -1429,6 +1635,8 @@ void check_puppet_markers(const std::vector<PuppetItem>& puppets, const std::vec
         return it == global_markers.end() ? nullptr : it->second;
     };
     for (const PuppetItem& puppet : puppets) {
+        // Two joints may need the same marker of the same sprite; that is said once.
+        std::unordered_set<std::string> said;
         for (const PuppetJoint& joint : puppet.joints) {
             const std::string& child_name = puppet.parts[joint.child].name;
             const auto check_end = [&](const PuppetPart& part, const std::string& marker_name, bool is_child) {
@@ -1440,12 +1648,15 @@ void check_puppet_markers(const std::vector<PuppetItem>& puppets, const std::vec
                             || !reported.insert(sprite).second) {
                             continue;
                         }
-                        warnings.push_back(sprat::core::tr_format(
+                        std::string warning = sprat::core::tr_format(
                             is_child
                                 ? "Puppet \"{0}\" part \"{1}\" sprite \"{2}\" has no point marker \"{3}\" to attach it by"
                                 : "Puppet \"{0}\" part \"{1}\" sprite \"{2}\" has no marker \"{3}\" to attach part \"{4}\" to",
                             {puppet.name, part.name, sprite_names[static_cast<size_t>(sprite)], marker_name,
-                             child_name}));
+                             child_name});
+                        if (said.insert(warning).second) {
+                            warnings.push_back(std::move(warning));
+                        }
                     }
                 }
             };
@@ -1462,6 +1673,17 @@ bool check_puppet_limits(const std::vector<PuppetItem>& puppets, double scale, s
         return sprat::core::within_coordinate_limit(sprat::core::scale_to_atlas(v, scale));
     };
     for (const PuppetItem& puppet : puppets) {
+        for (const PuppetPose& pose : puppet.poses) {
+            for (const PoseSetting& set : pose.settings) {
+                if (!fits(set.x) || !fits(set.y) || !fits(set.offset_x) || !fits(set.offset_y)) {
+                    error = sprat::core::tr_format(
+                        "Puppet \"{0}\" pose \"{1}\" places part \"{2}\" beyond {3} atlas pixels",
+                        {puppet.name, pose.name, puppet.parts[set.part].name,
+                         std::to_string(sprat::core::k_max_coordinate)});
+                    return false;
+                }
+            }
+        }
         for (const PuppetPart& part : puppet.parts) {
             if (!fits(part.x) || !fits(part.y)) {
                 error = sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has a position beyond {2} atlas pixels",
@@ -1964,7 +2186,6 @@ std::string build_sprat_json(
         const PuppetItem& puppet = puppets[pi];
         j += "{\"index\":" + std::to_string(pi);
         j += ",\"name\":\"" + escape_json(puppet.name) + "\"";
-        j += ",\"reference\":" + std::to_string(puppet.reference);
         j += ",\"parts\":[";
         for (size_t ri = 0; ri < puppet.parts.size(); ++ri) {
             if (ri > 0) j += ',';
@@ -1978,7 +2199,6 @@ std::string build_sprat_json(
             j += ",\"has_position\":" + std::string(part.has_position ? "true" : "false");
             j += ",\"x\":" + std::to_string(sprat::core::scale_to_atlas(part.x, layout.scale));
             j += ",\"y\":" + std::to_string(sprat::core::scale_to_atlas(part.y, layout.scale));
-            j += ",\"is_reference\":" + std::string(static_cast<int>(ri) == puppet.reference ? "true" : "false");
             j += ",\"variants\":[";
             for (size_t vi = 0; vi < part.variants.size(); ++vi) {
                 if (vi > 0) j += ',';
@@ -2003,11 +2223,42 @@ std::string build_sprat_json(
             j += ",\"parent\":" + std::to_string(joint.parent);
             j += ",\"parent_name\":\"" + escape_json(puppet.parts[joint.parent].name) + "\"";
             j += ",\"parent_marker\":\"" + escape_json(joint.parent_marker) + "\"";
+            j += ",\"is_constraint\":" + std::string(joint.is_constraint ? "true" : "false");
             j += ",\"leeway\":" + std::to_string(sprat::core::scale_to_atlas(joint.leeway, layout.scale));
             j += ",\"has_angle\":" + std::string(joint.has_angle ? "true" : "false");
             j += ",\"angle_min\":" + std::to_string(joint.angle_min);
             j += ",\"angle_max\":" + std::to_string(joint.angle_max);
             j += "}";
+        }
+        // Poses: what each sets for some parts, in part order; offsets and positions in atlas pixels.
+        j += "],\"poses\":[";
+        for (size_t oi = 0; oi < puppet.poses.size(); ++oi) {
+            if (oi > 0) j += ',';
+            const PuppetPose& pose = puppet.poses[oi];
+            j += "{\"index\":" + std::to_string(oi);
+            j += ",\"name\":\"" + escape_json(pose.name) + "\"";
+            j += ",\"parts\":[";
+            for (size_t si = 0; si < pose.settings.size(); ++si) {
+                if (si > 0) j += ',';
+                const PoseSetting& set = pose.settings[si];
+                const PuppetPart& part = puppet.parts[set.part];
+                j += "{\"part\":" + std::to_string(set.part);
+                j += ",\"part_name\":\"" + escape_json(part.name) + "\"";
+                j += ",\"variant\":" + std::to_string(set.variant);
+                j += ",\"variant_name\":\""
+                    + (set.variant < 0 ? std::string() : escape_json(part.variants[static_cast<size_t>(set.variant)].name))
+                    + "\"";
+                j += ",\"has_angle\":" + std::string(set.has_angle ? "true" : "false");
+                j += ",\"angle\":" + std::to_string(set.angle);
+                j += ",\"has_offset\":" + std::string(set.has_offset ? "true" : "false");
+                j += ",\"offset_x\":" + std::to_string(sprat::core::scale_to_atlas(set.offset_x, layout.scale));
+                j += ",\"offset_y\":" + std::to_string(sprat::core::scale_to_atlas(set.offset_y, layout.scale));
+                j += ",\"has_position\":" + std::string(set.has_position ? "true" : "false");
+                j += ",\"x\":" + std::to_string(sprat::core::scale_to_atlas(set.x, layout.scale));
+                j += ",\"y\":" + std::to_string(sprat::core::scale_to_atlas(set.y, layout.scale));
+                j += "}";
+            }
+            j += "]}";
         }
         j += "]}";
     }
@@ -2491,7 +2742,7 @@ void print_usage() {
               << tr("  --animations PATH          Load external animations file (fps up to 100)\n")
               << tr("                             loop modes: loop, once, pingpong, once-pingpong\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
-              << tr("  --puppets PATH             Load external puppets file (cutout rigs of parts and joints)\n")
+              << tr("  --puppets PATH             Load external puppets file (cutout rigs and their poses)\n")
               << tr("  --help, -h                 Show this help message\n")
               << tr("  --version, -v              Show version\n");
 }

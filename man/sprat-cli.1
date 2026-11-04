@@ -472,21 +472,26 @@ Load a puppets plaintext file: cutout rigs of parts joined by markers. Lines:
 .PP
 puppet "\fIname\fR"
 .br
-part "\fIname\fR" [at:\fIX\fR,\fIY\fR] [reference]
+part "\fIname\fR" [at:\fIX\fR,\fIY\fR]
 .br
 \- sprite "\fIsprite\fR" [\-> "\fIname\fR"]
 .br
 \- animation "\fIanimation\fR" [\-> "\fIname\fR"]
 .br
 attach "\fIchild\fR":"\fImarker\fR" to "\fIparent\fR":"\fImarker\fR" [leeway:\fIN\fR] [angle:\fIMIN\fR..\fIMAX\fR]
+.br
+pose "\fIname\fR"
+.br
+\- part "\fIpart\fR" [variant:\fIname\fR] [angle:\fIdegrees\fR] [offset:\fIX\fR,\fIY\fR] [at:\fIX\fR,\fIY\fR]
 .PP
 Parts are drawn in file order, back first.
 Every part is placed one way: attached to another part, or by \fBat:\fIX\fB,\fIY\fR, where its sprite's pivot goes in the puppet's space, whose origin is the puppet's pivot (Y down, original-image pixels). Any number of parts may be positioned.
-The reference, the part that stands for the puppet, is the positioned part marked \fBreference\fR, else the first positioned part.
+A part's first \fBattach\fR is its parent; further ones, and every \fBattach\fR of a positioned part, are constraints that may close loops. Two positioned parts can't be attached.
+A \fBpose\fR sets only the parts it names, so poses layer: a variant, an angle relative to the parent (within its joint's limits) or around a positioned part's pivot, an attached part's offset from the parent marker, or a positioned part's position.
 A part's variants are sprites (path, name or index) or animations, interchangeable, named after them unless \fB\->\fR names them.
 An \fBattach\fR line pins the child part's point marker, in every sprite it shows, to the parent part's marker, whose shape (a point, or the inside of a circle, rectangle or polygon) is where the child's point may be.
 \fBleeway\fR lets it drift up to \fIN\fR original-image pixels beyond that (default 0); \fBangle\fR limits how far, in degrees clockwise, the child turns relative to its parent (between \-360 and 360; default free).
-Missing markers, parts without variants and puppets without parts are reported. Attaching an unknown part, a part to itself or a part twice, a cycle of attachments, repeated puppet, part or variant names, an attached part with a position, a part with neither, a reference without a position and two reference parts are errors.
+Missing markers, parts without variants, puppets without parts and empty poses are reported. Attaching an unknown part, a part to itself or two positioned parts, a cycle of parents, repeated puppet, part, variant or pose names, a part with neither a position nor a parent, and a pose that sets an unknown part or variant, sets a part twice, turns it beyond its joint's limits, moves an attached part or offsets a positioned one are errors.
 Currently the \fBraw\fR transform writes puppets; custom transforms read \fBsprat.puppets\fR.
 .RE
 .SS spratframes
