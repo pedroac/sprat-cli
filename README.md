@@ -651,14 +651,14 @@ once; it must reject a file whose records don't match those totals. Strings are 
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
-sprat-raw 5
+sprat-raw 6
 sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS VERTICES FRAMES PARTS VARIANTS JOINTS STRING_BYTES
 atlas W H PATH
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
 sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
 anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
-puppet PARTS JOINTS NAME
-part PARENT VARIANTS NAME
+puppet PARTS JOINTS REFERENCE NAME
+part PARENT HAS_POSITION X Y VARIANTS NAME
 variant KIND INDEX NAME
 joint CHILD PARENT LEEWAY HAS_ANGLE ANGLE_MIN ANGLE_MAX CHILD_MARKER PARENT_MARKER
 ```
@@ -675,13 +675,17 @@ and no frames of its own; otherwise `ALIAS` is `-1`. The `PUPPETS` puppets follo
 animations: each `puppet` line is followed by its `PARTS` `part` lines, in draw order, each
 followed by its `VARIANTS` `variant` lines, and then by its `JOINTS` `joint` lines. A part's
 `PARENT` and a joint's `CHILD` and `PARENT` are part indexes within the puppet (`-1` for no
-parent); a variant's `KIND` is `sprite`=0 (`INDEX` is a sprite index) or `animation`=1 (`INDEX`
+parent). A part that isn't attached has `HAS_POSITION` 1 and `X Y`, where its sprite's pivot
+goes in the puppet's space (atlas pixels, Y down, origin at the puppet's pivot); an attached
+part has `HAS_POSITION` 0 and `X Y` 0. A puppet's `REFERENCE` is the index of the positioned
+part that stands for it, or `-1` when it has no parts. A variant's `KIND` is `sprite`=0 (`INDEX` is a sprite index) or `animation`=1 (`INDEX`
 is an animation index). A joint's markers are names, looked up in the markers of the sprite
 each part shows; `LEEWAY` is in atlas pixels, and `ANGLE_MIN` and `ANGLE_MAX` apply only with
 `HAS_ANGLE`. Values have the same meaning as in
 `json`, and the first line carries the format version (version 2 added `LOOP`; version 3 dropped the normal
 and collision map fields; version 4 added `GLOBAL_MARKERS`, their lines and `HAS_PIVOT`, and
-replaced the sprite's `ALIAS_OF` path with the `ALIAS` index; version 5 added puppets).
+replaced the sprite's `ALIAS_OF` path with the `ALIAS` index; version 5 added puppets; version
+6 added the puppet's `REFERENCE` and each part's `HAS_POSITION X Y`).
 
 Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
 [sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an
@@ -771,7 +775,8 @@ local sprat = std.extVar("sprat");
 | Field | Description |
 |---|---|
 | `index`, `name` | Identity |
-| `parts` | Parts in draw order, back first: `{index, name, parent, parent_name, variants}`; `parent` is the index of the part it is attached to, or `-1` (and `parent_name` empty) |
+| `reference` | Index of the part that stands for the puppet (positioned; `-1` without parts) |
+| `parts` | Parts in draw order, back first: `{index, name, parent, parent_name, has_position, x, y, is_reference, variants}`; `parent` is the index of the part it is attached to, or `-1` (and `parent_name` empty); a part that isn't attached has `has_position` and `x`, `y` in atlas pixels |
 | `parts[].variants` | `{index, name, kind, sprite_index, animation_index}`; `kind` is `sprite` or `animation`, and the other index is `-1` |
 | `joints` | `{index, child, child_name, child_marker, parent, parent_name, parent_marker, leeway, has_angle, angle_min, angle_max}`; `child` and `parent` are part indexes, `leeway` is in atlas pixels |
 
@@ -881,18 +886,20 @@ animation "idle"
 `--puppets` expects a plaintext file describing puppets: cutout rigs in the spirit of Terry Gilliam's animations and paper stop motion. A puppet is a set of parts (face, mouth, eyes, ...) joined by their markers. Each part has interchangeable variants, sprites or animations (a smiling and an angry mouth, a blinking eye), and a joint is between parts, not variants, so any variant can be swapped in. `spratconvert` only describes the rig; the engine poses it. Every line must be a `root`, `puppet`, `part`, `- sprite`, `- animation` or `attach` line (or a `#` comment); anything else is reported.
 
 - `puppet "NAME"` starts a puppet. Puppet names must be unique.
-- `part "NAME"` starts a part of the current puppet. Parts are drawn in file order, the first at the back. Part names must be unique within their puppet.
+- `part "NAME" [at:X,Y] [reference]` starts a part of the current puppet. Parts are drawn in file order, the first at the back. Part names must be unique within their puppet.
+- Every part is placed one way: attached to another part (see `attach`), or by its own position `at:X,Y`, where its sprite's pivot goes in the puppet's space. That space's origin (0,0) is the puppet's pivot, with Y down, in original-image pixels like markers. Any number of parts may be positioned, so a puppet can be all free parts, one rig, or a rig plus free parts (a fly around a head). Moving the puppet moves them all.
+- One positioned part is the reference, the part that stands for the puppet, like the hand inside a hand puppet: the one marked `reference`, else the first positioned part. A torso at `at:0,-120` puts the pivot 120 pixels below it, between the feet; a caterpillar's reference can be its middle segment, with the others attached on both sides.
 - `- sprite "SPRITE" [-> "NAME"]` adds a sprite variant to the current part: a sprite path (resolved against `root` like markers paths), name, or index (a bare number). `- animation "ANIMATION" [-> "NAME"]` adds an animation, from `--animations`, `--auto-animations` or the layout stream; an alias animation (a mirrored one) works too. A variant is named after its sprite or animation unless `-> "NAME"` names it; variant names must be unique within their part.
 - `attach "CHILD":"MARKER" to "PARENT":"MARKER" [leeway:N] [angle:MIN..MAX]` attaches the child part to its parent part, anywhere in the puppet. The child's marker must be a `point`, in every sprite the child shows (each frame of an animation variant); the parent's marker may be any shape, in every sprite the parent shows, and its shape is where the child's point may be: on the point, or anywhere inside a circle, rectangle or polygon (an eye socket for a pupil). `leeway:N` lets the child's point drift up to `N` pixels beyond that (default 0, rigid). `angle:MIN..MAX` limits how far the child turns relative to its parent, in degrees clockwise (y down), between -360 and 360; without it the child turns freely. Leeways are in original-image pixels, like markers, and are scaled into atlas pixels.
 
-A sprite that lacks a joint's marker, a part with no variants, a puppet with no parts, and a puppet with more than one part attached to nothing are reported. An attach line naming an unknown part, attaching a part to itself or a second time, or closing a cycle is an error, and so are a repeated puppet, part or variant name.
+A sprite that lacks a joint's marker, a part with no variants, and a puppet with no parts are reported. An attach line naming an unknown part, attaching a part to itself or a second time, or closing a cycle is an error, and so are a repeated puppet, part or variant name, an attached part with a position, a part with neither, a reference without a position, and two reference parts.
 
 Example `puppets.txt`:
 ```txt
 root "./pinocchio"
 puppet "pinocchio"
 
-part "face"
+part "face" at:0,-40
 - sprite "face.png"
 
 part "nose"
@@ -914,9 +921,12 @@ attach "nose":"pivot" to "face":"nose" angle:-10..10
 attach "mouth":"pivot" to "face":"mouth" leeway:2
 attach "eye":"pivot" to "face":"eye"
 attach "pupil":"pivot" to "eye":"socket"
+
+part "fly" at:24,-70
+- animation "buzz"
 ```
 
-Here `face.png` has `nose`, `mouth` and `eye` point markers, `eye.png` a `socket` circle, and every other sprite (each frame of `talk` too) a `pivot` point. For now, the `raw` transform writes puppets; custom transforms get them in `sprat.puppets`.
+Here the face is the reference, placed 40 pixels above the puppet's pivot, and the fly is free. `face.png` has `nose`, `mouth` and `eye` point markers, `eye.png` a `socket` circle, and every other sprite (each frame of `talk` too) a `pivot` point. For now, the `raw` transform writes puppets; custom transforms get them in `sprat.puppets`.
 
 Without `--markers`, `--animations` or `--puppets`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers, animations and puppets. There they share the layout's own `root` line, so leave out theirs: a second `root` line is an error. Layout files may hold `#` comment lines.
 

@@ -472,7 +472,7 @@ Load a puppets plaintext file: cutout rigs of parts joined by markers. Lines:
 .PP
 puppet "\fIname\fR"
 .br
-part "\fIname\fR"
+part "\fIname\fR" [at:\fIX\fR,\fIY\fR] [reference]
 .br
 \- sprite "\fIsprite\fR" [\-> "\fIname\fR"]
 .br
@@ -480,10 +480,13 @@ part "\fIname\fR"
 .br
 attach "\fIchild\fR":"\fImarker\fR" to "\fIparent\fR":"\fImarker\fR" [leeway:\fIN\fR] [angle:\fIMIN\fR..\fIMAX\fR]
 .PP
-Parts are drawn in file order, back first. A part's variants are sprites (path, name or index) or animations, interchangeable, named after them unless \fB\->\fR names them.
+Parts are drawn in file order, back first.
+Every part is placed one way: attached to another part, or by \fBat:\fIX\fB,\fIY\fR, where its sprite's pivot goes in the puppet's space, whose origin is the puppet's pivot (Y down, original-image pixels). Any number of parts may be positioned.
+The reference, the part that stands for the puppet, is the positioned part marked \fBreference\fR, else the first positioned part.
+A part's variants are sprites (path, name or index) or animations, interchangeable, named after them unless \fB\->\fR names them.
 An \fBattach\fR line pins the child part's point marker, in every sprite it shows, to the parent part's marker, whose shape (a point, or the inside of a circle, rectangle or polygon) is where the child's point may be.
 \fBleeway\fR lets it drift up to \fIN\fR original-image pixels beyond that (default 0); \fBangle\fR limits how far, in degrees clockwise, the child turns relative to its parent (between \-360 and 360; default free).
-Missing markers, parts without variants, puppets without parts and puppets with several unattached parts are reported. Attaching an unknown part, a part to itself or a part twice, a cycle of attachments, and repeated puppet, part or variant names are errors.
+Missing markers, parts without variants and puppets without parts are reported. Attaching an unknown part, a part to itself or a part twice, a cycle of attachments, repeated puppet, part or variant names, an attached part with a position, a part with neither, a reference without a position and two reference parts are errors.
 Currently the \fBraw\fR transform writes puppets; custom transforms read \fBsprat.puppets\fR.
 .RE
 .SS spratframes

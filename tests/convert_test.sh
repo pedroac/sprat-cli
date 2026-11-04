@@ -308,7 +308,7 @@ ANIMS
 # parts, variants or joints, and 104 string bytes: spawn 5, sprites 1+14 + 1+14 + 5+18 +
 # 1+14, markers 3+4+4+4+5, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
-sprat-raw 5
+sprat-raw 6
 sheet 1 0 0 1 4 2 0 1 6 3 2 0 0 0 104
 atlas 64 32 0:
 marker 0 1 1 0 0 0 0 5:spawn
@@ -331,29 +331,34 @@ if ! diff "$tmp_dir/expected.sprat" "$tmp_dir/out.sprat"; then
   exit 1
 fi
 # Puppets: parts in draw order with their variants (a sprite by path or name, an animation,
-# alias included), then the joints. The child's sprites need a point "pivot" and the
-# parent's a "zone": a has no pivot, and the deduplicated d has no markers of its own.
+# alias included), then the joints. A part that isn't attached has a position, and the
+# fly, marked reference, stands for the puppet. The child's sprites need a point "pivot"
+# and the parent's a "zone": a has no pivot, and the deduplicated d has no markers.
 raw_puppets_file="$tmp_dir/raw.puppets.txt"
 cat > "$raw_puppets_file" <<'PUPPETS'
 root "./frames"
 puppet "hé"
-part "body"
+part "body" at:0,-20
 - sprite "a.png"
 - sprite d -> "body-2"
 part "arm"
 - animation "run-left" -> "swing"
+part "fly" reference at:-6,-30
+- sprite b
 attach "arm":"pivot" to "body":zone leeway:2 angle:-30..45
 PUPPETS
-# 1 puppet, 2 parts, 3 variants, 1 joint; strings add hé 3, body 4 + a 1 + body-2 6,
-# arm 3 + swing 5, pivot 5 + zone 4 to the 104 bytes above.
+# 1 puppet, 3 parts, 4 variants, 1 joint; strings add hé 3, body 4 + a 1 + body-2 6,
+# arm 3 + swing 5, fly 3 + b 1, pivot 5 + zone 4 to the 104 bytes above.
 cat > "$tmp_dir/expected.puppets.sprat" <<'RAW'
-sheet 1 0 0 1 4 2 1 1 6 3 2 2 3 1 135
-puppet 2 1 3:hé
-part -1 2 4:body
+sheet 1 0 0 1 4 2 1 1 6 3 2 3 4 1 139
+puppet 3 1 2 3:hé
+part -1 1 0 -20 2 4:body
 variant 0 0 1:a
 variant 0 3 6:body-2
-part 0 1 3:arm
+part 0 0 0 0 1 3:arm
 variant 1 1 5:swing
+part -1 1 -6 -30 1 3:fly
+variant 0 1 1:b
 joint 1 0 2 1 -30 45 5:pivot 4:zone
 RAW
 "$convert_bin" --transform raw --markers "$(fix_path "$raw_markers_file")" \
@@ -372,8 +377,8 @@ if [ "$(grep -c 'Warning' "$tmp_dir/puppets.err")" -ne 2 ]; then
   cat "$tmp_dir/puppets.err" >&2
   exit 1
 fi
-# The same lines are read from the layout stream without --puppets, and a leeway is scaled
-# to atlas pixels like markers.
+# The same lines are read from the layout stream without --puppets, and positions and
+# leeways are scaled to atlas pixels like markers.
 printf 'local s = std.extVar("sprat");\n{ extension: ".json", content: std.manifestJson(s.puppets) }\n' \
   > "$tmp_dir/puppets.jsonnet"
 sed 's/^scale 1$/scale 0.5/' "$raw_layout_file" | cat - "$raw_animations_file" "$raw_puppets_file" \
@@ -383,7 +388,9 @@ import json, sys
 p = json.load(sys.stdin)
 assert [x["name"] for x in p] == ["hé"], p
 parts, joint = p[0]["parts"], p[0]["joints"][0]
-assert [(x["name"], x["parent"]) for x in parts] == [("body", -1), ("arm", 0)], parts
+assert [(x["name"], x["parent"], x["has_position"], x["x"], x["y"], x["is_reference"]) for x in parts] \
+    == [("body", -1, True, 0, -10, False), ("arm", 0, False, 0, 0, False), ("fly", -1, True, -3, -15, True)], parts
+assert p[0]["reference"] == 2, p
 assert [(v["name"], v["kind"], v["sprite_index"], v["animation_index"]) for v in parts[1]["variants"]] \
     == [("swing", "animation", -1, 1)], parts
 assert (joint["child_name"], joint["parent_name"], joint["leeway"], joint["angle_min"], joint["angle_max"]) \
@@ -416,11 +423,30 @@ grep -qF 'Puppet "p" is defined more than once' "$tmp_dir/bad.puppets.err"
 # An empty name would be written to raw as "none", so it is never a name.
 puppet_fails 'puppet ""'
 grep -qF 'Puppets file line "puppet """ is not puppet "NAME"' "$tmp_dir/bad.puppets.err"
-puppet_fails 'puppet "p"' 'part "x"' 'part "y"' '- sprite a' 'attach "x":a to "y":b leeway:99999999'
+puppet_fails 'puppet "p"' 'part "x"' 'part "y" at:0,0' '- sprite a' 'attach "x":a to "y":b leeway:99999999'
 grep -qF 'Puppet "p" part "x" has a leeway beyond 16777216 atlas pixels' "$tmp_dir/bad.puppets.err"
+puppet_fails 'puppet "p"' 'part "x" at:99999999,0'
+grep -qF 'Puppet "p" part "x" has a position beyond 16777216 atlas pixels' "$tmp_dir/bad.puppets.err"
+# Each part is placed one way: by its position or by its joint, and the reference by its position.
+puppet_fails 'puppet "p"' 'part "x" at:1,1' 'part "y" at:0,0' 'attach x:a to y:b'
+grep -qF 'Puppet "p" part "x" is attached to "y" and has a position; an attached part is placed by its joint' \
+  "$tmp_dir/bad.puppets.err"
+puppet_fails 'puppet "p"' 'part "x" at:0,0' 'part "y"'
+grep -qF 'Puppet "p" part "y" has no position and is attached to no part; give it at:X,Y or attach it' \
+  "$tmp_dir/bad.puppets.err"
+puppet_fails 'puppet "p"' 'part "x" reference' 'part "y" at:0,0' 'attach x:a to y:b'
+grep -qF 'Puppet "p" part "x" is the reference but has no position' "$tmp_dir/bad.puppets.err"
+puppet_fails 'puppet "p"' 'part "x" at:0,0 reference' 'part "y" reference at:1,1'
+grep -qF 'Puppet "p" has more than one reference part ("x" and "y")' "$tmp_dir/bad.puppets.err"
+# Without a marked one, the reference is the first positioned part.
+printf '%s\n' 'puppet "p"' 'part "x"' 'part "y" at:1,2' 'part "z" at:3,4' 'attach x:a to z:b' \
+  > "$tmp_dir/ref.puppets.txt"
+"$convert_bin" --transform raw --puppets "$(fix_path "$tmp_dir/ref.puppets.txt")" < "$raw_layout_file" \
+  2> /dev/null | grep -qF 'puppet 3 1 1 1:p'
 printf '%s\n' 'part "early"' 'puppet "p"' 'part "x"' '- sprite nope' '- sprite 9' '- animation "nope"' \
-  '- sprite a => b' 'part "y"' 'attach x: a to y:b' 'attach x:a to y:b leeway:-1 angle:5..1 spin:2' \
-  'bogus' 'part "z"' '- sprite a -> ""' 'part ""' 'attach z:"" to y:b' > "$tmp_dir/warn.puppets.txt"
+  '- sprite a => b' 'part "y" at:0,0' 'attach x: a to y:b' 'attach x:a to y:b leeway:-1 angle:5..1 spin:2' \
+  'bogus' 'part "z" at:1,x at:5,5 at:6,6 high' '- sprite a -> ""' 'part ""' 'attach z:"" to y:b' \
+  > "$tmp_dir/warn.puppets.txt"
 "$convert_bin" --puppets "$(fix_path "$tmp_dir/warn.puppets.txt")" < "$raw_layout_file" \
   > /dev/null 2> "$tmp_dir/warn.puppets.err"
 grep -qF 'Puppets file line "part "early"" is not inside a puppet' "$tmp_dir/warn.puppets.err"
@@ -434,8 +460,10 @@ grep -qF 'angle "5..1" is not MIN..MAX degrees' "$tmp_dir/warn.puppets.err"
 grep -qF 'has an unknown or repeated setting "spin:2"' "$tmp_dir/warn.puppets.err"
 grep -qF 'Puppets file line "bogus" is not a root, puppet, part' "$tmp_dir/warn.puppets.err"
 grep -qF 'Puppet "p" part "x" has no sprites or animations' "$tmp_dir/warn.puppets.err"
-grep -qF 'Puppet "p" has 2 parts attached to nothing ("y", "z")' "$tmp_dir/warn.puppets.err"
-grep -qF 'Puppets file line "part """ is not part "NAME"' "$tmp_dir/warn.puppets.err"
+grep -qF 'position "1,x" is not at:X,Y in whole pixels' "$tmp_dir/warn.puppets.err"
+grep -qF 'has an unknown or repeated setting "at:6,6"' "$tmp_dir/warn.puppets.err"
+grep -qF 'has an unknown or repeated setting "high"' "$tmp_dir/warn.puppets.err"
+grep -qF 'Puppets file line "part """ is not part "NAME" [at:X,Y] [reference]' "$tmp_dir/warn.puppets.err"
 grep -qF 'Puppets file line "- sprite a -> """ is not - sprite' "$tmp_dir/warn.puppets.err"
 grep -qF 'Puppets file line "attach z:"" to y:b" is not attach' "$tmp_dir/warn.puppets.err"
 printf '%s\n' '- marker "" point 1,1' 'animation ""' > "$tmp_dir/empty.names.txt"

@@ -963,8 +963,10 @@ void resolve_alias_sources(std::vector<AnimationItem>& animations) {
 // point marker of the child part's variant to a marker of the parent part's variant. The
 // parent marker's shape is where the child's point may go (a point, or anywhere in a
 // circle, rectangle or polygon); leeway lets it drift that many pixels further, and angle
-// limits how far the child turns relative to the parent. sprat only describes the rig;
-// engines pose it.
+// limits how far the child turns relative to the parent. A part that isn't attached is
+// placed by its own position (at:X,Y) in the puppet's space, whose origin is the puppet's
+// pivot; several parts may be, and one of them is the reference, the part that stands for
+// the puppet. sprat only describes the rig; engines pose it.
 
 // Most degrees a joint's angle range may reach either way.
 constexpr int k_max_joint_angle = 360;
@@ -979,6 +981,12 @@ struct PuppetPart {
     std::string name;
     int parent = -1;  // index of the part it is attached to, or -1
     std::vector<PuppetVariant> variants;
+    // Where a part that isn't attached goes: its sprite's pivot at x,y in the puppet's
+    // space, whose origin is the puppet's pivot (original-image pixels, Y down).
+    bool has_position = false;
+    int x = 0;
+    int y = 0;
+    bool is_reference = false;  // marked "reference" in the file
 };
 
 struct PuppetJoint {
@@ -996,6 +1004,9 @@ struct PuppetItem {
     std::string name;
     std::vector<PuppetPart> parts;
     std::vector<PuppetJoint> joints;
+    // The positioned part that stands for the puppet (the hand in a hand puppet): the one
+    // marked "reference", else the first positioned part; -1 when there are no parts.
+    int reference = -1;
 };
 
 // Reads `PART:MARKER` (either name quoted or bare) starting at `pos`.
@@ -1059,8 +1070,9 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
         child.parent = static_cast<int>(joint.parent);
         puppet.joints.push_back(std::move(joint));
     }
-    std::vector<std::string> roots;
-    for (const PuppetPart& part : puppet.parts) {
+    // Every part is placed one way: by its own position, or by the joint that attaches it.
+    for (size_t i = 0; i < puppet.parts.size(); ++i) {
+        const PuppetPart& part = puppet.parts[i];
         // Each part has one parent at most, so walking up either reaches a root or loops.
         const PuppetPart* at = &part;
         for (size_t steps = 0; at->parent >= 0; ++steps) {
@@ -1071,8 +1083,34 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
             }
             at = &puppet.parts[static_cast<size_t>(at->parent)];
         }
-        if (part.parent < 0) {
-            roots.push_back("\"" + part.name + "\"");
+        if (part.parent >= 0 && part.has_position) {
+            error = sprat::core::tr_format(
+                "Puppet \"{0}\" part \"{1}\" is attached to \"{2}\" and has a position; an attached part is placed by its joint",
+                {puppet.name, part.name, puppet.parts[static_cast<size_t>(part.parent)].name});
+            return false;
+        }
+        if (part.parent < 0 && !part.has_position) {
+            error = sprat::core::tr_format(
+                "Puppet \"{0}\" part \"{1}\" has no position and is attached to no part; give it at:X,Y or attach it",
+                {puppet.name, part.name});
+            return false;
+        }
+        if (part.is_reference && !part.has_position) {
+            error = sprat::core::tr_format(
+                "Puppet \"{0}\" part \"{1}\" is the reference but has no position; the reference is placed by at:X,Y",
+                {puppet.name, part.name});
+            return false;
+        }
+        if (part.is_reference) {
+            if (puppet.reference >= 0 && puppet.parts[static_cast<size_t>(puppet.reference)].is_reference) {
+                error = sprat::core::tr_format(
+                    "Puppet \"{0}\" has more than one reference part (\"{1}\" and \"{2}\")",
+                    {puppet.name, puppet.parts[static_cast<size_t>(puppet.reference)].name, part.name});
+                return false;
+            }
+            puppet.reference = static_cast<int>(i);
+        } else if (puppet.reference < 0 && part.has_position) {
+            puppet.reference = static_cast<int>(i);
         }
         if (part.variants.empty()) {
             warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has no sprites or animations",
@@ -1081,14 +1119,6 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
     }
     if (puppet.parts.empty()) {
         warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" has no parts", {puppet.name}));
-    } else if (roots.size() > 1) {
-        std::string list;
-        for (const std::string& root : roots) {
-            list += (list.empty() ? "" : ", ") + root;
-        }
-        warnings.push_back(sprat::core::tr_format(
-            "Puppet \"{0}\" has {1} parts attached to nothing ({2}); only one should be",
-            {puppet.name, std::to_string(roots.size()), list}));
     }
     return true;
 }
@@ -1199,6 +1229,35 @@ void read_attach_settings(const std::string& settings, const std::string& line, 
     }
 }
 
+// Reads the settings after a part's name: at:X,Y and reference, in any order, each at
+// most once. What doesn't fit is reported and ignored.
+void read_part_settings(const std::string& settings, const std::string& line, PuppetPart& part,
+                        std::vector<std::string>& warnings) {
+    std::istringstream iss(settings);
+    std::string token;
+    while (iss >> token) {
+        int x = 0;
+        int y = 0;
+        if (token == "reference" && !part.is_reference) {
+            part.is_reference = true;
+        } else if (token.starts_with("at:") && !part.has_position) {
+            if (parse_pair(token.substr(3), x, y)) {
+                part.has_position = true;
+                part.x = x;
+                part.y = y;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Part line \"{0}\" position \"{1}\" is not at:X,Y in whole pixels; it is ignored",
+                    {line, token.substr(3)}));
+            }
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Part line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {line, token}));
+        }
+    }
+}
+
 std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool from_layout_stream,
                                            const std::unordered_map<std::string, int>& by_path,
                                            const std::unordered_map<std::string, int>& by_name,
@@ -1276,20 +1335,22 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
         PuppetItem& puppet = puppets.back();
         if (keyword == "part") {
             current_part = nullptr;
-            std::string name;
+            PuppetPart part;
             size_t pos = keyword.size();
-            skipping_part = !read_name_at(trimmed, pos, name) || !trim_copy(trimmed.substr(pos)).empty();
+            skipping_part = !read_name_at(trimmed, pos, part.name);
             if (skipping_part) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Puppets file line \"{0}\" is not part \"NAME\"; the part is ignored", {trimmed}));
+                    "Puppets file line \"{0}\" is not part \"NAME\" [at:X,Y] [reference]; the part is ignored",
+                    {trimmed}));
                 continue;
             }
-            if (!part_names.insert(name).second) {
+            if (!part_names.insert(part.name).second) {
                 error = sprat::core::tr_format("Puppet \"{0}\" has more than one part \"{1}\"",
-                                               {puppet.name, name});
+                                               {puppet.name, part.name});
                 return {};
             }
-            puppet.parts.push_back({name, -1, {}});
+            read_part_settings(trimmed.substr(pos), trimmed, part, warnings);
+            puppet.parts.push_back(std::move(part));
             current_part = &puppet.parts.back();
             variant_names.clear();
         } else if (keyword == "attach") {
@@ -1394,10 +1455,21 @@ void check_puppet_markers(const std::vector<PuppetItem>& puppets, const std::vec
     }
 }
 
-// Joint leeways are in original-image pixels, like markers. Fails when one, once scaled to
+// Part positions and joint leeways are in original-image pixels, like markers. Fails when one, once scaled to
 // atlas pixels, would exceed sprat::core::k_max_coordinate.
 bool check_puppet_limits(const std::vector<PuppetItem>& puppets, double scale, std::string& error) {
+    const auto fits = [&](int v) {
+        return sprat::core::within_coordinate_limit(sprat::core::scale_to_atlas(v, scale));
+    };
     for (const PuppetItem& puppet : puppets) {
+        for (const PuppetPart& part : puppet.parts) {
+            if (!fits(part.x) || !fits(part.y)) {
+                error = sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has a position beyond {2} atlas pixels",
+                                               {puppet.name, part.name,
+                                                std::to_string(sprat::core::k_max_coordinate)});
+                return false;
+            }
+        }
         for (const PuppetJoint& joint : puppet.joints) {
             if (!sprat::core::within_coordinate_limit(sprat::core::scale_to_atlas(joint.leeway, scale))) {
                 error = sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has a leeway beyond {2} atlas pixels",
@@ -1892,6 +1964,7 @@ std::string build_sprat_json(
         const PuppetItem& puppet = puppets[pi];
         j += "{\"index\":" + std::to_string(pi);
         j += ",\"name\":\"" + escape_json(puppet.name) + "\"";
+        j += ",\"reference\":" + std::to_string(puppet.reference);
         j += ",\"parts\":[";
         for (size_t ri = 0; ri < puppet.parts.size(); ++ri) {
             if (ri > 0) j += ',';
@@ -1902,6 +1975,10 @@ std::string build_sprat_json(
             j += ",\"parent_name\":\""
                 + (part.parent < 0 ? std::string() : escape_json(puppet.parts[static_cast<size_t>(part.parent)].name))
                 + "\"";
+            j += ",\"has_position\":" + std::string(part.has_position ? "true" : "false");
+            j += ",\"x\":" + std::to_string(sprat::core::scale_to_atlas(part.x, layout.scale));
+            j += ",\"y\":" + std::to_string(sprat::core::scale_to_atlas(part.y, layout.scale));
+            j += ",\"is_reference\":" + std::string(static_cast<int>(ri) == puppet.reference ? "true" : "false");
             j += ",\"variants\":[";
             for (size_t vi = 0; vi < part.variants.size(); ++vi) {
                 if (vi > 0) j += ',';

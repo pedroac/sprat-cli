@@ -1,7 +1,7 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 5
+//   sprat-raw 6
 //   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS
 //         VERTICES FRAMES PARTS VARIANTS JOINTS STRING_BYTES
 //   atlas W H PATH                                                (ATLASES lines)
@@ -10,8 +10,8 @@
 //          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
 //   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME           (MARKERS lines after a sprite)
 //   anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
-//   puppet PARTS JOINTS NAME                                      (PUPPETS lines)
-//   part PARENT VARIANTS NAME                                     (PARTS lines after a puppet)
+//   puppet PARTS JOINTS REFERENCE NAME                            (PUPPETS lines)
+//   part PARENT HAS_POSITION X Y VARIANTS NAME                    (PARTS lines after a puppet)
 //   variant KIND INDEX NAME                                       (VARIANTS lines after a part)
 //   joint CHILD PARENT LEEWAY HAS_ANGLE ANGLE_MIN ANGLE_MAX CHILD_MARKER PARENT_MARKER
 //                                                                 (JOINTS lines after the parts)
@@ -25,7 +25,11 @@
 // deduplicated sprite shares, or -1. HAS_PIVOT tells a pivot at 0,0 from no pivot (then
 // PIVOT_X and PIVOT_Y are 0). Global markers are the markers file's markers before any path.
 // A puppet is a cutout rig. Its parts come in draw order, back first; PARENT is the index,
-// within the puppet, of the part it is attached to, or -1. A variant is what a part can show:
+// within the puppet, of the part it is attached to, or -1. A part that isn't attached has
+// HAS_POSITION 1 and is placed by X Y: where its sprite's pivot goes in the puppet's space,
+// in atlas pixels with Y down, whose origin is the puppet's pivot; an attached part has
+// HAS_POSITION 0 and X Y 0. REFERENCE is the index of the positioned part that stands for
+// the puppet (the hand in a hand puppet), or -1 for a puppet with no parts. A variant is what a part can show:
 // KIND sprite=0 (INDEX is a sprite index) or animation=1 (INDEX is an animation index). A
 // joint pins the child part's CHILD_MARKER point to the parent part's PARENT_MARKER, both
 // looked up by name in the markers of the sprite each part shows; the parent marker's shape
@@ -33,6 +37,7 @@
 // be, and LEEWAY (atlas pixels) how far it may drift beyond it. With HAS_ANGLE, the child
 // turns ANGLE_MIN to ANGLE_MAX degrees (clockwise, y down) from its rest angle relative to
 // its parent; without it, it turns freely.
+// Version 6 added the puppet's REFERENCE and each part's HAS_POSITION X Y.
 // Version 5 added PUPPETS, PARTS, VARIANTS and JOINTS and the puppet records.
 // Version 4 added GLOBAL_MARKERS and their lines, and HAS_PIVOT, and replaced the sprite's
 // ALIAS_OF path (last on the line) with the ALIAS index. Version 3 dropped the normal and collision map fields (COLLISION_SCALE and NORMAL_PATH,
@@ -104,13 +109,13 @@ local variant_line(v) =
   line(["variant", variant_kinds[v.kind],
         if v.kind == "animation" then v.animation_index else v.sprite_index, str(v.name)]);
 local part_lines(p) =
-  line(["part", p.parent, std.length(p.variants), str(p.name)])
+  line(["part", p.parent, bool(p.has_position), p.x, p.y, std.length(p.variants), str(p.name)])
   + std.join("", [variant_line(v) for v in p.variants]);
 local joint_line(jt) =
   line(["joint", jt.child, jt.parent, jt.leeway, bool(jt.has_angle), jt.angle_min, jt.angle_max,
         str(jt.child_marker), str(jt.parent_marker)]);
 local puppet_lines(pp) =
-  line(["puppet", std.length(pp.parts), std.length(pp.joints), str(pp.name)])
+  line(["puppet", std.length(pp.parts), std.length(pp.joints), pp.reference, str(pp.name)])
   + std.join("", [part_lines(p) for p in pp.parts])
   + std.join("", [joint_line(jt) for jt in pp.joints]);
 
@@ -134,7 +139,7 @@ local string_bytes =
   + sum([str_bytes(jt.child_marker) + str_bytes(jt.parent_marker) for jt in joints]);
 
 local header =
-  "sprat-raw 5\n"
+  "sprat-raw 6\n"
   + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
           std.length(puppets), std.length(global_markers), std.length(all_markers),
