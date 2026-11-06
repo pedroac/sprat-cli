@@ -8,7 +8,7 @@
 
 *   **CI/CD Pipelines**: Automate asset generation in your build process.
 *   **Shell Scripting**: Integrate naturally with `|`, `>`, and standard text tools.
-*   **Game Development**: Optimized packing algorithms for GPU memory.
+*   **Game Development**: Optimized packing algorithms for GPU memory, plus markers, animations and cutout puppets (rigs, poses and pose sequences) for engines.
 *   **Web & Apps**: Export to CSS, JSON, XML, or custom formats.
 
 ---
@@ -148,7 +148,7 @@ Reads the layout text from stdin, loads the images, and blits them into a single
 ```
 
 ### 3. Transforming (`spratconvert`)
-Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, etc.) for your game engine.
+Reads the layout text and transforms it into a metadata format (JSON, CSV, XML, etc.) for your game engine, adding markers, animations and puppets from their own files.
 ```sh
 ./build/spratconvert --transform json < layout.txt > layout.json
 ```
@@ -609,6 +609,7 @@ Optional extra data files:
 
 ```sh
 ./build/spratconvert --transform json --markers markers.txt --animations animations.txt < layout.txt > layout.json
+./build/spratconvert --transform raw --markers markers.txt --animations animations.txt --puppets puppets.txt < layout.txt > layout.sprat
 ```
 
 ### Transform search paths
@@ -644,18 +645,26 @@ Transform files are searched in:
 `raw` writes a `.sprat` file that a C program can read with a few lines of code: one record
 per line, every value a space-separated token, and every count written before the records
 it counts, so a loader can size each array before filling it. The `sheet` line also carries
-totals for the whole file (`MARKERS`, global ones included, `VERTICES`, `FRAMES` and
-`STRING_BYTES`, the UTF-8 bytes of every string), so a loader knows the exact size of the model up front and can allocate it
+totals for the whole file (`MARKERS`, global ones included, `VERTICES`, `FRAMES`, puppet
+`PARTS`, `VARIANTS`, `JOINTS`, `POSES`, pose `SETTINGS`, `SEQUENCES` and their `STEPS`, and `STRING_BYTES`, the UTF-8 bytes of every string), so a loader knows the exact size of the model up front and can allocate it
 once; it must reject a file whose records don't match those totals. Strings are length-prefixed (`<UTF-8 byte count>:<bytes>`), so names and
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
-sprat-raw 4
-sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS GLOBAL_MARKERS MARKERS VERTICES FRAMES STRING_BYTES
+sprat-raw 8
+sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS STRING_BYTES
 atlas W H PATH
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
 sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
 anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
+puppet PARTS JOINTS POSES SEQUENCES NAME
+part PARENT HAS_POSITION X Y VARIANTS NAME
+variant KIND INDEX NAME
+joint CHILD PARENT CONSTRAINT LEEWAY HAS_ANGLE ANGLE_MIN ANGLE_MAX CHILD_MARKER PARENT_MARKER
+pose SETTINGS NAME
+set PART VARIANT HAS_ANGLE ANGLE HAS_OFFSET OFFSET_X OFFSET_Y HAS_POSITION X Y
+sequence FPS LOOP STEPS NAME
+step POSE IN HOLD EASE
 ```
 
 `GLOBAL_MARKERS` `marker` lines follow the atlases: the markers file's markers before any
@@ -666,16 +675,35 @@ regular sprite whose atlas region a deduplicated sprite shares, or `-1`. Enums a
 `fixed`=3; `FLIP` bits `h`=1, `v`=2; `LOOP` bits `once`=1, `pingpong`=2 (so `loop`=0,
 `once`=1, `pingpong`=2, `once-pingpong`=3; an alias has its source's); flags are `0`/`1`. `ROTATION` is in clockwise degrees
 (0, 90 or 270). An alias animation has `ALIAS` set to the index of the animation it replays
-and no frames of its own; otherwise `ALIAS` is `-1`. Values have the same meaning as in
+and no frames of its own; otherwise `ALIAS` is `-1`. The `PUPPETS` puppets follow the
+animations: each `puppet` line is followed by its `PARTS` `part` lines, in draw order, each
+followed by its `VARIANTS` `variant` lines, and then by its `JOINTS` `joint` lines. A part's
+`PARENT` and a joint's `CHILD` and `PARENT` are part indexes within the puppet (`-1` for no
+parent). A part that isn't attached has `HAS_POSITION` 1 and `X Y`, where its sprite's pivot
+goes in the puppet's space (atlas pixels, Y down, origin at the puppet's pivot); an attached
+part has `HAS_POSITION` 0 and `X Y` 0. A joint with `CONSTRAINT` 0 is its child's parent
+joint (one per part with a parent); `CONSTRAINT` 1 marks a further attachment. Each
+puppet's `POSES` `pose` lines follow its joints, each followed by its `SETTINGS` `set` lines
+in part order: `PART` is a part index, `VARIANT` an index into that part's variants or `-1`
+to keep it, and `ANGLE`, `OFFSET_X OFFSET_Y` (atlas pixels) and `X Y` apply only with their
+flags (0 otherwise). Each puppet's `SEQUENCES` `sequence` lines follow its poses, each
+followed by its `STEPS` `step` lines in play order: `POSE` is a pose index, `IN` and `HOLD`
+frames at `FPS`, and `EASE` `linear`=0 or `step`=1; `LOOP` uses the same bits as an
+`anim` line. A variant's `KIND` is `sprite`=0 (`INDEX` is a sprite index) or `animation`=1 (`INDEX`
+is an animation index). A joint's markers are names, looked up in the markers of the sprite
+each part shows; `LEEWAY` is in atlas pixels, and `ANGLE_MIN` and `ANGLE_MAX` apply only with
+`HAS_ANGLE`. Values have the same meaning as in
 `json`, and the first line carries the format version (version 2 added `LOOP`; version 3 dropped the normal
 and collision map fields; version 4 added `GLOBAL_MARKERS`, their lines and `HAS_PIVOT`, and
-replaced the sprite's `ALIAS_OF` path with the `ALIAS` index).
+replaced the sprite's `ALIAS_OF` path with the `ALIAS` index; version 5 added puppets; version
+6 added the puppet's `REFERENCE` and each part's `HAS_POSITION X Y`; version 7 removed
+`REFERENCE` and added joint constraints and poses; version 8 added sequences).
 
 Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
 [sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an
 `int` and each converts to `float` exactly. Layouts are rejected when an atlas side, the
 extrude, or a sprite's size with its trim restored exceeds it after scaling, and
-`spratconvert` rejects markers whose scaled values do.
+`spratconvert` rejects markers and puppet leeways whose scaled values do.
 
 ### Transform format
 
@@ -711,11 +739,12 @@ local sprat = std.extVar("sprat");
 | `has_rotated` | boolean | `true` when any sprite is rotated |
 | `scale`, `extrude` | number | Layout-level values |
 | `scale_text` | string | `scale` as text, up to 8 significant digits (`0.1`); use it where a transform writes the scale as a string, since Jsonnet turns `sprat.scale` into `0.10000000000000001` |
-| `has_animations`, `has_markers` | boolean | Whether extra files were loaded |
-| `animation_count`, `marker_count`, `sprite_count` | number | Counts |
+| `puppets` | array | Puppet rigs (see below) |
+| `has_animations`, `has_markers`, `has_puppets` | boolean | Whether there are animations, markers or puppets |
+| `animation_count`, `marker_count`, `puppet_count`, `sprite_count` | number | Counts |
 | `output_stem`, `output_stem_hash_hex` | string | Output stem (the transform's variant name with `--output-dir`) and its FNV-1a hex hash |
 | `output_pattern_hash_hex` | string | FNV-1a hex hash of the `-a` pattern (of `""` without one): the same for every transform of a run, so IDs that one output refers to in another (Unity texture GUIDs) match |
-| `animations_path`, `markers_path` | string | Paths to the extra files |
+| `animations_path`, `markers_path`, `puppets_path` | string | Paths to the extra files |
 
 **Per sprite (`sprites[]`):**
 
@@ -752,6 +781,17 @@ local sprat = std.extVar("sprat");
 | `frame_indices` | Global sprite index sequence (may be non-contiguous) |
 | `frames` | `[{index, name, name_hash_decimal, name_hash_signed, name_hash_hex}]` resolved per frame |
 | `is_alias`, `alias_source`, `flip` | Alias support |
+
+**Per puppet (`puppets[]`):**
+
+| Field | Description |
+|---|---|
+| `index`, `name` | Identity |
+| `parts` | Parts in draw order, back first: `{index, name, parent, parent_name, has_position, x, y, variants}`; `parent` is the index of the part it is attached to, or `-1` (and `parent_name` empty); a part that isn't attached has `has_position` and `x`, `y` in atlas pixels |
+| `parts[].variants` | `{index, name, kind, sprite_index, animation_index}`; `kind` is `sprite` or `animation`, and the other index is `-1` |
+| `joints` | `{index, child, child_name, child_marker, parent, parent_name, parent_marker, leeway, has_angle, angle_min, angle_max}`; `child` and `parent` are part indexes, `leeway` is in atlas pixels; plus `is_constraint`, true for a part's further attachments |
+| `poses` | `{index, name, parts}`; each of `parts`, in part order, is `{part, part_name, variant, variant_name, has_angle, angle, has_offset, offset_x, offset_y, has_position, x, y}`, with `variant` `-1` (and `variant_name` empty) to keep it, and offsets and positions in atlas pixels |
+| `sequences` | `{index, name, fps, loop, frame_count, duration, steps}`; `frame_count` adds up every step's `in` + `hold`, `duration` is it in seconds at `fps`, and each of `steps` is `{pose, pose_name, in, hold, ease}` with `ease` `linear` or `step` |
 
 **Per marker (`markers[]` and `sprite.markers[]`):**
 
@@ -816,7 +856,7 @@ local sprat = std.extVar("sprat");
 Sprite names default to the source file basename without extension (e.g. `./frames/run_01.png` becomes `run_01`).
 
 `--markers` expects a plaintext file using the `path` and `- marker` DSL. Every line must be a `root`, `path` or `- marker` line (or a `#` comment); anything else, a value that doesn't fit, or a second pivot for the same sprite is reported.
-An optional `root` directive sets a base directory; `path` values that are relative are resolved against it.
+An optional `root` directive sets a base directory; `path` values that are relative are resolved against it (a sprite name such as `hero` still names that sprite).
 Markers before any `path` are global. A `path` that matches no sprite is reported, and its markers are ignored rather than made global, so a mistyped path can't hand its pivot to every sprite. A marker with an unknown type or values that don't match its type is ignored with a warning.
 Supported marker types:
 - `point`: `x,y`
@@ -835,7 +875,7 @@ path "b"
 ```
 
 `--animations` expects a plaintext file using the `animation` and `- frame` DSL. Every line must be a `root`, `fps`, `loop`, `animation` or `- frame` line (or a `#` comment); anything else is reported, and so is an animation with no frames. A `- frame` line lists one or more frames, each a sprite path, name or index: a bare number such as `1` is an index, so quote the path to name a sprite file such as `"1.png"`. A range lists several: `0..7` by index, `run_01..run_08` by name (both ends must differ only in their number, and the first end's zero padding is kept), `"idle 1.png".."idle 4.png"` with quotes. A range may count down (`7..0`). A frame that matches no sprite, or an index outside the layout, is ignored with a warning.
-An optional `root` directive sets a base directory; quoted frame paths that are relative are resolved against it.
+An optional `root` directive sets a base directory; quoted frame paths that are relative are resolved against it (sprite names such as `run_01` still name those sprites).
 Animation names must be unique; with `--auto-animations`, an animation from the file replaces the automatic one of the same name.
 The `fps` line sets the default speed for every animation that has none of its own, wherever the line appears in the file, and a number after an animation's name sets its own. Both go up to 100 frames per second, the limit [sprat-lib](https://github.com/pedroac/sprat-lib) enforces; a higher value is an error. A value of 0 or less means the default, 8. Only the leading integer is read, with a warning when anything follows it (`12.5` is read as 12); a value that does not start with a number, or a missing one, is ignored with a warning.
 
@@ -854,7 +894,82 @@ animation "idle"
 - frame "a.png" b 1
 ```
 
-Without `--markers` or `--animations`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers and animations. Layout files may hold `#` comment lines.
+#### Puppets
+
+`--puppets` expects a plaintext file describing puppets: cutout rigs in the spirit of Terry Gilliam's animations and paper stop motion. A puppet is a set of parts (face, mouth, eyes, ...) joined by their markers. Each part has interchangeable variants, sprites or animations (a smiling and an angry mouth, a blinking eye), and a joint is between parts, not variants, so any variant can be swapped in. `spratconvert` describes the rig, its poses and sequences; the engine plays them. Every line must be a `root`, `puppet`, `part`, `- sprite`, `- animation`, `attach`, `pose`, `- part`, `sequence` or `- pose` line (or a `#` comment); anything else is reported.
+
+- `puppet "NAME"` starts a puppet. Puppet names must be unique.
+- `part "NAME" [at:X,Y]` starts a part of the current puppet. Parts are drawn in file order, the first at the back. Part names must be unique within their puppet.
+- Every part is placed one way: attached to another part (see `attach`), or by its own position `at:X,Y`, where its sprite's pivot goes in the puppet's space. That space's origin (0,0) is the puppet's pivot, with Y down, in original-image pixels like markers. Any number of parts may be positioned, so a puppet can be all free parts, one rig, or a rig plus free parts (a fly around a head). Moving the puppet moves them all. A torso at `at:0,-120` puts the pivot 120 pixels below it, between the feet; a caterpillar can position its middle segment and attach the others on both sides.
+- `- sprite "SPRITE" [-> "NAME"]` adds a sprite variant to the current part: a sprite path (resolved against `root` like markers paths), name, or index (a bare number). `- animation "ANIMATION" [-> "NAME"]` adds an animation, from `--animations`, `--auto-animations` or the layout stream; an alias animation (a mirrored one) works too. A variant is named after its sprite or animation unless `-> "NAME"` names it; variant names must be unique within their part.
+- `attach "CHILD":"MARKER" to "PARENT":"MARKER" [leeway:N] [angle:MIN..MAX]` attaches the child part to its parent part, anywhere in the puppet. The child's marker must be a `point`, in every sprite the child shows (each frame of an animation variant); the parent's marker may be any shape, in every sprite the parent shows, and its shape is where the child's point may be: on the point, or anywhere inside a circle, rectangle or polygon (an eye socket for a pupil). `leeway:N` lets the child's point drift up to `N` pixels beyond that (default 0, rigid). `angle:MIN..MAX` limits how far the child turns relative to its parent, in degrees clockwise (y down), between -360 and 360; without it the child turns freely. Leeways are in original-image pixels, like markers, and are scaled into atlas pixels.
+- A part may be attached more than once (a stick held by both hands). Its first `attach` is its parent: the part it hangs from, whose angle its own is measured from. Further `attach` lines are constraints: they keep the part within that marker's shape and leeway too, which may close loops, and an editor (or an engine that wants live physics) honors them while posing. A positioned part has no parent, so all its `attach` lines are constraints; two positioned parts can't be attached, since one of them must be placed by the joint.
+- `pose "NAME"` starts a pose of the current puppet, followed by its `- part "PART" [variant:NAME] [angle:DEGREES] [offset:X,Y] [at:X,Y]` lines. A pose sets only what it names, so poses layer (`walk` + `smile`): parts it doesn't set keep what they had. `variant:` shows one of the part's variants (quote a name with spaces: `variant:"run back"`). `angle:` turns the part from its rest angle, in degrees clockwise: relative to its parent, so children follow, and within its parent joint's `angle:` limits; or around its own pivot for a positioned part. `offset:` moves an attached part's point from the parent marker's `x,y` (the eye in its socket), which engines keep within the marker's shape and leeway. `at:` moves a positioned part. Angles are whole degrees between -360 and 360; offsets and positions are in original-image pixels and are scaled. Pose names must be unique within their puppet. An editor works out the angles from where the user drags the parts, so playing a pose needs no solving.
+- `sequence "NAME" [fps:N] [loop:MODE]` starts a sequence of poses, followed by its `- pose "POSE" [in:FRAMES] [hold:FRAMES] [ease:linear|step]` steps. Timing is in frames, as stop-motion animators count them: at `fps` (default 8, up to 100, like animations; a higher value is an error), each step reaches its pose in `in` frames and holds it `hold` frames (both default 0, up to 100000; a step must last at least one frame). `ease:linear` (the default) tweens angles, offsets and positions over `in`; `ease:step` keeps the old pose through `in`, then snaps, for pure stop motion. Variants never morph: they snap when the step's pose arrives, at the end of `in`. `loop` takes the animation loop modes (`loop`, the default, `once`, `pingpong`, `once-pingpong`). Only what a step's pose sets changes, so sequences on different parts combine (`walk` on the body, `talk` on the mouth); when two set the same part, the one applied later wins. When looping, the first step tweens from where the last left off; `pingpong` plays the steps back in reverse. A sequence at the fps of an animation variant (both 12 from Krita) stays in step with it frame by frame. Sequence names must be unique within their puppet.
+
+A sprite that lacks a joint's marker, a part with no variants, a puppet with no parts, a pose that sets no part, a pose line that sets nothing, a sequence with no steps and a step that lasts no frame are reported. An attach line naming an unknown part, attaching a part to itself or two positioned parts, or closing a cycle of parents is an error, and so are a repeated puppet, part, variant or pose name, a part with neither a position nor a parent, and a pose that sets an unknown part or variant, sets a part twice, turns a part beyond its joint's limits, moves an attached part with `at:` or offsets a positioned one, and a sequence that plays an unknown pose or repeats a sequence name.
+
+Example `puppets.txt`:
+```txt
+root "./pinocchio"
+puppet "pinocchio"
+
+part "face" at:0,-40
+- sprite "face.png"
+
+part "nose"
+- sprite "nose-short.png" -> "short"
+- sprite "nose-long.png" -> "long"
+
+part "mouth"
+- sprite "mouth-smile.png" -> "smile"
+- sprite "mouth-angry.png" -> "angry"
+- animation "talk"
+
+part "eye"
+- sprite "eye.png"
+
+part "pupil"
+- sprite "pupil.png"
+
+attach "nose":"pivot" to "face":"nose" angle:-10..10
+attach "mouth":"pivot" to "face":"mouth" leeway:2
+attach "eye":"pivot" to "face":"eye"
+attach "pupil":"pivot" to "eye":"socket"
+
+part "fly" at:24,-70
+- animation "buzz"
+
+pose "angry"
+- part "mouth" variant:"angry"
+- part "nose" angle:-8
+
+pose "look left"
+- part "pupil" offset:-2,0
+- part "fly" at:12,-75
+
+sequence "fuss" fps:12 loop:pingpong
+- pose "angry" in:3 hold:2
+- pose "look left" hold:4 ease:step
+```
+
+Here the face is placed 40 pixels above the puppet's pivot, and the fly is free. `face.png` has `nose`, `mouth` and `eye` point markers, `eye.png` a `socket` circle, and every other sprite (each frame of `talk` too) a `pivot` point. For now, the `raw` transform writes puppets; custom transforms get them in `sprat.puppets`.
+
+#### Playing a puppet
+
+`spratconvert` only describes puppets; this is what the data means for an engine (or [sprat-lib](https://github.com/pedroac/sprat-lib) user) that draws them:
+
+1. **Rest pose.** Every part shows its first variant, with angle 0 and offset 0, and every positioned part sits at its `at:`. An animation variant plays on its own clock at its own fps.
+2. **Poses.** Apply poses in order, each over the result of the ones before: a pose changes only what it sets. A sequence does the same over time: at its fps, each step tweens the values its pose sets from where they are to the pose's over `in` frames (or keeps them and snaps at the end, with `ease:step`), switches variants when the pose arrives, then holds for `hold` frames.
+3. **Placement.** Each part's transform maps the original-image coordinates of the sprite it shows (the space markers and pivots are in, trim included) into the puppet's space:
+   - A positioned part's sprite pivot goes at its position, and the part turns `angle` degrees around it.
+   - An attached part's child marker goes where its parent's marker (in the sprite the parent shows) lands under the parent's transform, moved by `offset` turned with the parent; the part turns by its parent's total turn plus its own `angle`, around that point.
+   - Place a part's parent before the part itself; a parent may come later in draw order.
+4. **Drawing.** Draw the parts in file order with their transforms, the puppet's origin (its pivot) at the puppet's place in the world. Constraints, marker shapes and leeways aren't needed to draw: an editor, or an engine's physics step, keeps poses within them.
+
+Without `--markers`, `--animations` or `--puppets`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers, animations and puppets. There they share the layout's own `root` line, so leave out theirs: a second `root` line is an error. Layout files may hold `#` comment lines.
+
+Names in these files (sprites, markers, animations, puppets, parts, variants) may not be empty: `""` is reported like a missing name, since the `raw` format writes an empty string as "none".
 
 A layout `sprite` line is `sprite "<path>" rect:<x>,<y>,<w>,<h>` followed by optional tokens, in any order and each at most once:
 

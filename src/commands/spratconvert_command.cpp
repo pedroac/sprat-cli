@@ -90,12 +90,19 @@ struct AnimationItem {
     std::string loop = DEFAULT_ANIMATION_LOOP;
     std::string alias_source;
     std::string flip;
+    // The regular animation an alias replays, through any chain of aliases (its own index
+    // for a regular one); -1 until resolve_alias_sources, or for an unknown source or a cycle.
+    int source_index = -1;
 };
 
 using Sprite = sprat::core::Sprite;
 using Layout = sprat::core::Layout;
 using sprat::core::format_index_pattern;
 using sprat::core::parse_int;
+using sprat::core::is_animations_keyword;
+using sprat::core::is_markers_keyword;
+using sprat::core::is_metadata_keyword;
+using sprat::core::is_puppets_keyword;
 using sprat::core::parse_layout;
 using sprat::core::parse_pair;
 using sprat::core::parse_quoted;
@@ -227,23 +234,26 @@ void collect_sprite_name_indexes(const Layout& layout,
     }
 }
 
-int resolve_sprite_index(const std::string& key,
+// Finds the sprite a metadata file names: a path, resolved against the file's root, or a
+// sprite name, which a root doesn't change ("run_01" under root "./frames" is still run_01).
+int resolve_sprite_index(const std::string& root, const std::string& key,
                          const std::unordered_map<std::string, int>& by_path,
                          const std::unordered_map<std::string, int>& by_name) {
-    auto by_path_it = by_path.find(key);
+    const std::string path = join_metadata_root(root, key);
+    auto by_path_it = by_path.find(path);
     if (by_path_it != by_path.end()) {
         return by_path_it->second;
     }
-    size_t sep = key.find_first_of(kPathSeparators);
+    size_t sep = path.find_first_of(kPathSeparators);
     while (sep != std::string::npos) {
         ++sep;
-        if (sep < key.size()) {
-            auto it = by_path.find(key.substr(sep));
+        if (sep < path.size()) {
+            auto it = by_path.find(path.substr(sep));
             if (it != by_path.end()) {
                 return it->second;
             }
         }
-        sep = key.find_first_of(kPathSeparators, sep);
+        sep = path.find_first_of(kPathSeparators, sep);
     }
     auto by_name_it = by_name.find(key);
     if (by_name_it != by_name.end()) {
@@ -274,36 +284,14 @@ bool check_marker_limits(const MarkerItem& m, double scale, std::string& error) 
 
 // ---- Hand-written markers and animations files ------------------------------------------
 //
-// Both files are written by hand, so every line must mean something: a line that is not
-// one of the file's own is reported, never skipped. Without --markers or --animations,
-// both are read from the layout stream, which also holds layout lines and the other
-// file's lines; only then are those skipped.
-
-// The leading keyword of a line: "- marker" and "- frame" count as one.
-std::string line_keyword(const std::string& trimmed) {
-    std::istringstream liss(trimmed);
-    std::string cmd;
-    liss >> cmd;
-    if (cmd == "-") {
-        std::string sub;
-        liss >> sub;
-        return "- " + sub;
-    }
-    return cmd;
-}
+// These files are written by hand, so every line must mean something: a line that is not
+// one of the file's own is reported, never skipped. Without --markers, --animations or
+// --puppets, they are read from the layout stream, which also holds layout lines and the
+// other files' lines; only then are those skipped.
 
 bool is_layout_keyword(const std::string& keyword) {
     return keyword == "atlas" || keyword == "scale" || keyword == "extrude" || keyword == "multipack"
         || keyword == "rotation" || keyword == "sprite" || keyword == "alias";
-}
-
-bool is_markers_keyword(const std::string& keyword) {
-    return keyword == "root" || keyword == "path" || keyword == "- marker";
-}
-
-bool is_animations_keyword(const std::string& keyword) {
-    return keyword == "root" || keyword == "fps" || keyword == "loop" || keyword == "animation"
-        || keyword == "- frame";
 }
 
 // Reads a `root "DIR"` line into root. Reports and ignores one that isn't exactly that.
@@ -324,17 +312,23 @@ void read_root_line(const std::string& trimmed, std::string& root, const char* f
     root = value;
 }
 
-// Reads a name, quoted or as one bare token, starting at `pos` (after any spaces). On
-// success `pos` is just past it.
-bool read_name_at(const std::string& line, size_t& pos, std::string& name) {
+// Reads a name, quoted or bare, starting at `pos` (after any spaces). A bare name ends at
+// any of `stops`. On success `pos` is just past it; `quoted` tells which it was. An empty
+// name ("") fails: the raw format writes it as "none".
+bool read_name_at(const std::string& line, size_t& pos, std::string& name,
+                  const char* stops = " \t", bool* quoted = nullptr) {
     while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) {
         ++pos;
     }
-    if (pos < line.size() && line[pos] == '"') {
-        std::string quote_error;
-        return parse_quoted(line, pos, name, quote_error);
+    const bool is_quoted = pos < line.size() && line[pos] == '"';
+    if (quoted != nullptr) {
+        *quoted = is_quoted;
     }
-    const size_t end = std::min(line.size(), line.find_first_of(" \t", pos));
+    if (is_quoted) {
+        std::string quote_error;
+        return parse_quoted(line, pos, name, quote_error) && !name.empty();
+    }
+    const size_t end = std::min(line.size(), line.find_first_of(stops, pos));
     name = line.substr(pos, end - pos);
     pos = end;
     return !name.empty();
@@ -397,9 +391,9 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
         if (trimmed.empty() || trimmed[0] == '#') {
             continue;
         }
-        const std::string keyword = line_keyword(trimmed);
+        const std::string keyword = sprat::core::metadata_line_keyword(trimmed);
         if (!is_markers_keyword(keyword)) {
-            if (!from_layout_stream || !(is_layout_keyword(keyword) || is_animations_keyword(keyword))) {
+            if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
                     "Markers file line \"{0}\" is not a root, path or - marker line; it is ignored",
                     {trimmed}));
@@ -420,7 +414,7 @@ std::vector<MarkerItem> parse_markers_data(const std::string& markers_text,
                     {trimmed}));
             } else {
                 current_sprite_index =
-                    resolve_sprite_index(join_metadata_root(raw_root, path), by_path, by_name);
+                    resolve_sprite_index(raw_root, path, by_path, by_name);
                 if (current_sprite_index < 0) {
                     warnings.push_back(sprat::core::tr_format(
                         "Markers file path \"{0}\" matches no sprite; its markers are ignored",
@@ -635,7 +629,7 @@ void add_frame_item(const FrameItem& item, const std::string& anim_name, const s
         }
     };
     const auto add_name = [&](const std::string& name) {
-        const int idx = resolve_sprite_index(join_metadata_root(root, name), by_path, by_name);
+        const int idx = resolve_sprite_index(root, name, by_path, by_name);
         if (idx >= 0) {
             frames.push_back(idx);
         } else {
@@ -726,9 +720,9 @@ std::vector<AnimationItem> parse_animations_data(
         if (trimmed.empty() || trimmed[0] == '#') {
             continue;
         }
-        const std::string keyword = line_keyword(trimmed);
+        const std::string keyword = sprat::core::metadata_line_keyword(trimmed);
         if (!is_animations_keyword(keyword)) {
-            if (!from_layout_stream || !(is_layout_keyword(keyword) || is_markers_keyword(keyword))) {
+            if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
                     "Animations file line \"{0}\" is not a root, fps, loop, animation or - frame line; it is ignored",
                     {trimmed}));
@@ -809,7 +803,7 @@ std::vector<AnimationItem> parse_animations_data(
             if (next_token == "alias") {
                 size_t alias_src_pos = trimmed.find("alias", pos) + 5;
                 std::string alias_source;
-                if (!read_name_at(trimmed, alias_src_pos, alias_source) || alias_source.empty()) {
+                if (!read_name_at(trimmed, alias_src_pos, alias_source)) {
                     warnings.push_back(sprat::core::tr_format(
                         "Animation \"{0}\" is an alias with no valid source; it is ignored", {name}));
                     continue;
@@ -938,26 +932,966 @@ std::vector<AnimationItem> parse_animations_data(
 }
 
 // An alias replays its source, so it plays the way its source does. Chains of aliases are
-// followed to the regular animation at their end; an unknown source or a cycle leaves the
-// alias's own mode (transforms that need the source, such as raw, report those).
-void resolve_alias_loops(std::vector<AnimationItem>& animations) {
+// followed to the regular animation at their end, whose index becomes source_index; an
+// unknown source or a cycle leaves -1 and the alias's own mode (transforms that need the
+// source, such as raw, report those).
+void resolve_alias_sources(std::vector<AnimationItem>& animations) {
     std::unordered_map<std::string, size_t> by_name;
     for (size_t i = 0; i < animations.size(); ++i) {
         by_name.emplace(animations[i].name, i);
     }
-    for (AnimationItem& item : animations) {
-        const AnimationItem* source = &item;
-        for (size_t steps = 0; !source->alias_source.empty() && steps <= animations.size(); ++steps) {
-            const auto it = by_name.find(source->alias_source);
+    for (size_t i = 0; i < animations.size(); ++i) {
+        size_t at = i;
+        for (size_t steps = 0; !animations[at].alias_source.empty() && steps <= animations.size(); ++steps) {
+            const auto it = by_name.find(animations[at].alias_source);
             if (it == by_name.end()) {
                 break;
             }
-            source = &animations[it->second];
+            at = it->second;
         }
-        if (source->alias_source.empty()) {
-            item.loop = source->loop;
+        if (animations[at].alias_source.empty()) {
+            animations[i].source_index = static_cast<int>(at);
+            animations[i].loop = animations[at].loop;
         }
     }
+}
+
+// ---- Hand-written puppets file -----------------------------------------------------------
+//
+// A puppet is a cutout rig: parts drawn in file order (first at the back), each with
+// interchangeable variants (sprites or animations), joined by "attach" lines that pin a
+// point marker of the child part's variant to a marker of the parent part's variant. The
+// parent marker's shape is where the child's point may go (a point, or anywhere in a
+// circle, rectangle or polygon); leeway lets it drift that many pixels further, and angle
+// limits how far the child turns relative to the parent. A part's first attach is its
+// parent, so parents form a tree; further attach lines are constraints, which an editor
+// (or an engine that wants live physics) honors while posing, and which may close loops.
+// A part with no parent is placed by its own position (at:X,Y) in the puppet's space, whose
+// origin is the puppet's pivot; all its attach lines are constraints.
+//
+// A pose sets some parts: a variant, an angle relative to the parent (or around its own
+// pivot for a positioned part), an offset within its joint's allowed area, or a position.
+// Poses only name what they change, so they layer (walk + smile).
+//
+// A sequence plays poses one after another at its own fps: each step reaches its pose in
+// `in` frames (tweened, or snapped at the end with ease:step) and holds it for `hold`
+// frames. Only what a step's pose sets moves, and variants snap when the step's pose
+// arrives. sprat describes the rig, its poses and sequences; engines play them.
+
+// Most degrees a joint's angle range, or a pose's angle, may reach either way.
+constexpr int k_max_joint_angle = 360;
+// Most frames a sequence step's in or hold may take. Cutout sequences are far shorter, so
+// a larger value is a typo; it also keeps sums of a few steps within an int.
+constexpr int k_max_step_frames = 100000;
+
+struct PuppetVariant {
+    std::string name;
+    bool is_animation = false;
+    int index = -1;  // sprite index, or animation index when is_animation
+};
+
+struct PuppetPart {
+    std::string name;
+    int parent = -1;  // index of the part it is attached to first, or -1
+    int joint = -1;   // index of the joint that attaches it to its parent, or -1
+    std::vector<PuppetVariant> variants;
+    // Where a part with no parent goes: its sprite's pivot at x,y in the puppet's space,
+    // whose origin is the puppet's pivot (original-image pixels, Y down).
+    bool has_position = false;
+    int x = 0;
+    int y = 0;
+};
+
+struct PuppetJoint {
+    size_t child = 0;
+    std::string child_marker;
+    size_t parent = 0;
+    std::string parent_marker;
+    bool is_constraint = false;  // a further attach of its child, not its parent
+    int leeway = 0;
+    bool has_angle = false;
+    int angle_min = 0;
+    int angle_max = 0;
+};
+
+// What a pose sets for one part; each value only when its has_ flag is set.
+struct PoseSetting {
+    size_t part = 0;
+    int variant = -1;  // index into the part's variants, or -1 to keep it
+    bool has_angle = false;
+    int angle = 0;
+    bool has_offset = false;
+    int offset_x = 0;
+    int offset_y = 0;
+    bool has_position = false;
+    int x = 0;
+    int y = 0;
+};
+
+struct PuppetPose {
+    std::string name;
+    std::vector<PoseSetting> settings;  // in part order
+};
+
+// One step of a sequence: reach a pose in `in` frames, then hold it `hold` frames.
+struct SequenceStep {
+    size_t pose = 0;
+    int in = 0;
+    int hold = 0;
+    bool snap = false;  // ease:step: keep the old pose through `in`, then snap
+};
+
+struct PuppetSequence {
+    std::string name;
+    int fps = DEFAULT_ANIMATION_FPS;
+    std::string loop = DEFAULT_ANIMATION_LOOP;
+    std::vector<SequenceStep> steps;
+};
+
+struct PuppetItem {
+    std::string name;
+    std::vector<PuppetPart> parts;
+    std::vector<PuppetJoint> joints;
+    std::vector<PuppetPose> poses;
+    std::vector<PuppetSequence> sequences;
+};
+
+// Reads `PART:MARKER` (either name quoted or bare) starting at `pos`.
+bool read_part_marker(const std::string& line, size_t& pos, std::string& part, std::string& marker) {
+    if (!read_name_at(line, pos, part, " \t:") || pos >= line.size() || line[pos] != ':') {
+        return false;
+    }
+    ++pos;
+    if (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) {
+        return false;  // "PART: MARKER" is a typo, not a marker named after the space
+    }
+    return read_name_at(line, pos, marker);
+}
+
+// Reads the "MIN..MAX" of an angle: setting, in degrees, MIN no greater than MAX.
+bool parse_angle_range(const std::string& value, int& min, int& max) {
+    const size_t dots = value.find("..");
+    return dots != std::string::npos && parse_int(value.substr(0, dots), min)
+        && parse_int(value.substr(dots + 2), max) && min <= max && min >= -k_max_joint_angle
+        && max <= k_max_joint_angle;
+}
+
+// Splits "KEY:VALUE" settings, where a value may be quoted to hold spaces
+// (variant:"run back"). A word without a colon has an empty key. False on a broken quote.
+bool split_settings(const std::string& text, std::vector<std::pair<std::string, std::string>>& out) {
+    size_t pos = 0;
+    while (true) {
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
+        if (pos >= text.size()) {
+            return true;
+        }
+        const size_t end = std::min(text.size(), text.find_first_of(" \t:", pos));
+        if (end >= text.size() || text[end] != ':') {
+            out.emplace_back("", text.substr(pos, end - pos));
+            pos = end;
+            continue;
+        }
+        std::string key = text.substr(pos, end - pos);
+        pos = end + 1;
+        std::string value;
+        if (pos < text.size() && text[pos] == '"') {
+            std::string quote_error;
+            if (!parse_quoted(text, pos, value, quote_error)) {
+                return false;
+            }
+        } else {
+            const size_t value_end = std::min(text.size(), text.find_first_of(" \t", pos));
+            value = text.substr(pos, value_end - pos);
+            pos = value_end;
+        }
+        out.emplace_back(std::move(key), std::move(value));
+    }
+}
+
+// An attach line before its parts are known: they are looked up when the puppet ends.
+struct PendingAttach {
+    std::string child;
+    std::string parent;
+    PuppetJoint joint;
+};
+
+// A "- part" line of a pose before its part is known.
+struct PendingPosePart {
+    std::string line;
+    std::string part;
+    std::string variant;  // empty to keep it
+    PoseSetting setting;
+};
+
+struct PendingPose {
+    std::string name;
+    std::vector<PendingPosePart> parts;
+};
+
+// A sequence before its poses are known: steps name them.
+struct PendingSequence {
+    PuppetSequence sequence;
+    std::vector<std::string> step_poses;  // in step order, beside sequence.steps
+};
+
+// Resolves a puppet's attach lines into parents, joints and constraints, places every
+// part, and checks its poses against the rig. False (with `error`) when something names an
+// unknown part or variant, attaches a part to itself, attaches two positioned parts,
+// closes a cycle of parents, leaves a part unplaced, or poses a part in a way its rig
+// doesn't allow.
+bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attaches,
+                   const std::vector<PendingPose>& poses,
+                   const std::vector<PendingSequence>& sequences, std::string& error,
+                   std::vector<std::string>& warnings) {
+    std::unordered_map<std::string, size_t> part_index;
+    for (size_t i = 0; i < puppet.parts.size(); ++i) {
+        part_index.emplace(puppet.parts[i].name, i);
+    }
+    for (const PendingAttach& attach : attaches) {
+        for (const std::string* name : {&attach.child, &attach.parent}) {
+            if (!part_index.contains(*name)) {
+                error = sprat::core::tr_format("Puppet \"{0}\" attaches unknown part \"{1}\"",
+                                               {puppet.name, *name});
+                return false;
+            }
+        }
+        PuppetJoint joint = attach.joint;
+        joint.child = part_index[attach.child];
+        joint.parent = part_index[attach.parent];
+        if (joint.child == joint.parent) {
+            error = sprat::core::tr_format("Puppet \"{0}\" attaches part \"{1}\" to itself",
+                                           {puppet.name, attach.child});
+            return false;
+        }
+        PuppetPart& child = puppet.parts[joint.child];
+        if (child.has_position && puppet.parts[joint.parent].has_position) {
+            error = sprat::core::tr_format(
+                "Puppet \"{0}\" attaches \"{1}\" to \"{2}\", and both have a position; one of them must be placed by the joint",
+                {puppet.name, attach.child, attach.parent});
+            return false;
+        }
+        // The first attach of a part without a position is its parent; the rest constrain it.
+        joint.is_constraint = child.has_position || child.parent >= 0;
+        if (!joint.is_constraint) {
+            child.parent = static_cast<int>(joint.parent);
+            child.joint = static_cast<int>(puppet.joints.size());
+        }
+        puppet.joints.push_back(std::move(joint));
+    }
+    for (const PuppetPart& part : puppet.parts) {
+        // Each part has one parent at most, so walking up either reaches a root or loops.
+        const PuppetPart* at = &part;
+        for (size_t steps = 0; at->parent >= 0; ++steps) {
+            if (steps >= puppet.parts.size()) {
+                error = sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" is part of a cycle of attachments",
+                                               {puppet.name, part.name});
+                return false;
+            }
+            at = &puppet.parts[static_cast<size_t>(at->parent)];
+        }
+        if (part.parent < 0 && !part.has_position) {
+            error = sprat::core::tr_format(
+                "Puppet \"{0}\" part \"{1}\" has no position and is attached to no part; give it at:X,Y or attach it",
+                {puppet.name, part.name});
+            return false;
+        }
+        if (part.variants.empty()) {
+            warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has no sprites or animations",
+                                                      {puppet.name, part.name}));
+        }
+    }
+    if (puppet.parts.empty()) {
+        warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" has no parts", {puppet.name}));
+    }
+
+    for (const PendingPose& pending : poses) {
+        PuppetPose pose;
+        pose.name = pending.name;
+        std::unordered_set<size_t> posed;
+        for (const PendingPosePart& pp : pending.parts) {
+            const auto it = part_index.find(pp.part);
+            if (it == part_index.end()) {
+                error = sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" sets unknown part \"{2}\"",
+                                               {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            if (!posed.insert(it->second).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" sets part \"{2}\" more than once",
+                                               {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            const PuppetPart& part = puppet.parts[it->second];
+            PoseSetting setting = pp.setting;
+            setting.part = it->second;
+            if (!pp.variant.empty()) {
+                const auto variant = std::find_if(part.variants.begin(), part.variants.end(),
+                                                  [&](const PuppetVariant& v) { return v.name == pp.variant; });
+                if (variant == part.variants.end()) {
+                    error = sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" part \"{2}\" has no variant \"{3}\"",
+                                                   {puppet.name, pose.name, pp.part, pp.variant});
+                    return false;
+                }
+                setting.variant = static_cast<int>(variant - part.variants.begin());
+            }
+            if (setting.has_position && !part.has_position) {
+                error = sprat::core::tr_format(
+                    "Puppet \"{0}\" pose \"{1}\" moves part \"{2}\", which its joint places; turn it with angle: or shift it with offset:",
+                    {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            if (setting.has_offset && part.has_position) {
+                error = sprat::core::tr_format(
+                    "Puppet \"{0}\" pose \"{1}\" offsets part \"{2}\", which has no joint to drift in; move it with at:X,Y",
+                    {puppet.name, pose.name, pp.part});
+                return false;
+            }
+            if (setting.has_angle && part.joint >= 0) {
+                const PuppetJoint& joint = puppet.joints[static_cast<size_t>(part.joint)];
+                if (joint.has_angle && (setting.angle < joint.angle_min || setting.angle > joint.angle_max)) {
+                    error = sprat::core::tr_format(
+                        "Puppet \"{0}\" pose \"{1}\" turns part \"{2}\" {3} degrees, outside its joint's {4}..{5}",
+                        {puppet.name, pose.name, pp.part, std::to_string(setting.angle),
+                         std::to_string(joint.angle_min), std::to_string(joint.angle_max)});
+                    return false;
+                }
+            }
+            pose.settings.push_back(setting);
+        }
+        if (pose.settings.empty()) {
+            warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" pose \"{1}\" sets no part",
+                                                      {puppet.name, pose.name}));
+        }
+        std::ranges::sort(pose.settings, {}, &PoseSetting::part);
+        puppet.poses.push_back(std::move(pose));
+    }
+
+    std::unordered_map<std::string, size_t> pose_index;
+    for (size_t i = 0; i < puppet.poses.size(); ++i) {
+        pose_index.emplace(puppet.poses[i].name, i);
+    }
+    for (const PendingSequence& pending : sequences) {
+        PuppetSequence sequence = pending.sequence;
+        for (size_t i = 0; i < sequence.steps.size(); ++i) {
+            const auto it = pose_index.find(pending.step_poses[i]);
+            if (it == pose_index.end()) {
+                error = sprat::core::tr_format("Puppet \"{0}\" sequence \"{1}\" plays unknown pose \"{2}\"",
+                                               {puppet.name, sequence.name, pending.step_poses[i]});
+                return false;
+            }
+            sequence.steps[i].pose = it->second;
+        }
+        if (sequence.steps.empty()) {
+            warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" sequence \"{1}\" has no steps",
+                                                      {puppet.name, sequence.name}));
+        }
+        puppet.sequences.push_back(std::move(sequence));
+    }
+    return true;
+}
+
+// Reads a "- sprite" or "- animation" line into a variant: what it shows, then an optional
+// `-> "NAME"`. False, with a warning, when it is not that or shows nothing known.
+bool read_variant_line(const std::string& trimmed, const std::string& keyword, const std::string& root,
+                       int sprite_count, const std::unordered_map<std::string, int>& by_path,
+                       const std::unordered_map<std::string, int>& by_name,
+                       const std::vector<std::string>& sprite_names,
+                       const std::unordered_map<std::string, size_t>& animation_index,
+                       PuppetVariant& out, std::vector<std::string>& warnings) {
+    out.is_animation = keyword == "- animation";
+    const std::string_view word = out.is_animation ? "animation" : "sprite";
+    size_t pos = trimmed.find(word) + word.size();
+    bool quoted = false;
+    std::string target;
+    std::string name;
+    bool ok = read_name_at(trimmed, pos, target, " \t", &quoted);
+    if (ok) {
+        // After what it shows comes nothing, or "-> NAME".
+        const std::string tail = trim_copy(trimmed.substr(pos));
+        size_t name_pos = 2;
+        ok = tail.empty()
+            || (tail.starts_with("->") && read_name_at(tail, name_pos, name)
+                && trim_copy(tail.substr(name_pos)).empty());
+    }
+    if (!ok) {
+        warnings.push_back(sprat::core::tr_format(
+            out.is_animation
+                ? "Puppets file line \"{0}\" is not - animation \"ANIMATION\" [-> \"NAME\"]; it is ignored"
+                : "Puppets file line \"{0}\" is not - sprite \"SPRITE\" [-> \"NAME\"]; it is ignored",
+            {trimmed}));
+        return false;
+    }
+    if (out.is_animation) {
+        const auto it = animation_index.find(target);
+        if (it == animation_index.end()) {
+            warnings.push_back(sprat::core::tr_format(
+                "Puppets file animation \"{0}\" matches no animation; it is ignored", {target}));
+            return false;
+        }
+        out.index = static_cast<int>(it->second);
+    } else {
+        int idx = -1;
+        // As in "- frame": a bare number is a sprite index; quote a path such as "1.png".
+        if (!quoted && parse_int(target, idx)) {
+            if (idx < 0 || idx >= sprite_count) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file sprite {0} is out of range (the layout has {1} sprites); it is ignored",
+                    {target, std::to_string(sprite_count)}));
+                return false;
+            }
+        } else {
+            idx = resolve_sprite_index(root, target, by_path, by_name);
+            if (idx < 0) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file sprite \"{0}\" matches no sprite; it is ignored", {target}));
+                return false;
+            }
+        }
+        out.index = idx;
+    }
+    out.name = !name.empty() ? name
+        : out.is_animation ? target
+        : sprite_names[static_cast<size_t>(out.index)];
+    return true;
+}
+
+// Reads the settings after an attach line's parts: leeway:N and angle:MIN..MAX, in any
+// order, each at most once. What doesn't fit is reported and ignored.
+void read_attach_settings(const std::string& settings, const std::string& line, PuppetJoint& joint,
+                          std::vector<std::string>& warnings) {
+    std::istringstream iss(settings);
+    std::string token;
+    bool has_leeway = false;
+    while (iss >> token) {
+        const size_t colon = token.find(':');
+        const std::string key = colon == std::string::npos ? "" : token.substr(0, colon);
+        const std::string value = colon == std::string::npos ? "" : token.substr(colon + 1);
+        int leeway = 0;
+        int angle_min = 0;
+        int angle_max = 0;
+        if (key == "leeway" && !has_leeway) {
+            if (parse_int(value, leeway) && leeway >= 0) {
+                joint.leeway = leeway;
+                has_leeway = true;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Attach line \"{0}\" leeway \"{1}\" is not a whole number of pixels, 0 or more; it is ignored",
+                    {line, value}));
+            }
+        } else if (key == "angle" && !joint.has_angle) {
+            if (parse_angle_range(value, angle_min, angle_max)) {
+                joint.angle_min = angle_min;
+                joint.angle_max = angle_max;
+                joint.has_angle = true;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Attach line \"{0}\" angle \"{1}\" is not MIN..MAX degrees between -{2} and {2}; it is ignored",
+                    {line, value, std::to_string(k_max_joint_angle)}));
+            }
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Attach line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {line, token}));
+        }
+    }
+}
+
+// Reads the settings after a part's name: at:X,Y, at most once. What doesn't fit is
+// reported and ignored.
+void read_part_settings(const std::string& settings, const std::string& line, PuppetPart& part,
+                        std::vector<std::string>& warnings) {
+    std::istringstream iss(settings);
+    std::string token;
+    while (iss >> token) {
+        int x = 0;
+        int y = 0;
+        if (token.starts_with("at:") && !part.has_position) {
+            if (parse_pair(token.substr(3), x, y)) {
+                part.has_position = true;
+                part.x = x;
+                part.y = y;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Part line \"{0}\" position \"{1}\" is not at:X,Y in whole pixels; it is ignored",
+                    {line, token.substr(3)}));
+            }
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Part line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {line, token}));
+        }
+    }
+}
+
+// Reads a pose's "- part" line: the part, then variant:NAME, angle:DEGREES, offset:X,Y and
+// at:X,Y, in any order, each at most once. False, with a warning, when it names no part;
+// a setting that doesn't fit is reported and ignored.
+bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::vector<std::string>& warnings) {
+    out.line = trimmed;
+    size_t pos = trimmed.find("part") + 4;
+    std::vector<std::pair<std::string, std::string>> settings;
+    if (!read_name_at(trimmed, pos, out.part) || !split_settings(trimmed.substr(pos), settings)) {
+        warnings.push_back(sprat::core::tr_format(
+            "Puppets file line \"{0}\" is not - part \"PART\" [variant:NAME] [angle:DEGREES] [offset:X,Y] [at:X,Y]; it is ignored",
+            {trimmed}));
+        return false;
+    }
+    PoseSetting& s = out.setting;
+    for (const auto& [key, value] : settings) {
+        const auto bad = [&](const char* expected) {
+            warnings.push_back(sprat::core::tr_format(
+                "Pose line \"{0}\" {1} \"{2}\" is not {3}; it is ignored", {trimmed, key, value, expected}));
+        };
+        if (key == "variant" && out.variant.empty()) {
+            if (value.empty()) {
+                bad("a variant name");
+            } else {
+                out.variant = value;
+            }
+        } else if (key == "angle" && !s.has_angle) {
+            if (parse_int(value, s.angle) && s.angle >= -k_max_joint_angle && s.angle <= k_max_joint_angle) {
+                s.has_angle = true;
+            } else {
+                s.angle = 0;
+                bad("whole degrees between -360 and 360");
+            }
+        } else if (key == "offset" && !s.has_offset) {
+            s.has_offset = parse_pair(value, s.offset_x, s.offset_y);
+            if (!s.has_offset) {
+                s.offset_x = s.offset_y = 0;
+                bad("X,Y in whole pixels");
+            }
+        } else if (key == "at" && !s.has_position) {
+            s.has_position = parse_pair(value, s.x, s.y);
+            if (!s.has_position) {
+                s.x = s.y = 0;
+                bad("X,Y in whole pixels");
+            }
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Pose line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {trimmed, key.empty() ? value : key + ":" + value}));
+        }
+    }
+    if (out.variant.empty() && !s.has_angle && !s.has_offset && !s.has_position) {
+        warnings.push_back(sprat::core::tr_format("Pose line \"{0}\" sets nothing; it is ignored", {trimmed}));
+        return false;
+    }
+    return true;
+}
+
+// Reads the settings after a sequence's name: fps:N and loop:MODE, each at most once. An
+// fps above k_max_animation_fps is an error, as in the animations file; what else doesn't
+// fit is reported and ignored.
+bool read_sequence_settings(const std::string& settings, const std::string& line, PuppetSequence& sequence,
+                            std::string& error, std::vector<std::string>& warnings) {
+    std::vector<std::pair<std::string, std::string>> items;
+    if (!split_settings(settings, items)) {
+        warnings.push_back(sprat::core::tr_format(
+            "Sequence line \"{0}\" has a broken quote; the settings after it are ignored", {line}));
+    }
+    bool has_fps = false;
+    bool has_loop = false;
+    for (const auto& [key, value] : items) {
+        int fps = 0;
+        if (key == "fps" && !has_fps) {
+            has_fps = true;
+            if (!parse_int(value, fps) || fps < 1) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Sequence line \"{0}\" fps \"{1}\" is not a whole number of frames per second, 1 or more; it is ignored",
+                    {line, value}));
+            } else if (fps > k_max_animation_fps) {
+                error = sprat::core::tr_format("Sequence line \"{0}\" has fps {1}, above the limit of {2}",
+                                               {line, value, std::to_string(k_max_animation_fps)});
+                return false;
+            } else {
+                sequence.fps = fps;
+            }
+        } else if (key == "loop" && !has_loop) {
+            has_loop = true;
+            if (is_animation_loop_mode(value)) {
+                sequence.loop = value;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Sequence line \"{0}\" loop \"{1}\" is not one of {2}; it is ignored",
+                    {line, value, k_animation_loop_modes}));
+            }
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Sequence line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {line, key.empty() ? value : key + ":" + value}));
+        }
+    }
+    return true;
+}
+
+// Reads a sequence's "- pose" line: the pose, then in:FRAMES, hold:FRAMES and
+// ease:linear|step, each at most once. False, with a warning, when it names no pose or
+// lasts no frame; a setting that doesn't fit is reported and ignored.
+bool read_sequence_step_line(const std::string& trimmed, std::string& pose, SequenceStep& step,
+                             std::vector<std::string>& warnings) {
+    size_t pos = trimmed.find("pose") + 4;
+    std::vector<std::pair<std::string, std::string>> items;
+    if (!read_name_at(trimmed, pos, pose) || !split_settings(trimmed.substr(pos), items)) {
+        warnings.push_back(sprat::core::tr_format(
+            "Puppets file line \"{0}\" is not - pose \"POSE\" [in:FRAMES] [hold:FRAMES] [ease:linear|step]; it is ignored",
+            {trimmed}));
+        return false;
+    }
+    bool has_in = false;
+    bool has_hold = false;
+    bool has_ease = false;
+    for (const auto& [key, value] : items) {
+        int frames = 0;
+        const auto read_frames = [&](int& out) {
+            if (parse_int(value, frames) && frames >= 0 && frames <= k_max_step_frames) {
+                out = frames;
+            } else {
+                warnings.push_back(sprat::core::tr_format(
+                    "Step line \"{0}\" {1} \"{2}\" is not a whole number of frames from 0 to {3}; it is ignored",
+                    {trimmed, key, value, std::to_string(k_max_step_frames)}));
+            }
+        };
+        if (key == "in" && !has_in) {
+            has_in = true;
+            read_frames(step.in);
+        } else if (key == "hold" && !has_hold) {
+            has_hold = true;
+            read_frames(step.hold);
+        } else if (key == "ease" && !has_ease && (value == "linear" || value == "step")) {
+            has_ease = true;
+            step.snap = value == "step";
+        } else {
+            warnings.push_back(sprat::core::tr_format(
+                "Step line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
+                {trimmed, key.empty() ? value : key + ":" + value}));
+        }
+    }
+    if (step.in + step.hold == 0) {
+        warnings.push_back(sprat::core::tr_format(
+            "Step line \"{0}\" lasts no frame; give it in:FRAMES or hold:FRAMES; it is ignored", {trimmed}));
+        return false;
+    }
+    return true;
+}
+
+std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool from_layout_stream,
+                                           const std::unordered_map<std::string, int>& by_path,
+                                           const std::unordered_map<std::string, int>& by_name,
+                                           const std::vector<std::string>& sprite_names,
+                                           const std::vector<AnimationItem>& animations,
+                                           std::string& error, std::vector<std::string>& warnings) {
+    std::unordered_map<std::string, size_t> animation_index;
+    for (size_t i = 0; i < animations.size(); ++i) {
+        animation_index.emplace(animations[i].name, i);
+    }
+    const int sprite_count = static_cast<int>(sprite_names.size());
+    std::vector<PuppetItem> puppets;
+    std::unordered_set<std::string> puppet_names;
+    std::vector<PendingAttach> attaches;  // of the current puppet
+    std::vector<PendingPose> poses;       // of the current puppet
+    std::unordered_set<std::string> pose_names;
+    std::vector<PendingSequence> sequences;  // of the current puppet
+    std::unordered_set<std::string> sequence_names;
+    PuppetPart* current_part = nullptr;
+    PendingPose* current_pose = nullptr;
+    PendingSequence* current_sequence = nullptr;
+    std::unordered_set<std::string> part_names;
+    std::unordered_set<std::string> variant_names;
+    // Set after a part line that couldn't be read: its variants are dropped with it.
+    bool skipping_part = false;
+    std::string raw_root;
+
+    const auto end_puppet = [&]() {
+        if (!puppets.empty()
+            && !finish_puppet(puppets.back(), attaches, poses, sequences, error, warnings)) {
+            return false;
+        }
+        attaches.clear();
+        poses.clear();
+        pose_names.clear();
+        sequences.clear();
+        sequence_names.clear();
+        return true;
+    };
+
+    std::istringstream iss(puppets_text);
+    std::string line;
+    while (std::getline(iss, line)) {
+        std::string trimmed = trim_copy(line);
+        if (trimmed.empty() || trimmed[0] == '#') {
+            continue;
+        }
+        const std::string keyword = sprat::core::metadata_line_keyword(trimmed);
+        if (!is_puppets_keyword(keyword)) {
+            if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not a root, puppet, part, - sprite, - animation, attach, pose, - part, sequence or - pose line; it is ignored",
+                    {trimmed}));
+            }
+            continue;
+        }
+        if (keyword == "root") {
+            read_root_line(trimmed, raw_root, "Puppets file", warnings);
+            continue;
+        }
+        if (keyword == "puppet") {
+            if (!end_puppet()) {
+                return {};
+            }
+            current_part = nullptr;
+            current_pose = nullptr;
+            current_sequence = nullptr;
+            skipping_part = false;
+            std::string name;
+            size_t pos = keyword.size();
+            if (!read_name_at(trimmed, pos, name) || !trim_copy(trimmed.substr(pos)).empty()) {
+                error = sprat::core::tr_format("Puppets file line \"{0}\" is not puppet \"NAME\"", {trimmed});
+                return {};
+            }
+            if (!puppet_names.insert(name).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" is defined more than once", {name});
+                return {};
+            }
+            puppets.push_back({name, {}, {}, {}, {}});
+            part_names.clear();
+            continue;
+        }
+        if (puppets.empty()) {
+            warnings.push_back(sprat::core::tr_format(
+                "Puppets file line \"{0}\" is not inside a puppet; it is ignored", {trimmed}));
+            continue;
+        }
+        PuppetItem& puppet = puppets.back();
+        if (keyword != "- part") {
+            current_pose = nullptr;  // a pose's "- part" lines follow it directly
+        }
+        if (keyword != "- pose") {
+            current_sequence = nullptr;  // and a sequence's "- pose" lines follow it
+        }
+        if (keyword == "sequence") {
+            current_part = nullptr;
+            skipping_part = false;
+            PendingSequence sequence;
+            size_t pos = keyword.size();
+            if (!read_name_at(trimmed, pos, sequence.sequence.name)) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not sequence \"NAME\" [fps:N] [loop:MODE]; the sequence is ignored",
+                    {trimmed}));
+                continue;
+            }
+            if (!sequence_names.insert(sequence.sequence.name).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" has more than one sequence \"{1}\"",
+                                               {puppet.name, sequence.sequence.name});
+                return {};
+            }
+            if (!read_sequence_settings(trimmed.substr(pos), trimmed, sequence.sequence, error, warnings)) {
+                return {};
+            }
+            sequences.push_back(std::move(sequence));
+            current_sequence = &sequences.back();
+        } else if (keyword == "- pose") {
+            if (current_sequence == nullptr) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not inside a sequence; it is ignored", {trimmed}));
+                continue;
+            }
+            std::string pose;
+            SequenceStep step;
+            if (read_sequence_step_line(trimmed, pose, step, warnings)) {
+                current_sequence->sequence.steps.push_back(step);
+                current_sequence->step_poses.push_back(std::move(pose));
+            }
+        } else if (keyword == "pose") {
+            current_part = nullptr;
+            skipping_part = false;
+            std::string name;
+            size_t pos = keyword.size();
+            if (!read_name_at(trimmed, pos, name) || !trim_copy(trimmed.substr(pos)).empty()) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not pose \"NAME\"; the pose is ignored", {trimmed}));
+                continue;
+            }
+            if (!pose_names.insert(name).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" has more than one pose \"{1}\"",
+                                               {puppet.name, name});
+                return {};
+            }
+            poses.push_back({name, {}});
+            current_pose = &poses.back();
+        } else if (keyword == "- part") {
+            if (current_pose == nullptr) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not inside a pose; it is ignored", {trimmed}));
+                continue;
+            }
+            PendingPosePart pose_part;
+            if (read_pose_part_line(trimmed, pose_part, warnings)) {
+                current_pose->parts.push_back(std::move(pose_part));
+            }
+        } else if (keyword == "part") {
+            current_part = nullptr;
+            PuppetPart part;
+            size_t pos = keyword.size();
+            skipping_part = !read_name_at(trimmed, pos, part.name);
+            if (skipping_part) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not part \"NAME\" [at:X,Y]; the part is ignored",
+                    {trimmed}));
+                continue;
+            }
+            if (!part_names.insert(part.name).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" has more than one part \"{1}\"",
+                                               {puppet.name, part.name});
+                return {};
+            }
+            read_part_settings(trimmed.substr(pos), trimmed, part, warnings);
+            puppet.parts.push_back(std::move(part));
+            current_part = &puppet.parts.back();
+            variant_names.clear();
+        } else if (keyword == "attach") {
+            PendingAttach attach;
+            size_t pos = keyword.size();
+            std::string to;
+            bool ok = read_part_marker(trimmed, pos, attach.child, attach.joint.child_marker);
+            ok = ok && read_name_at(trimmed, pos, to) && to == "to"
+                && read_part_marker(trimmed, pos, attach.parent, attach.joint.parent_marker);
+            if (!ok) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not attach \"PART\":\"MARKER\" to \"PART\":\"MARKER\"; it is ignored",
+                    {trimmed}));
+                continue;
+            }
+            read_attach_settings(trimmed.substr(pos), trimmed, attach.joint, warnings);
+            attaches.push_back(std::move(attach));
+        } else {  // "- sprite" or "- animation"
+            if (skipping_part) {
+                continue;  // already reported with the part
+            }
+            if (current_part == nullptr) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Puppets file line \"{0}\" is not inside a part; it is ignored", {trimmed}));
+                continue;
+            }
+            PuppetVariant variant;
+            if (!read_variant_line(trimmed, keyword, raw_root, sprite_count, by_path, by_name,
+                                   sprite_names, animation_index, variant, warnings)) {
+                continue;
+            }
+            if (!variant_names.insert(variant.name).second) {
+                error = sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has more than one variant \"{2}\"",
+                                               {puppet.name, current_part->name, variant.name});
+                return {};
+            }
+            current_part->variants.push_back(std::move(variant));
+        }
+    }
+    if (!end_puppet()) {
+        return {};
+    }
+    return puppets;
+}
+
+// The sprites a variant shows: its sprite, or every frame of its animation (of the
+// animation an alias replays).
+std::vector<int> variant_sprites(const PuppetVariant& variant, const std::vector<AnimationItem>& animations) {
+    if (!variant.is_animation) {
+        return {variant.index};
+    }
+    const int source = animations[static_cast<size_t>(variant.index)].source_index;
+    return source < 0 ? std::vector<int>{} : animations[static_cast<size_t>(source)].sprite_indexes;
+}
+
+// Reports every sprite of a joined part that lacks the joint's marker: the child's must be a
+// point, the parent's any shape. Global markers count for every sprite.
+void check_puppet_markers(const std::vector<PuppetItem>& puppets, const std::vector<AnimationItem>& animations,
+                          const std::vector<MarkerItem>& marker_items,
+                          const std::vector<std::vector<MarkerItem>>& sprite_markers,
+                          const std::vector<std::string>& sprite_names, std::vector<std::string>& warnings) {
+    std::unordered_map<std::string, const MarkerItem*> global_markers;
+    for (const MarkerItem& m : marker_items) {
+        if (m.sprite_index < 0) {
+            global_markers.emplace(m.name, &m);
+        }
+    }
+    const auto find_marker = [&](int sprite, const std::string& name) -> const MarkerItem* {
+        for (const MarkerItem& m : sprite_markers[static_cast<size_t>(sprite)]) {
+            if (m.name == name) {
+                return &m;
+            }
+        }
+        const auto it = global_markers.find(name);
+        return it == global_markers.end() ? nullptr : it->second;
+    };
+    for (const PuppetItem& puppet : puppets) {
+        // Two joints may need the same marker of the same sprite; that is said once.
+        std::unordered_set<std::string> said;
+        for (const PuppetJoint& joint : puppet.joints) {
+            const std::string& child_name = puppet.parts[joint.child].name;
+            const auto check_end = [&](const PuppetPart& part, const std::string& marker_name, bool is_child) {
+                std::unordered_set<int> reported;
+                for (const PuppetVariant& variant : part.variants) {
+                    for (int sprite : variant_sprites(variant, animations)) {
+                        const MarkerItem* marker = find_marker(sprite, marker_name);
+                        if ((marker != nullptr && (!is_child || marker->type == "point"))
+                            || !reported.insert(sprite).second) {
+                            continue;
+                        }
+                        std::string warning = sprat::core::tr_format(
+                            is_child
+                                ? "Puppet \"{0}\" part \"{1}\" sprite \"{2}\" has no point marker \"{3}\" to attach it by"
+                                : "Puppet \"{0}\" part \"{1}\" sprite \"{2}\" has no marker \"{3}\" to attach part \"{4}\" to",
+                            {puppet.name, part.name, sprite_names[static_cast<size_t>(sprite)], marker_name,
+                             child_name});
+                        if (said.insert(warning).second) {
+                            warnings.push_back(std::move(warning));
+                        }
+                    }
+                }
+            };
+            check_end(puppet.parts[joint.child], joint.child_marker, true);
+            check_end(puppet.parts[joint.parent], joint.parent_marker, false);
+        }
+    }
+}
+
+// Part positions and joint leeways are in original-image pixels, like markers. Fails when one, once scaled to
+// atlas pixels, would exceed sprat::core::k_max_coordinate.
+bool check_puppet_limits(const std::vector<PuppetItem>& puppets, double scale, std::string& error) {
+    const auto fits = [&](int v) {
+        return sprat::core::within_coordinate_limit(sprat::core::scale_to_atlas(v, scale));
+    };
+    for (const PuppetItem& puppet : puppets) {
+        for (const PuppetPose& pose : puppet.poses) {
+            for (const PoseSetting& set : pose.settings) {
+                if (!fits(set.x) || !fits(set.y) || !fits(set.offset_x) || !fits(set.offset_y)) {
+                    error = sprat::core::tr_format(
+                        "Puppet \"{0}\" pose \"{1}\" places part \"{2}\" beyond {3} atlas pixels",
+                        {puppet.name, pose.name, puppet.parts[set.part].name,
+                         std::to_string(sprat::core::k_max_coordinate)});
+                    return false;
+                }
+            }
+        }
+        for (const PuppetPart& part : puppet.parts) {
+            if (!fits(part.x) || !fits(part.y)) {
+                error = sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has a position beyond {2} atlas pixels",
+                                               {puppet.name, part.name,
+                                                std::to_string(sprat::core::k_max_coordinate)});
+                return false;
+            }
+        }
+        for (const PuppetJoint& joint : puppet.joints) {
+            if (!sprat::core::within_coordinate_limit(sprat::core::scale_to_atlas(joint.leeway, scale))) {
+                error = sprat::core::tr_format("Puppet \"{0}\" part \"{1}\" has a leeway beyond {2} atlas pixels",
+                                               {puppet.name, puppet.parts[joint.child].name,
+                                                std::to_string(sprat::core::k_max_coordinate)});
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 #ifndef SPRAT_GLOBAL_TRANSFORMS_DIR
@@ -1102,6 +2036,7 @@ std::string build_sprat_json(
     const std::vector<std::string>& sprite_names,
     const std::vector<MarkerItem>& marker_items,
     const std::vector<AnimationItem>& normalized_animations,
+    const std::vector<PuppetItem>& puppets,
     const std::vector<std::vector<MarkerItem>>& sprite_markers,
     int global_pivot_x,
     int global_pivot_y,
@@ -1111,6 +2046,7 @@ std::string build_sprat_json(
     const std::string& output_stem,
     const std::string& markers_path_arg,
     const std::string& animations_path_arg,
+    const std::string& puppets_path_arg,
     int animation_fps)
 {
     // How the metadata refers to atlas image N: --image-path when given, else the -a path.
@@ -1338,6 +2274,9 @@ std::string build_sprat_json(
     j += ",\"has_markers\":" + std::string(marker_items.empty() ? "false" : "true");
     j += ",\"animations_path\":\"" + escape_json(animations_path_arg) + "\"";
     j += ",\"markers_path\":\"" + escape_json(markers_path_arg) + "\"";
+    j += ",\"has_puppets\":" + std::string(puppets.empty() ? "false" : "true");
+    j += ",\"puppet_count\":" + std::to_string(puppets.size());
+    j += ",\"puppets_path\":\"" + escape_json(puppets_path_arg) + "\"";
     j += ",\"fps\":" + std::to_string(eff_fps);
 
     // sprites array (all sprites flat)
@@ -1426,6 +2365,120 @@ std::string build_sprat_json(
         j += "]";
 
         j += "}";
+    }
+    j += "]";
+
+    // puppets array: parts in draw order (back first), each with its variants, then the
+    // joints that attach them. Leeways are scaled to atlas pixels, like markers.
+    j += ",\"puppets\":[";
+    for (size_t pi = 0; pi < puppets.size(); ++pi) {
+        if (pi > 0) j += ',';
+        const PuppetItem& puppet = puppets[pi];
+        j += "{\"index\":" + std::to_string(pi);
+        j += ",\"name\":\"" + escape_json(puppet.name) + "\"";
+        j += ",\"parts\":[";
+        for (size_t ri = 0; ri < puppet.parts.size(); ++ri) {
+            if (ri > 0) j += ',';
+            const PuppetPart& part = puppet.parts[ri];
+            j += "{\"index\":" + std::to_string(ri);
+            j += ",\"name\":\"" + escape_json(part.name) + "\"";
+            j += ",\"parent\":" + std::to_string(part.parent);
+            j += ",\"parent_name\":\""
+                + (part.parent < 0 ? std::string() : escape_json(puppet.parts[static_cast<size_t>(part.parent)].name))
+                + "\"";
+            j += ",\"has_position\":" + std::string(part.has_position ? "true" : "false");
+            j += ",\"x\":" + std::to_string(sprat::core::scale_to_atlas(part.x, layout.scale));
+            j += ",\"y\":" + std::to_string(sprat::core::scale_to_atlas(part.y, layout.scale));
+            j += ",\"variants\":[";
+            for (size_t vi = 0; vi < part.variants.size(); ++vi) {
+                if (vi > 0) j += ',';
+                const PuppetVariant& variant = part.variants[vi];
+                j += "{\"index\":" + std::to_string(vi);
+                j += ",\"name\":\"" + escape_json(variant.name) + "\"";
+                j += ",\"kind\":\"" + std::string(variant.is_animation ? "animation" : "sprite") + "\"";
+                j += ",\"sprite_index\":" + std::to_string(variant.is_animation ? -1 : variant.index);
+                j += ",\"animation_index\":" + std::to_string(variant.is_animation ? variant.index : -1);
+                j += "}";
+            }
+            j += "]}";
+        }
+        j += "],\"joints\":[";
+        for (size_t ji = 0; ji < puppet.joints.size(); ++ji) {
+            if (ji > 0) j += ',';
+            const PuppetJoint& joint = puppet.joints[ji];
+            j += "{\"index\":" + std::to_string(ji);
+            j += ",\"child\":" + std::to_string(joint.child);
+            j += ",\"child_name\":\"" + escape_json(puppet.parts[joint.child].name) + "\"";
+            j += ",\"child_marker\":\"" + escape_json(joint.child_marker) + "\"";
+            j += ",\"parent\":" + std::to_string(joint.parent);
+            j += ",\"parent_name\":\"" + escape_json(puppet.parts[joint.parent].name) + "\"";
+            j += ",\"parent_marker\":\"" + escape_json(joint.parent_marker) + "\"";
+            j += ",\"is_constraint\":" + std::string(joint.is_constraint ? "true" : "false");
+            j += ",\"leeway\":" + std::to_string(sprat::core::scale_to_atlas(joint.leeway, layout.scale));
+            j += ",\"has_angle\":" + std::string(joint.has_angle ? "true" : "false");
+            j += ",\"angle_min\":" + std::to_string(joint.angle_min);
+            j += ",\"angle_max\":" + std::to_string(joint.angle_max);
+            j += "}";
+        }
+        // Poses: what each sets for some parts, in part order; offsets and positions in atlas pixels.
+        j += "],\"poses\":[";
+        for (size_t oi = 0; oi < puppet.poses.size(); ++oi) {
+            if (oi > 0) j += ',';
+            const PuppetPose& pose = puppet.poses[oi];
+            j += "{\"index\":" + std::to_string(oi);
+            j += ",\"name\":\"" + escape_json(pose.name) + "\"";
+            j += ",\"parts\":[";
+            for (size_t si = 0; si < pose.settings.size(); ++si) {
+                if (si > 0) j += ',';
+                const PoseSetting& set = pose.settings[si];
+                const PuppetPart& part = puppet.parts[set.part];
+                j += "{\"part\":" + std::to_string(set.part);
+                j += ",\"part_name\":\"" + escape_json(part.name) + "\"";
+                j += ",\"variant\":" + std::to_string(set.variant);
+                j += ",\"variant_name\":\""
+                    + (set.variant < 0 ? std::string() : escape_json(part.variants[static_cast<size_t>(set.variant)].name))
+                    + "\"";
+                j += ",\"has_angle\":" + std::string(set.has_angle ? "true" : "false");
+                j += ",\"angle\":" + std::to_string(set.angle);
+                j += ",\"has_offset\":" + std::string(set.has_offset ? "true" : "false");
+                j += ",\"offset_x\":" + std::to_string(sprat::core::scale_to_atlas(set.offset_x, layout.scale));
+                j += ",\"offset_y\":" + std::to_string(sprat::core::scale_to_atlas(set.offset_y, layout.scale));
+                j += ",\"has_position\":" + std::string(set.has_position ? "true" : "false");
+                j += ",\"x\":" + std::to_string(sprat::core::scale_to_atlas(set.x, layout.scale));
+                j += ",\"y\":" + std::to_string(sprat::core::scale_to_atlas(set.y, layout.scale));
+                j += "}";
+            }
+            j += "]}";
+        }
+        // Sequences: steps in play order; a step lasts in + hold frames at the sequence's fps.
+        j += "],\"sequences\":[";
+        for (size_t qi = 0; qi < puppet.sequences.size(); ++qi) {
+            if (qi > 0) j += ',';
+            const PuppetSequence& sequence = puppet.sequences[qi];
+            long long frames = 0;
+            for (const SequenceStep& step : sequence.steps) {
+                frames += step.in + step.hold;
+            }
+            j += "{\"index\":" + std::to_string(qi);
+            j += ",\"name\":\"" + escape_json(sequence.name) + "\"";
+            j += ",\"fps\":" + std::to_string(sequence.fps);
+            j += ",\"loop\":\"" + sequence.loop + "\"";
+            j += ",\"frame_count\":" + std::to_string(frames);
+            j += ",\"duration\":" + format_double(static_cast<double>(frames) / sequence.fps);
+            j += ",\"steps\":[";
+            for (size_t ti = 0; ti < sequence.steps.size(); ++ti) {
+                if (ti > 0) j += ',';
+                const SequenceStep& step = sequence.steps[ti];
+                j += "{\"pose\":" + std::to_string(step.pose);
+                j += ",\"pose_name\":\"" + escape_json(puppet.poses[step.pose].name) + "\"";
+                j += ",\"in\":" + std::to_string(step.in);
+                j += ",\"hold\":" + std::to_string(step.hold);
+                j += ",\"ease\":\"" + std::string(step.snap ? "step" : "linear") + "\"";
+                j += "}";
+            }
+            j += "]}";
+        }
+        j += "]}";
     }
     j += "]";
 
@@ -1738,6 +2791,12 @@ std::vector<GroupMember> discover_group_transforms(const std::string& group_name
     return members;
 }
 
+// The data of an empty layout, which transforms are evaluated with to read their name and
+// description for listing. Built like real data, so it has every field they may read.
+std::string empty_sprat_json() {
+    return build_sprat_json(Layout{}, {}, {}, {}, {}, {}, 0, 0, false, "", "", "", "", "", "", -1);
+}
+
 void list_transforms() {
     const fs::path dir = find_transforms_dir();
     if (!fs::exists(dir) || !fs::is_directory(dir)) {
@@ -1774,13 +2833,7 @@ void list_transforms() {
 
     std::ranges::sort(paths);
 
-    // Empty mock data for listing
-    const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
-        R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
-        R"("multipack":false,"scale":1,"scale_text":"1","extrude":0,"rotation_direction":"cw","has_rotated":false,)"
-        R"("sprite_count":0,"animation_count":0,)"
-        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000","output_pattern_hash_hex":"0000000000000000",)"
-        R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8})";
+    const std::string mock_json = empty_sprat_json();
 
     for (const auto& path : paths) {
         std::string eval_error;
@@ -1843,12 +2896,7 @@ void list_transforms_json() {
 
     std::ranges::sort(paths);
 
-    const std::string mock_json = R"({"sprites":[],"animations":[],"atlases":[],"markers":[],)"
-        R"("atlas_path":"","atlas_stem":"","texture_key":"","atlas_width":0,"atlas_height":0,"atlas_count":0,)"
-        R"("multipack":false,"scale":1,"scale_text":"1","extrude":0,"rotation_direction":"cw","has_rotated":false,)"
-        R"("sprite_count":0,"animation_count":0,)"
-        R"("marker_count":0,"output_pattern":"","output_stem":"","output_stem_hash_hex":"0000000000000000","output_pattern_hash_hex":"0000000000000000",)"
-        R"("has_animations":false,"has_markers":false,"animations_path":"","markers_path":"","fps":8})";
+    const std::string mock_json = empty_sprat_json();
 
     std::cout << "[\n";
     bool first = true;
@@ -1912,6 +2960,7 @@ void print_usage() {
               << tr("  --animations PATH          Load external animations file (fps up to 100)\n")
               << tr("                             loop modes: loop, once, pingpong, once-pingpong\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
+              << tr("  --puppets PATH             Load external puppets file (cutout rigs, poses and sequences)\n")
               << tr("  --help, -h                 Show this help message\n")
               << tr("  --version, -v              Show version\n");
 }
@@ -1928,6 +2977,7 @@ int run_spratconvert(int argc, char** argv) {
     std::string transform_arg = "json";
     std::string markers_path_arg;
     std::string animations_path_arg;
+    std::string puppets_path_arg;
     std::string output_pattern_arg;
     std::string image_pattern_arg;
     std::string output_dir_arg;
@@ -1950,6 +3000,8 @@ int run_spratconvert(int argc, char** argv) {
             markers_path_arg = argv[++i];
         } else if (arg == "--animations" && i + 1 < argc) {
             animations_path_arg = argv[++i];
+        } else if (arg == "--puppets" && i + 1 < argc) {
+            puppets_path_arg = argv[++i];
         } else if (arg == "--auto-animations") {
             auto_animations = true;
         } else if (arg == "--list-transforms") {
@@ -2032,26 +3084,22 @@ int run_spratconvert(int argc, char** argv) {
     std::vector<std::string> sprite_names;
     collect_sprite_name_indexes(layout, sprite_index_by_path, sprite_index_by_name, sprite_names);
 
-    std::string markers_text;
-    std::string animations_text;
-    if (!markers_path_arg.empty()) {
+    // Each metadata file, or the layout stream itself when it isn't given.
+    std::string markers_file;
+    std::string animations_file;
+    std::string puppets_file;
+    for (auto [path, text] : {std::pair{&markers_path_arg, &markers_file},
+                              std::pair{&animations_path_arg, &animations_file},
+                              std::pair{&puppets_path_arg, &puppets_file}}) {
         std::string file_error;
-        if (!read_text_file(fs::path(markers_path_arg), markers_text, file_error)) {
+        if (!path->empty() && !read_text_file(fs::path(*path), *text, file_error)) {
             std::cerr << file_error << "\n";
             return 1;
         }
-    } else {
-        markers_text = input_text;
     }
-    if (!animations_path_arg.empty()) {
-        std::string file_error;
-        if (!read_text_file(fs::path(animations_path_arg), animations_text, file_error)) {
-            std::cerr << file_error << "\n";
-            return 1;
-        }
-    } else {
-        animations_text = input_text;
-    }
+    const std::string& markers_text = markers_path_arg.empty() ? input_text : markers_file;
+    const std::string& animations_text = animations_path_arg.empty() ? input_text : animations_file;
+    const std::string& puppets_text = puppets_path_arg.empty() ? input_text : puppets_file;
 
     std::vector<std::vector<MarkerItem>> sprite_markers;
     std::vector<std::string> markers_warnings;
@@ -2131,7 +3179,25 @@ int run_spratconvert(int argc, char** argv) {
         }
         item.sprite_indexes = std::move(filtered);
     }
-    resolve_alias_loops(normalized_animations);
+    resolve_alias_sources(normalized_animations);
+
+    // Puppets come last: their variants name animations, the automatic ones included.
+    std::string puppets_error;
+    std::vector<std::string> puppets_warnings;
+    const std::vector<PuppetItem> puppets =
+        parse_puppets_data(puppets_text, puppets_path_arg.empty(), sprite_index_by_path,
+                           sprite_index_by_name, sprite_names, normalized_animations,
+                           puppets_error, puppets_warnings);
+    // After an error the list is empty, so these checks find nothing to report.
+    check_puppet_markers(puppets, normalized_animations, marker_items, sprite_markers,
+                         sprite_names, puppets_warnings);
+    for (const std::string& warning : puppets_warnings) {
+        std::cerr << tr("Warning: ") << warning << "\n";
+    }
+    if (!puppets_error.empty() || !check_puppet_limits(puppets, layout.scale, puppets_error)) {
+        std::cerr << puppets_error << "\n";
+        return 1;
+    }
 
     int global_pivot_x = 0;
     int global_pivot_y = 0;
@@ -2225,10 +3291,10 @@ int run_spratconvert(int argc, char** argv) {
         int exit_code = 0;
         for (const GroupMember& member : group_members) {
             const std::string sprat_json = build_sprat_json(
-                layout, sprite_names, marker_items, normalized_animations, sprite_markers,
+                layout, sprite_names, marker_items, normalized_animations, puppets, sprite_markers,
                 global_pivot_x, global_pivot_y, has_global_pivot,
                 output_pattern_arg, image_pattern_arg, member.variant,
-                markers_path_arg, animations_path_arg, animation_fps);
+                markers_path_arg, animations_path_arg, puppets_path_arg, animation_fps);
 
             std::string eval_error;
             std::string output = evaluate_transform(member.path, sprat_json, eval_error);
@@ -2272,10 +3338,10 @@ int run_spratconvert(int argc, char** argv) {
         : "";
 
     const std::string sprat_json = build_sprat_json(
-        layout, sprite_names, marker_items, normalized_animations, sprite_markers,
+        layout, sprite_names, marker_items, normalized_animations, puppets, sprite_markers,
         global_pivot_x, global_pivot_y, has_global_pivot,
         output_pattern_arg, image_pattern_arg, output_stem,
-        markers_path_arg, animations_path_arg, animation_fps);
+        markers_path_arg, animations_path_arg, puppets_path_arg, animation_fps);
 
     std::string eval_error;
     std::string output = evaluate_transform(transform_path, sprat_json, eval_error);

@@ -50,11 +50,8 @@ CTestTestfile.cmake
 CPackConfig.cmake
 CPackSourceConfig.cmake
 **/Makefile
-**/build/
-**/build-win/
-**/build_win
-**/build_debug
-**/build_release
+# Build folders: build/, build-release/, build_debug/, ... (build.sh is a file)
+**/build*/
 **/Testing
 stb/*
 layout.*
@@ -70,7 +67,6 @@ spratframes
 !src/commands/spratlayout/
 README-assets/*
 !README-assets/*.png
-**/build_test
 **/_deps
 # Exclude temporary documentation snapshots
 README-assets/snapshot_*.png

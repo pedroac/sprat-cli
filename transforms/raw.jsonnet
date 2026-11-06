@@ -1,15 +1,25 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 4
-//   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS GLOBAL_MARKERS MARKERS VERTICES
-//         FRAMES STRING_BYTES
+//   sprat-raw 8
+//   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS
+//         VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS STRING_BYTES
 //   atlas W H PATH                                                (ATLASES lines)
 //   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME           (GLOBAL_MARKERS lines)
 //   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y
 //          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
 //   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME           (MARKERS lines after a sprite)
 //   anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
+//   puppet PARTS JOINTS POSES SEQUENCES NAME                      (PUPPETS lines)
+//   part PARENT HAS_POSITION X Y VARIANTS NAME                    (PARTS lines after a puppet)
+//   variant KIND INDEX NAME                                       (VARIANTS lines after a part)
+//   joint CHILD PARENT CONSTRAINT LEEWAY HAS_ANGLE ANGLE_MIN ANGLE_MAX CHILD_MARKER
+//         PARENT_MARKER                                           (JOINTS lines after the parts)
+//   pose SETTINGS NAME                                            (POSES lines after the joints)
+//   set PART VARIANT HAS_ANGLE ANGLE HAS_OFFSET OFFSET_X OFFSET_Y HAS_POSITION X Y
+//                                                                 (SETTINGS lines after a pose)
+//   sequence FPS LOOP STEPS NAME                                  (SEQUENCES lines after the poses)
+//   step POSE IN HOLD EASE                                        (STEPS lines after a sequence)
 //
 // Strings are length-prefixed ("<utf8 bytes>:<bytes>"), so they may hold spaces or newlines.
 // An empty string means "none". Enums are numbers: marker type point=0 circle=1 rectangle=2
@@ -19,13 +29,50 @@
 // source's. On a sprite line, ALIAS is the index of the regular sprite whose atlas region a
 // deduplicated sprite shares, or -1. HAS_PIVOT tells a pivot at 0,0 from no pivot (then
 // PIVOT_X and PIVOT_Y are 0). Global markers are the markers file's markers before any path.
+// A puppet is a cutout rig. Its parts come in draw order, back first; PARENT is the index,
+// within the puppet, of the part it is attached to, or -1. A part that isn't attached has
+// HAS_POSITION 1 and is placed by X Y: where its sprite's pivot goes in the puppet's space,
+// in atlas pixels with Y down, whose origin is the puppet's pivot; an attached part has
+// HAS_POSITION 0 and X Y 0. A variant is what a part can show:
+// KIND sprite=0 (INDEX is a sprite index) or animation=1 (INDEX is an animation index). A
+// joint pins the child part's CHILD_MARKER point to the parent part's PARENT_MARKER, both
+// looked up by name in the markers of the sprite each part shows; the parent marker's shape
+// (a point, or the inside of a circle, rectangle or polygon) is where the child's point may
+// be, and LEEWAY (atlas pixels) how far it may drift beyond it. With HAS_ANGLE, the child
+// turns ANGLE_MIN to ANGLE_MAX degrees (clockwise, y down) from its rest angle relative to
+// its parent; without it, it turns freely. A part's parent joint (CONSTRAINT 0) is the one
+// whose CHILD is that part and whose PARENT is the part's PARENT; every part with a parent
+// has exactly one. Joints with CONSTRAINT 1 are further attachments, which may close loops:
+// an editor, or an engine that wants live physics, keeps them within their shape and
+// leeway while posing, and playing a pose needs none of them.
+// A pose sets some parts of its puppet, in part order, each part at most once; parts it
+// doesn't set keep what they had, so poses layer. VARIANT is an index into the part's
+// variants, or -1 to keep it. With HAS_ANGLE, ANGLE (degrees, clockwise) turns the part
+// from its rest angle: relative to its parent, within its parent joint's limits, or around
+// its own pivot for a positioned part. With HAS_OFFSET, OFFSET_X OFFSET_Y (atlas pixels)
+// moves an attached part's point from the parent marker's x,y, within the marker's shape
+// and the leeway. With HAS_POSITION, X Y moves a positioned part. Each value is 0 without
+// its flag.
+// A sequence plays its steps in order at FPS (1..100) frames per second, LOOP as on an anim
+// line. A step reaches pose POSE (an index into the puppet's poses) in IN frames, then
+// holds it HOLD frames; IN + HOLD is at least 1, and each at most 100000. EASE is how the
+// values it sets get there: linear=0 tweens them over IN, step=1 keeps the old ones through
+// IN and snaps. Variants always snap when the pose arrives, at the end of IN. Only what the
+// pose sets changes, so sequences on different parts combine.
+// Version 8 added SEQUENCES and STEPS and the sequence records.
+// Version 7 removed the puppet's REFERENCE and added POSES and SETTINGS, each joint's
+// CONSTRAINT, and the pose records.
+// Version 6 added the puppet's REFERENCE and each part's HAS_POSITION X Y.
+// Version 5 added PUPPETS, PARTS, VARIANTS and JOINTS and the puppet records.
 // Version 4 added GLOBAL_MARKERS and their lines, and HAS_PIVOT, and replaced the sprite's
 // ALIAS_OF path (last on the line) with the ALIAS index. Version 3 dropped the normal and collision map fields (COLLISION_SCALE and NORMAL_PATH,
 // COLLISION_PATH on the sheet and atlas lines). Version 2 added LOOP; version 1 files have
 // none, and play as loop.
 //
-// The sheet line's MARKERS, VERTICES, FRAMES and STRING_BYTES are the totals over the whole
-// file: marker lines (global ones included), polygon vertices, animation frame indexes, and the UTF-8 bytes of every
+// The sheet line's MARKERS, VERTICES, FRAMES, PARTS, VARIANTS, JOINTS, POSES, SETTINGS,
+// SEQUENCES, STEPS and STRING_BYTES are the totals over the whole file: marker lines (global
+// ones included), polygon vertices, animation frame indexes, puppet parts, variants,
+// joints, poses, pose settings, sequences and their steps, and the UTF-8 bytes of every
 // string. With them a loader knows the exact size of the model before reading the records, so
 // it can allocate it once; a loader must reject a file whose records don't match them.
 local sprat = std.extVar("sprat");
@@ -83,6 +130,41 @@ local anim_line(a) =
 
 local animations = if sprat.has_animations then sprat.animations else [];
 
+local variant_kinds = { sprite: 0, animation: 1 };
+local variant_line(v) =
+  line(["variant", variant_kinds[v.kind],
+        if v.kind == "animation" then v.animation_index else v.sprite_index, str(v.name)]);
+local part_lines(p) =
+  line(["part", p.parent, bool(p.has_position), p.x, p.y, std.length(p.variants), str(p.name)])
+  + std.join("", [variant_line(v) for v in p.variants]);
+local joint_line(jt) =
+  line(["joint", jt.child, jt.parent, bool(jt.is_constraint), jt.leeway, bool(jt.has_angle),
+        jt.angle_min, jt.angle_max, str(jt.child_marker), str(jt.parent_marker)]);
+local set_line(st) =
+  line(["set", st.part, st.variant, bool(st.has_angle), st.angle, bool(st.has_offset),
+        st.offset_x, st.offset_y, bool(st.has_position), st.x, st.y]);
+local ease_values = { linear: 0, step: 1 };
+local step_line(st) = line(["step", st.pose, st["in"], st.hold, ease_values[st.ease]]);
+local sequence_lines(sq) =
+  line(["sequence", sq.fps, loop_bits[sq.loop], std.length(sq.steps), str(sq.name)])
+  + std.join("", [step_line(st) for st in sq.steps]);
+local pose_lines(po) =
+  line(["pose", std.length(po.parts), str(po.name)])
+  + std.join("", [set_line(st) for st in po.parts]);
+local puppet_lines(pp) =
+  line(["puppet", std.length(pp.parts), std.length(pp.joints), std.length(pp.poses),
+        std.length(pp.sequences), str(pp.name)])
+  + std.join("", [part_lines(p) for p in pp.parts])
+  + std.join("", [joint_line(jt) for jt in pp.joints])
+  + std.join("", [pose_lines(po) for po in pp.poses])
+  + std.join("", [sequence_lines(sq) for sq in pp.sequences]);
+
+local puppets = sprat.puppets;
+local parts = [p for pp in puppets for p in pp.parts];
+local joints = [jt for pp in puppets for jt in pp.joints];
+local poses = [po for pp in puppets for po in pp.poses];
+local sequences = [sq for pp in puppets for sq in pp.sequences];
+
 local global_markers = [m for m in sprat.markers if m.sprite_index < 0];
 
 // Totals for the sheet line, computed from exactly what the records below write.
@@ -93,14 +175,22 @@ local string_bytes =
   sum([str_bytes(at.path) for at in sprat.atlases])
   + sum([str_bytes(s.name) + str_bytes(s.path) for s in sprat.sprites])
   + sum([str_bytes(m.name) for m in all_markers])
-  + sum([str_bytes(a.name) for a in animations]);
+  + sum([str_bytes(a.name) for a in animations])
+  + sum([str_bytes(pp.name) for pp in puppets])
+  + sum([str_bytes(p.name) + sum([str_bytes(v.name) for v in p.variants]) for p in parts])
+  + sum([str_bytes(jt.child_marker) + str_bytes(jt.parent_marker) for jt in joints])
+  + sum([str_bytes(po.name) for po in poses])
+  + sum([str_bytes(sq.name) for sq in sequences]);
 
 local header =
-  "sprat-raw 4\n"
+  "sprat-raw 8\n"
   + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
-          std.length(global_markers), std.length(all_markers), sum([vertex_count(m) for m in all_markers]),
-          sum([frame_count(a) for a in animations]), string_bytes]);
+          std.length(puppets), std.length(global_markers), std.length(all_markers),
+          sum([vertex_count(m) for m in all_markers]), sum([frame_count(a) for a in animations]),
+          std.length(parts), sum([std.length(p.variants) for p in parts]), std.length(joints),
+          std.length(poses), sum([std.length(po.parts) for po in poses]),
+          std.length(sequences), sum([std.length(sq.steps) for sq in sequences]), string_bytes]);
 
 {
   name: "Raw",
@@ -111,5 +201,6 @@ local header =
                     for at in sprat.atlases])
     + std.join("", [marker_line(m) for m in global_markers])
     + std.join("", [sprite_lines(s) for s in sprat.sprites])
-    + std.join("", [anim_line(a) for a in animations]),
+    + std.join("", [anim_line(a) for a in animations])
+    + std.join("", [puppet_lines(pp) for pp in puppets]),
 }
