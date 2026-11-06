@@ -413,7 +413,7 @@ sed 's/^scale 1$/scale 0.5/' "$raw_layout_file" | cat - "$raw_animations_file" "
   | "$convert_bin" --transform "$(fix_path "$tmp_dir/puppets.jsonnet")" 2> /dev/null \
   | python3 -c '
 import json, sys
-p = json.load(sys.stdin)
+p = json.load(sys.stdin.buffer)  # bytes: Windows would decode text with its ANSI code page
 assert [x["name"] for x in p] == ["hé"], p
 parts, joint = p[0]["parts"], p[0]["joints"][0]
 assert [(x["name"], x["parent"], x["has_position"], x["x"], x["y"]) for x in parts] \
