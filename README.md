@@ -73,6 +73,12 @@ sheet.png ──► spratframes ──► frames.txt ──► spratunpack ─�
 - [Extracting sprites](docs/extracting.md): spratframes and spratunpack
 - [References](docs/references.md): free sprites and texture optimization reading
 
+## Getting help
+
+- Every tool has `--help`: `./build/spratlayout --help`, `./build/spratpack --help`, etc.
+- Full manual: `man ./man/sprat-cli.1` (or `man sprat-cli` after installing)
+- Detailed docs: see the links above
+
 ## Contributing
 
 Suggestions, pull requests, and forks are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
