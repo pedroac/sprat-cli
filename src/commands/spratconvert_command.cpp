@@ -98,6 +98,7 @@ struct AnimationItem {
 using Sprite = sprat::core::Sprite;
 using Layout = sprat::core::Layout;
 using sprat::core::format_index_pattern;
+using sprat::core::parse_double;
 using sprat::core::parse_int;
 using sprat::core::is_animations_keyword;
 using sprat::core::is_markers_keyword;
@@ -970,8 +971,9 @@ void resolve_alias_sources(std::vector<AnimationItem>& animations) {
 // origin is the puppet's pivot; all its attach lines are constraints.
 //
 // A pose sets some parts: a variant, an angle relative to the parent (or around its own
-// pivot for a positioned part), an offset within its joint's allowed area, or a position.
-// Poses only name what they change, so they layer (walk + smile).
+// pivot for a positioned part), an offset within its joint's allowed area, a position, a
+// scale, an opacity or a tint. Poses only name what they change, so they layer (walk + smile).
+// Scale, opacity and tint are the part's own: children aren't scaled, faded or tinted.
 //
 // A sequence plays poses one after another at its own fps: each step reaches its pose in
 // `in` frames (tweened, or snapped at the end with ease:step; some parts may ease the other
@@ -980,6 +982,8 @@ void resolve_alias_sources(std::vector<AnimationItem>& animations) {
 
 // Most degrees a joint's angle range, or a pose's angle, may reach either way.
 constexpr int k_max_joint_angle = 360;
+// Largest factor a pose may scale a part by either way (negative flips it).
+constexpr double k_max_pose_scale = 16.0;
 // Most frames a sequence step's in or hold may take. Cutout sequences are far shorter, so
 // a larger value is a typo; it also keeps sums of a few steps within an int.
 constexpr int k_max_step_frames = 100000;
@@ -1026,6 +1030,13 @@ struct PoseSetting {
     bool has_position = false;
     int x = 0;
     int y = 0;
+    bool has_scale = false;
+    double scale_x = 1.0;
+    double scale_y = 1.0;
+    bool has_opacity = false;
+    double opacity = 1.0;
+    bool has_tint = false;
+    std::array<int, 3> tint{255, 255, 255};  // multiplies the sprite's red, green and blue
 };
 
 struct PuppetPose {
@@ -1471,8 +1482,39 @@ void read_part_settings(const std::string& settings, const std::string& line, Pu
     }
 }
 
-// Reads a pose's "- part" line: the part, then variant:NAME, angle:DEGREES, offset:X,Y and
-// at:X,Y, in any order, each at most once. False, with a warning, when it names no part;
+// Reads a pose scale: one factor for both axes, or X,Y; each within ±k_max_pose_scale.
+bool parse_pose_scale(const std::string& value, double& x, double& y) {
+    const size_t comma = value.find(',');
+    if (!parse_double(value.substr(0, comma), x)) {
+        return false;
+    }
+    if (comma == std::string::npos) {
+        y = x;
+    } else if (!parse_double(value.substr(comma + 1), y)) {
+        return false;
+    }
+    return std::abs(x) <= k_max_pose_scale && std::abs(y) <= k_max_pose_scale;
+}
+
+// Reads a tint color, #RRGGBB in hex, into its red, green and blue.
+bool parse_tint(const std::string& value, std::array<int, 3>& rgb) {
+    // from_chars would take a '-' sign, so check the digits first.
+    if (value.size() != 7 || value[0] != '#'
+        || !std::all_of(value.begin() + 1, value.end(), [](unsigned char c) { return std::isxdigit(c) != 0; })) {
+        return false;
+    }
+    for (size_t i = 0; i < 3; ++i) {
+        const char* begin = value.data() + 1 + i * 2;
+        const auto [end, ec] = std::from_chars(begin, begin + 2, rgb[i], 16);
+        if (ec != std::errc() || end != begin + 2) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Reads a pose's "- part" line: the part, then variant:NAME, angle:DEGREES, offset:X,Y,
+// at:X,Y, scale:S or scale:X,Y, opacity:A and tint:#RRGGBB, in any order, each at most once. False, with a warning, when it names no part;
 // a setting that doesn't fit is reported and ignored.
 bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::vector<std::string>& warnings) {
     out.line = trimmed;
@@ -1480,7 +1522,7 @@ bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::
     std::vector<std::pair<std::string, std::string>> settings;
     if (!read_name_at(trimmed, pos, out.part) || !split_settings(trimmed.substr(pos), settings)) {
         warnings.push_back(sprat::core::tr_format(
-            "Puppets file line \"{0}\" is not - part \"PART\" [variant:NAME] [angle:DEGREES] [offset:X,Y] [at:X,Y]; it is ignored",
+            "Puppets file line \"{0}\" is not - part \"PART\" [variant:NAME] [angle:DEGREES] [offset:X,Y] [at:X,Y] [scale:X,Y] [opacity:A] [tint:#RRGGBB]; it is ignored",
             {trimmed}));
         return false;
     }
@@ -1515,13 +1557,32 @@ bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::
                 s.x = s.y = 0;
                 bad("X,Y in whole pixels");
             }
+        } else if (key == "scale" && !s.has_scale) {
+            s.has_scale = parse_pose_scale(value, s.scale_x, s.scale_y);
+            if (!s.has_scale) {
+                s.scale_x = s.scale_y = 1.0;
+                bad("a factor, or X,Y factors, between -16 and 16");
+            }
+        } else if (key == "opacity" && !s.has_opacity) {
+            s.has_opacity = parse_double(value, s.opacity) && s.opacity >= 0.0 && s.opacity <= 1.0;
+            if (!s.has_opacity) {
+                s.opacity = 1.0;
+                bad("between 0 and 1");
+            }
+        } else if (key == "tint" && !s.has_tint) {
+            s.has_tint = parse_tint(value, s.tint);
+            if (!s.has_tint) {
+                s.tint = {255, 255, 255};
+                bad("#RRGGBB");
+            }
         } else {
             warnings.push_back(sprat::core::tr_format(
                 "Pose line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
                 {trimmed, key.empty() ? value : key + ":" + value}));
         }
     }
-    if (out.variant.empty() && !s.has_angle && !s.has_offset && !s.has_position) {
+    if (out.variant.empty() && !s.has_angle && !s.has_offset && !s.has_position && !s.has_scale
+        && !s.has_opacity && !s.has_tint) {
         warnings.push_back(sprat::core::tr_format("Pose line \"{0}\" sets nothing; it is ignored", {trimmed}));
         return false;
     }
@@ -2518,6 +2579,15 @@ std::string build_sprat_json(
                 j += ",\"has_position\":" + std::string(set.has_position ? "true" : "false");
                 j += ",\"x\":" + std::to_string(sprat::core::scale_to_atlas(set.x, layout.scale));
                 j += ",\"y\":" + std::to_string(sprat::core::scale_to_atlas(set.y, layout.scale));
+                j += ",\"has_scale\":" + std::string(set.has_scale ? "true" : "false");
+                j += ",\"scale_x\":" + format_double(set.scale_x);
+                j += ",\"scale_y\":" + format_double(set.scale_y);
+                j += ",\"has_opacity\":" + std::string(set.has_opacity ? "true" : "false");
+                j += ",\"opacity\":" + format_double(set.opacity);
+                j += ",\"has_tint\":" + std::string(set.has_tint ? "true" : "false");
+                j += ",\"tint_r\":" + std::to_string(set.tint[0]);
+                j += ",\"tint_g\":" + std::to_string(set.tint[1]);
+                j += ",\"tint_b\":" + std::to_string(set.tint[2]);
                 j += "}";
             }
             j += "]}";

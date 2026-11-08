@@ -651,7 +651,7 @@ once; it must reject a file whose records don't match those totals. Strings are 
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
-sprat-raw 9
+sprat-raw 10
 sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS PART_EASES STRING_BYTES
 atlas W H PATH
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
@@ -662,7 +662,7 @@ part PARENT HAS_POSITION X Y VARIANTS NAME
 variant KIND INDEX NAME
 joint CHILD PARENT CONSTRAINT LEEWAY HAS_ANGLE ANGLE_MIN ANGLE_MAX CHILD_MARKER PARENT_MARKER
 pose SETTINGS NAME
-set PART VARIANT HAS_ANGLE ANGLE HAS_OFFSET OFFSET_X OFFSET_Y HAS_POSITION X Y
+set PART VARIANT HAS_ANGLE ANGLE HAS_OFFSET OFFSET_X OFFSET_Y HAS_POSITION X Y HAS_SCALE SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT TINT_R TINT_G TINT_B
 sequence FPS LOOP STEPS NAME
 step POSE IN HOLD EASE PART_EASES [PART EASE]...
 ```
@@ -685,8 +685,9 @@ part has `HAS_POSITION` 0 and `X Y` 0. A joint with `CONSTRAINT` 0 is its child'
 joint (one per part with a parent); `CONSTRAINT` 1 marks a further attachment. Each
 puppet's `POSES` `pose` lines follow its joints, each followed by its `SETTINGS` `set` lines
 in part order: `PART` is a part index, `VARIANT` an index into that part's variants or `-1`
-to keep it, and `ANGLE`, `OFFSET_X OFFSET_Y` (atlas pixels) and `X Y` apply only with their
-flags (0 otherwise). Each puppet's `SEQUENCES` `sequence` lines follow its poses, each
+to keep it, and `ANGLE`, `OFFSET_X OFFSET_Y` (atlas pixels), `X Y`, `SCALE_X SCALE_Y` (decimal factors),
+`OPACITY` (decimal, 0 to 1) and `TINT_R TINT_G TINT_B` (0 to 255) apply only with their
+flags (otherwise angles, offsets and positions are 0, scales and opacity 1 and the tint 255 255 255). Each puppet's `SEQUENCES` `sequence` lines follow its poses, each
 followed by its `STEPS` `step` lines in play order: `POSE` is a pose index, `IN` and `HOLD`
 frames at `FPS`, and `EASE` `linear`=0 or `step`=1, followed by `PART_EASES` `PART EASE` pairs: the parts (part indexes, set by the pose, in part order) that ease the other way; `LOOP` uses the same bits as an
 `anim` line. A variant's `KIND` is `sprite`=0 (`INDEX` is a sprite index) or `animation`=1 (`INDEX`
@@ -697,7 +698,7 @@ each part shows; `LEEWAY` is in atlas pixels, and `ANGLE_MIN` and `ANGLE_MAX` ap
 and collision map fields; version 4 added `GLOBAL_MARKERS`, their lines and `HAS_PIVOT`, and
 replaced the sprite's `ALIAS_OF` path with the `ALIAS` index; version 5 added puppets; version
 6 added the puppet's `REFERENCE` and each part's `HAS_POSITION X Y`; version 7 removed
-`REFERENCE` and added joint constraints and poses; version 8 added sequences; version 9 added each step's `PART_EASES`).
+`REFERENCE` and added joint constraints and poses; version 8 added sequences; version 9 added each step's `PART_EASES`; version 10 added each setting's `HAS_SCALE SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT TINT_R TINT_G TINT_B`).
 
 Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
 [sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an
@@ -790,7 +791,7 @@ local sprat = std.extVar("sprat");
 | `parts` | Parts in draw order, back first: `{index, name, parent, parent_name, has_position, x, y, variants}`; `parent` is the index of the part it is attached to, or `-1` (and `parent_name` empty); a part that isn't attached has `has_position` and `x`, `y` in atlas pixels |
 | `parts[].variants` | `{index, name, kind, sprite_index, animation_index}`; `kind` is `sprite` or `animation`, and the other index is `-1` |
 | `joints` | `{index, child, child_name, child_marker, parent, parent_name, parent_marker, leeway, has_angle, angle_min, angle_max}`; `child` and `parent` are part indexes, `leeway` is in atlas pixels; plus `is_constraint`, true for a part's further attachments |
-| `poses` | `{index, name, parts}`; each of `parts`, in part order, is `{part, part_name, variant, variant_name, has_angle, angle, has_offset, offset_x, offset_y, has_position, x, y}`, with `variant` `-1` (and `variant_name` empty) to keep it, and offsets and positions in atlas pixels |
+| `poses` | `{index, name, parts}`; each of `parts`, in part order, is `{part, part_name, variant, variant_name, has_angle, angle, has_offset, offset_x, offset_y, has_position, x, y, has_scale, scale_x, scale_y, has_opacity, opacity, has_tint, tint_r, tint_g, tint_b}`, with `variant` `-1` (and `variant_name` empty) to keep it, offsets and positions in atlas pixels, scales as factors, `opacity` from 0 to 1 and tints from 0 to 255 per channel; a value without its flag has its rest value (0, scale 1, opacity 1, tint 255) |
 | `sequences` | `{index, name, fps, loop, frame_count, duration, steps}`; `frame_count` adds up every step's `in` + `hold`, `duration` is it in seconds at `fps`, and each of `steps` is `{pose, pose_name, in, hold, ease, part_eases}` with `ease` `linear` or `step`; `part_eases`, in part order, lists the parts the pose sets that ease the other way, each `{part, part_name, ease}` |
 
 **Per marker (`markers[]` and `sprite.markers[]`):**
@@ -904,8 +905,8 @@ animation "idle"
 - `- sprite "SPRITE" [-> "NAME"]` adds a sprite variant to the current part: a sprite path (resolved against `root` like markers paths), name, or index (a bare number). `- animation "ANIMATION" [-> "NAME"]` adds an animation, from `--animations`, `--auto-animations` or the layout stream; an alias animation (a mirrored one) works too. A variant is named after its sprite or animation unless `-> "NAME"` names it; variant names must be unique within their part.
 - `attach "CHILD":"MARKER" to "PARENT":"MARKER" [leeway:N] [angle:MIN..MAX]` attaches the child part to its parent part, anywhere in the puppet. The child's marker must be a `point`, in every sprite the child shows (each frame of an animation variant); the parent's marker may be any shape, in every sprite the parent shows, and its shape is where the child's point may be: on the point, or anywhere inside a circle, rectangle or polygon (an eye socket for a pupil). `leeway:N` lets the child's point drift up to `N` pixels beyond that (default 0, rigid). `angle:MIN..MAX` limits how far the child turns relative to its parent, in degrees clockwise (y down), between -360 and 360; without it the child turns freely. Leeways are in original-image pixels, like markers, and are scaled into atlas pixels.
 - A part may be attached more than once (a stick held by both hands). Its first `attach` is its parent: the part it hangs from, whose angle its own is measured from. Further `attach` lines are constraints: they keep the part within that marker's shape and leeway too, which may close loops, and an editor (or an engine that wants live physics) honors them while posing. A positioned part has no parent, so all its `attach` lines are constraints; two positioned parts can't be attached, since one of them must be placed by the joint.
-- `pose "NAME"` starts a pose of the current puppet, followed by its `- part "PART" [variant:NAME] [angle:DEGREES] [offset:X,Y] [at:X,Y]` lines. A pose sets only what it names, so poses layer (`walk` + `smile`): parts it doesn't set keep what they had. `variant:` shows one of the part's variants (quote a name with spaces: `variant:"run back"`). `angle:` turns the part from its rest angle, in degrees clockwise: relative to its parent, so children follow, and within its parent joint's `angle:` limits; or around its own pivot for a positioned part. `offset:` moves an attached part's point from the parent marker's `x,y` (the eye in its socket), which engines keep within the marker's shape and leeway. `at:` moves a positioned part. Angles are whole degrees between -360 and 360; offsets and positions are in original-image pixels and are scaled. Pose names must be unique within their puppet. An editor works out the angles from where the user drags the parts, so playing a pose needs no solving.
-- `sequence "NAME" [fps:N] [loop:MODE]` starts a sequence of poses, followed by its `- pose "POSE" [in:FRAMES] [hold:FRAMES] [ease:linear|step] [step:PARTS] [linear:PARTS]` steps. Timing is in frames, as stop-motion animators count them: at `fps` (default 8, up to 100, like animations; a higher value is an error), each step reaches its pose in `in` frames and holds it `hold` frames (both default 0, up to 100000; a step must last at least one frame). `ease:linear` (the default) tweens angles, offsets and positions over `in`; `ease:step` keeps the old pose through `in`, then snaps, for pure stop motion. `step:` and `linear:` override that for some of the parts the step's pose sets, as a comma-separated list (`- pose "hello" in:6 step:"eyes",mouth` tweens the arm while the eyes and mouth snap; `- pose "rest" in:4 ease:step linear:arm` snaps all but the arm); an unknown part is an error, and a part the pose doesn't set, or one listed the way the whole step already eases, is reported and ignored. Variants never morph: they snap when the step's pose arrives, at the end of `in`. `loop` takes the animation loop modes (`loop`, the default, `once`, `pingpong`, `once-pingpong`). Only what a step's pose sets changes, so sequences on different parts combine (`walk` on the body, `talk` on the mouth); when two set the same part, the one applied later wins. When looping, the first step tweens from where the last left off; `pingpong` plays the steps back in reverse. A sequence at the fps of an animation variant (both 12 from Krita) stays in step with it frame by frame. Sequence names must be unique within their puppet.
+- `pose "NAME"` starts a pose of the current puppet, followed by its `- part "PART" [variant:NAME] [angle:DEGREES] [offset:X,Y] [at:X,Y] [scale:X[,Y]] [opacity:A] [tint:#RRGGBB]` lines. A pose sets only what it names, so poses layer (`walk` + `smile`): parts it doesn't set keep what they had. `variant:` shows one of the part's variants (quote a name with spaces: `variant:"run back"`). `angle:` turns the part from its rest angle, in degrees clockwise: relative to its parent, so children follow, and within its parent joint's `angle:` limits; or around its own pivot for a positioned part. `offset:` moves an attached part's point from the parent marker's `x,y` (the eye in its socket), which engines keep within the marker's shape and leeway. `at:` moves a positioned part. `scale:` stretches the part's sprite along its own axes, around its pivot (a positioned part) or its attaching point, before it turns: one factor for both axes (`scale:1.2`) or one per axis (`scale:1.2,0.8` for squash and stretch), between -16 and 16, where a negative factor flips it. `opacity:` fades it, from 0 (invisible) to 1. `tint:#RRGGBB` multiplies its colors (`#ffffff`, white, leaves them as they are; `#ff8080` reddens it). Scale, opacity and tint are the part's own: its children aren't scaled, faded or tinted, though a parent's scale moves its markers, and so where its children attach. Angles are whole degrees between -360 and 360; offsets and positions are in original-image pixels and are scaled. Pose names must be unique within their puppet. An editor works out the angles from where the user drags the parts, so playing a pose needs no solving.
+- `sequence "NAME" [fps:N] [loop:MODE]` starts a sequence of poses, followed by its `- pose "POSE" [in:FRAMES] [hold:FRAMES] [ease:linear|step] [step:PARTS] [linear:PARTS]` steps. Timing is in frames, as stop-motion animators count them: at `fps` (default 8, up to 100, like animations; a higher value is an error), each step reaches its pose in `in` frames and holds it `hold` frames (both default 0, up to 100000; a step must last at least one frame). `ease:linear` (the default) tweens angles, offsets, positions, scales, opacities and tints (each channel) over `in`; `ease:step` keeps the old pose through `in`, then snaps, for pure stop motion. `step:` and `linear:` override that for some of the parts the step's pose sets, as a comma-separated list (`- pose "hello" in:6 step:"eyes",mouth` tweens the arm while the eyes and mouth snap; `- pose "rest" in:4 ease:step linear:arm` snaps all but the arm); an unknown part is an error, and a part the pose doesn't set, or one listed the way the whole step already eases, is reported and ignored. Variants never morph: they snap when the step's pose arrives, at the end of `in`. `loop` takes the animation loop modes (`loop`, the default, `once`, `pingpong`, `once-pingpong`). Only what a step's pose sets changes, so sequences on different parts combine (`walk` on the body, `talk` on the mouth); when two set the same part, the one applied later wins. When looping, the first step tweens from where the last left off; `pingpong` plays the steps back in reverse. A sequence at the fps of an animation variant (both 12 from Krita) stays in step with it frame by frame. Sequence names must be unique within their puppet.
 
 A sprite that lacks a joint's marker, a part with no variants, a puppet with no parts, a pose that sets no part, a pose line that sets nothing, a sequence with no steps and a step that lasts no frame are reported. An attach line naming an unknown part, attaching a part to itself or two positioned parts, or closing a cycle of parents is an error, and so are a repeated puppet, part, variant or pose name, a part with neither a position nor a parent, and a pose that sets an unknown part or variant, sets a part twice, turns a part beyond its joint's limits, moves an attached part with `at:` or offsets a positioned one, and a sequence that plays an unknown pose or repeats a sequence name.
 
@@ -943,29 +944,30 @@ part "fly" at:24,-70
 pose "angry"
 - part "mouth" variant:"angry"
 - part "nose" angle:-8
+- part "face" tint:#ffb0b0
 
 pose "look left"
 - part "pupil" offset:-2,0
-- part "fly" at:12,-75
+- part "fly" at:12,-75 scale:-1,1 opacity:0.6
 
 sequence "fuss" fps:12 loop:pingpong
 - pose "angry" in:3 hold:2
 - pose "look left" in:2 hold:4 ease:step linear:"pupil"
 ```
 
-Here the face is placed 40 pixels above the puppet's pivot, and the fly is free. In `fuss`, the fly jumps to its place in `look left` while the pupil slides there over two frames. `face.png` has `nose`, `mouth` and `eye` point markers, `eye.png` a `socket` circle, and every other sprite (each frame of `talk` too) a `pivot` point. For now, the `raw` transform writes puppets; custom transforms get them in `sprat.puppets`.
+Here the face is placed 40 pixels above the puppet's pivot, and the fly is free. `angry` turns the face red, and in `look left` the fly faces the other way, half see-through. In `fuss`, the fly jumps to its place in `look left` while the pupil slides there over two frames. `face.png` has `nose`, `mouth` and `eye` point markers, `eye.png` a `socket` circle, and every other sprite (each frame of `talk` too) a `pivot` point. For now, the `raw` transform writes puppets; custom transforms get them in `sprat.puppets`.
 
 #### Playing a puppet
 
 `spratconvert` only describes puppets; this is what the data means for an engine (or [sprat-lib](https://github.com/pedroac/sprat-lib) user) that draws them:
 
-1. **Rest pose.** Every part shows its first variant, with angle 0 and offset 0, and every positioned part sits at its `at:`. An animation variant plays on its own clock at its own fps.
+1. **Rest pose.** Every part shows its first variant, with angle 0, offset 0, scale 1, opacity 1 and a white tint, and every positioned part sits at its `at:`. An animation variant plays on its own clock at its own fps.
 2. **Poses.** Apply poses in order, each over the result of the ones before: a pose changes only what it sets. A sequence does the same over time: at its fps, each step tweens the values its pose sets from where they are to the pose's over `in` frames (or keeps them and snaps at the end, with `ease:step`; a part the step lists in `part_eases` eases its own way), switches variants when the pose arrives, then holds for `hold` frames.
 3. **Placement.** Each part's transform maps the original-image coordinates of the sprite it shows (the space markers and pivots are in, trim included) into the puppet's space:
-   - A positioned part's sprite pivot goes at its position, and the part turns `angle` degrees around it.
-   - An attached part's child marker goes where its parent's marker (in the sprite the parent shows) lands under the parent's transform, moved by `offset` turned with the parent; the part turns by its parent's total turn plus its own `angle`, around that point.
+   - A positioned part's sprite pivot goes at its position; the part is scaled by its `scale_x`, `scale_y` around it, then turns `angle` degrees around it.
+   - An attached part's child marker goes where its parent's marker (in the sprite the parent shows) lands under the parent's transform, moved by `offset` turned with the parent; the part is scaled by its own `scale_x`, `scale_y` around that point, then turns by its parent's total turn plus its own `angle`. Only angles add up down the rig: a parent's scale moves its markers, but doesn't scale its children (so no part is ever skewed).
    - Place a part's parent before the part itself; a parent may come later in draw order.
-4. **Drawing.** Draw the parts in file order with their transforms, the puppet's origin (its pivot) at the puppet's place in the world. Constraints, marker shapes and leeways aren't needed to draw: an editor, or an engine's physics step, keeps poses within them.
+4. **Drawing.** Draw the parts in file order with their transforms, each multiplied by its tint and opacity, the puppet's origin (its pivot) at the puppet's place in the world. Constraints, marker shapes and leeways aren't needed to draw: an editor, or an engine's physics step, keeps poses within them.
 
 Without `--markers`, `--animations` or `--puppets`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers, animations and puppets. There they share the layout's own `root` line, so leave out theirs: a second `root` line is an error. Layout files may hold `#` comment lines.
 

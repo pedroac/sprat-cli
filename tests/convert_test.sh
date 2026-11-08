@@ -308,7 +308,7 @@ ANIMS
 # parts, variants, joints, poses, settings, sequences, steps or part eases, and 104 string bytes: spawn 5, sprites 1+14 + 1+14 + 5+18 +
 # 1+14, markers 3+4+4+4+5, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
-sprat-raw 9
+sprat-raw 10
 sheet 1 0 0 1 4 2 0 1 6 3 2 0 0 0 0 0 0 0 0 104
 atlas 64 32 0:
 marker 0 1 1 0 0 0 0 5:spawn
@@ -335,7 +335,8 @@ fi
 # the arm's second attach, and the positioned fly's, are constraints. Joint markers are
 # checked in every sprite: a has no pivot, the deduplicated d has no markers, b has no "hit"
 # or "zone", and the fly's constraint needs a "zone" in the arm's frames. A pose sets parts in
-# part order, and positions and offsets are scaled.
+# part order, and positions and offsets are scaled; scales, opacities and tints aren't. A
+# setting without its flag has its rest value: scale 1, opacity 1, a white tint.
 raw_puppets_file="$tmp_dir/raw.puppets.txt"
 cat > "$raw_puppets_file" <<'PUPPETS'
 root "./frames"
@@ -351,10 +352,10 @@ attach "arm":"pivot" to "body":zone leeway:2 angle:-30..45
 attach "arm":"hit" to "body":"zone" leeway:5
 attach "fly":hit to "arm":zone
 pose "wave"
-- part "arm" angle:-30 variant:"swing" offset:1,-2
-- part body variant:body-2
+- part "arm" angle:-30 variant:"swing" offset:1,-2 scale:1.5,-0.25
+- part body variant:body-2 tint:#FF8000
 pose "buzz"
-- part "fly" at:-4,-28 angle:90
+- part "fly" at:-4,-28 angle:90 opacity:0.5
 sequence "dance" fps:12 loop:once
 - pose "wave" in:2 hold:3 step:"arm"
 - pose buzz hold:1 ease:step linear:fly
@@ -378,10 +379,10 @@ joint 1 0 0 2 1 -30 45 5:pivot 4:zone
 joint 1 0 1 5 0 0 0 3:hit 4:zone
 joint 2 1 1 0 0 0 0 3:hit 4:zone
 pose 2 4:wave
-set 0 1 0 0 0 0 0 0 0 0
-set 1 0 1 -30 1 1 -2 0 0 0
+set 0 1 0 0 0 0 0 0 0 0 0 1 1 0 1 1 255 128 0
+set 1 0 1 -30 1 1 -2 0 0 0 1 1.5 -0.25 0 1 0 255 255 255
 pose 1 4:buzz
-set 2 -1 1 90 0 0 0 1 -4 -28
+set 2 -1 1 90 0 0 0 1 -4 -28 0 1 1 1 0.5 0 255 255 255
 sequence 12 1 2 5:dance
 step 0 2 3 0 1 1 1
 step 1 0 1 1 1 2 0
@@ -424,6 +425,11 @@ wave, buzz = p[0]["poses"]
 assert [(s["part_name"], s["variant_name"], s["angle"], s["offset_x"], s["offset_y"]) for s in wave["parts"]] \
     == [("body", "body-2", 0, 0, 0), ("arm", "swing", -30, 1, -1)], wave
 assert (buzz["parts"][0]["x"], buzz["parts"][0]["y"]) == (-2, -14), buzz
+assert [(s["has_scale"], s["scale_x"], s["scale_y"]) for s in wave["parts"]] \
+    == [(False, 1, 1), (True, 1.5, -0.25)], wave
+assert [(s["has_tint"], s["tint_r"], s["tint_g"], s["tint_b"]) for s in wave["parts"]] \
+    == [(True, 255, 128, 0), (False, 255, 255, 255)], wave
+assert (buzz["parts"][0]["has_opacity"], buzz["parts"][0]["opacity"]) == (True, 0.5), buzz
 dance = p[0]["sequences"][0]
 assert (dance["name"], dance["fps"], dance["loop"], dance["frame_count"], dance["duration"]) \
     == ("dance", 12, "once", 6, 0.5), dance
@@ -518,6 +524,19 @@ grep -qF 'Step line "- pose q in:1 step:x,"x" linear:x ease:linear" eases part "
 grep -qF 'Step line "- pose q in:1 ease:step step:x" eases part "x" step, as the whole step does; it is ignored' "$tmp_dir/sequence.err"
 grep -qF 'Puppet "p" sequence "s" step 3 eases part "w", which pose "q" doesn'"'"'t set; it is ignored' "$tmp_dir/sequence.err"
 grep -qF 'sequence 8 0 0 5:empty' "$tmp_dir/sequence.sprat"
+# A uniform scale sets both axes; values out of range or malformed are reported and ignored,
+# and a pose line left with nothing to set is ignored too.
+printf '%s\n' 'puppet "p"' 'part "x" at:0,0' 'pose "q"' '- part x scale:-2 opacity:0 tint:#00ff7F' \
+  'pose "r"' '- part x scale:17 opacity:1.5 tint:#-1ffff' '- part x scale:1,a tint:fff' \
+  > "$tmp_dir/look.puppets.txt"
+"$convert_bin" --transform raw --puppets "$(fix_path "$tmp_dir/look.puppets.txt")" < "$raw_layout_file" \
+  > "$tmp_dir/look.sprat" 2> "$tmp_dir/look.err"
+grep -qxF 'set 0 -1 0 0 0 0 0 0 0 0 1 -2 -2 1 0 1 0 255 127' "$tmp_dir/look.sprat"
+grep -qF 'Pose line "- part x scale:17 opacity:1.5 tint:#-1ffff" scale "17" is not a factor, or X,Y factors, between -16 and 16; it is ignored' "$tmp_dir/look.err"
+grep -qF 'opacity "1.5" is not between 0 and 1; it is ignored' "$tmp_dir/look.err"
+grep -qF 'tint "#-1ffff" is not #RRGGBB; it is ignored' "$tmp_dir/look.err"
+grep -qF 'scale "1,a" is not a factor' "$tmp_dir/look.err"
+grep -qF 'Pose line "- part x scale:1,a tint:fff" sets nothing; it is ignored' "$tmp_dir/look.err"
 grep -qF 'fps "0" is not a whole number of frames per second, 1 or more' "$tmp_dir/sequence.err"
 grep -qF 'loop "twice" is not one of loop, once, pingpong, once-pingpong' "$tmp_dir/sequence.err"
 grep -qF 'has an unknown or repeated setting "speed:2"' "$tmp_dir/sequence.err"

@@ -1,7 +1,7 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 9
+//   sprat-raw 10
 //   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS
 //         VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS PART_EASES
 //         STRING_BYTES
@@ -17,7 +17,8 @@
 //   joint CHILD PARENT CONSTRAINT LEEWAY HAS_ANGLE ANGLE_MIN ANGLE_MAX CHILD_MARKER
 //         PARENT_MARKER                                           (JOINTS lines after the parts)
 //   pose SETTINGS NAME                                            (POSES lines after the joints)
-//   set PART VARIANT HAS_ANGLE ANGLE HAS_OFFSET OFFSET_X OFFSET_Y HAS_POSITION X Y
+//   set PART VARIANT HAS_ANGLE ANGLE HAS_OFFSET OFFSET_X OFFSET_Y HAS_POSITION X Y HAS_SCALE
+//       SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT TINT_R TINT_G TINT_B
 //                                                                 (SETTINGS lines after a pose)
 //   sequence FPS LOOP STEPS NAME                                  (SEQUENCES lines after the poses)
 //   step POSE IN HOLD EASE PART_EASES [PART EASE]...              (STEPS lines after a sequence)
@@ -52,8 +53,14 @@
 // from its rest angle: relative to its parent, within its parent joint's limits, or around
 // its own pivot for a positioned part. With HAS_OFFSET, OFFSET_X OFFSET_Y (atlas pixels)
 // moves an attached part's point from the parent marker's x,y, within the marker's shape
-// and the leeway. With HAS_POSITION, X Y moves a positioned part. Each value is 0 without
-// its flag.
+// and the leeway. With HAS_POSITION, X Y moves a positioned part. With HAS_SCALE, SCALE_X
+// SCALE_Y (decimal factors, -16..16, negative flips) stretch the part's sprite along its
+// own axes, around its pivot or attaching point, before it turns. With HAS_OPACITY, OPACITY
+// (decimal, 0..1) fades the part; with HAS_TINT, TINT_R TINT_G TINT_B (0..255) multiply its
+// colors. Scale, opacity and tint are the part's own: its children aren't scaled, faded or
+// tinted, though a parent's scale moves its markers, and so where its children attach.
+// Without their flags, angles, offsets and positions are 0, scales and opacity 1 and the
+// tint 255 255 255 (the rest pose).
 // A sequence plays its steps in order at FPS (1..100) frames per second, LOOP as on an anim
 // line. A step reaches pose POSE (an index into the puppet's poses) in IN frames, then
 // holds it HOLD frames; IN + HOLD is at least 1, and each at most 100000. EASE is how the
@@ -62,6 +69,8 @@
 // part order) that eases the other way, EASE as above. Variants always snap when the pose
 // arrives, at the end of IN. Only what the pose sets changes, so sequences on different
 // parts combine.
+// Version 10 added each setting's HAS_SCALE SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT
+// TINT_R TINT_G TINT_B.
 // Version 9 added each step's PART_EASES and their total on the sheet line.
 // Version 8 added SEQUENCES and STEPS and the sequence records.
 // Version 7 removed the puppet's REFERENCE and added POSES and SETTINGS, each joint's
@@ -146,7 +155,9 @@ local joint_line(jt) =
         jt.angle_min, jt.angle_max, str(jt.child_marker), str(jt.parent_marker)]);
 local set_line(st) =
   line(["set", st.part, st.variant, bool(st.has_angle), st.angle, bool(st.has_offset),
-        st.offset_x, st.offset_y, bool(st.has_position), st.x, st.y]);
+        st.offset_x, st.offset_y, bool(st.has_position), st.x, st.y, bool(st.has_scale),
+        lib.format_double(st.scale_x), lib.format_double(st.scale_y), bool(st.has_opacity),
+        lib.format_double(st.opacity), bool(st.has_tint), st.tint_r, st.tint_g, st.tint_b]);
 local ease_values = { linear: 0, step: 1 };
 local step_line(st) =
   line(["step", st.pose, st["in"], st.hold, ease_values[st.ease], std.length(st.part_eases)]
@@ -190,7 +201,7 @@ local string_bytes =
   + sum([str_bytes(sq.name) for sq in sequences]);
 
 local header =
-  "sprat-raw 9\n"
+  "sprat-raw 10\n"
   + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
           std.length(puppets), std.length(global_markers), std.length(all_markers),
