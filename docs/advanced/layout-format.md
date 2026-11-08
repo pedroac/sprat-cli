@@ -1,6 +1,10 @@
-# Layout format
+# Layout Format (Technical)
 
-`spratlayout` writes, and the other tools read, this plain-text layout.
+This is the complete technical specification of the plain-text layout format that `spratlayout` writes and other tools read.
+
+For common use cases and simple examples, see [Markers & Animations guide](../guides/markers-animations.md).
+
+## Format specification
 
 A layout `sprite` line is `sprite "<path>" rect:<x>,<y>,<w>,<h>` followed by optional tokens, in any order and each at most once:
 
@@ -55,4 +59,4 @@ Advanced users can manually edit `layout.txt` to apply per-sprite effects.
 Example layout line:
 `sprite "./frames/robot.png" rect:0,0,128,128 dither colors:16`
 
-[Back to the README](../README.md)
+[Back to README](../../README.md)

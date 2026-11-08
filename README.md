@@ -64,14 +64,24 @@ sheet.png ──► spratframes ──► frames.txt ──► spratunpack ─�
 
 ## Documentation
 
-- [spratlayout](docs/spratlayout.md): packing modes (with examples), profiles, options, caching, deduplication, multipacking, rotation
-- [spratpack](docs/spratpack.md): Zopfli, dilation, DXT compression, output scale, variant atlases
-- [spratconvert](docs/spratconvert.md): built-in formats, pivots, custom Jsonnet transforms
-- [Markers, animations and puppets](docs/data-files.md)
-- [Layout format](docs/layout-format.md), including nine-slice and dithering
-- [Raw format](docs/raw-format.md), for loading metadata from C
-- [Extracting sprites](docs/extracting.md): spratframes and spratunpack
-- [References](docs/references.md): free sprites and texture optimization reading
+**Start with the guides** for practical examples and common workflows:
+- **[Guides](docs/guides/)** — How to use each tool
+  - [spratlayout](docs/guides/spratlayout.md): packing modes, profiles, workflows
+  - [spratpack](docs/guides/spratpack.md): basic options, debugging, variants
+  - [spratconvert](docs/guides/spratconvert.md): engine formats, auto-detection
+  - [Extracting sprites](docs/guides/extracting.md): spratframes and spratunpack
+  - [Markers & Animations](docs/guides/markers-animations.md): pivots, hitboxes, sequences
+
+**Need all the options?** See the [Reference](docs/reference/):
+- [spratlayout reference](docs/reference/spratlayout.md): all options, algorithms, caching
+- [spratpack reference](docs/reference/spratpack.md): compression, GPU formats, scaling
+- [spratconvert reference](docs/reference/spratconvert.md): formats, custom transforms, schema
+
+**Technical details** in [Advanced](docs/advanced/):
+- [Layout format](docs/advanced/layout-format.md): nine-slice, dithering, format spec
+- [Raw format](docs/advanced/raw-format.md): C/C++ loading
+- [Data files](docs/advanced/data-files.md): complete marker/animation/puppet DSL
+- [References](docs/references.md): free sprites and optimization reading
 
 ## Getting help
 

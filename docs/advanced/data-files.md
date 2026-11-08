@@ -1,6 +1,8 @@
-# Markers, animations and puppets
+# Markers, Animations & Puppets (Technical)
 
-`spratconvert --markers`, `--animations` and `--puppets` read these plain-text files.
+Complete technical specification for the data file formats that `spratconvert --markers`, `--animations` and `--puppets` read.
+
+For common use cases and simple examples, see [Markers & Animations guide](../guides/markers-animations.md).
 
 ## Markers
 
@@ -126,4 +128,4 @@ Without `--markers`, `--animations` or `--puppets`, `spratconvert` reads them fr
 
 Names in these files (sprites, markers, animations, puppets, parts, variants) may not be empty: `""` is reported like a missing name, since the `raw` format writes an empty string as "none".
 
-[Back to the README](../README.md)
+[Back to README](../../README.md)

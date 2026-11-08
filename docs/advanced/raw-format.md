@@ -1,6 +1,8 @@
-# Raw format
+# Raw Format (Technical)
 
 The `raw` transform of `spratconvert` writes the layout's metadata for loading from C.
+
+This is the complete technical specification. For common use cases, see [spratconvert guide](../guides/spratconvert.md).
 
 `raw` writes a `.sprat` file that a C program can read with a few lines of code: one record
 per line, every value a space-separated token, and every count written before the records
@@ -66,4 +68,4 @@ Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the lim
 extrude, or a sprite's size with its trim restored exceeds it after scaling, and
 `spratconvert` rejects markers and puppet leeways whose scaled values do.
 
-[Back to the README](../README.md)
+[Back to README](../../README.md)
