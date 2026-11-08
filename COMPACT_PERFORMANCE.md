@@ -1,53 +1,40 @@
-● Based on the analysis, here's what the situation looks like and where there's room to improve:                          
-                                                                                                                          
-  Already parallelized:                                                                                                   
-  The guided and shelf passes both fan out across threads, dividing width candidates into ranges. So the outer search loop
-   is already threaded.                                                                                                   
-                                                                                                                          
-  The real bottlenecks:
-                                                                                                                          
-  1. Static range division → load imbalance                                                                               
-  The current pattern divides [0, width_candidates.size()) evenly across threads. But different widths take different
-  amounts of time (a narrow atlas packs quickly; a near-square one generates many free-rect fragments and runs longer). A
-  slow thread stalls the join. Replacing the static split with an atomic work index (each thread atomically claims the
-  next unclaimed width) would eliminate this with minimal code change.
+# Compact packing performance
 
-  2. Two separate thread fan-out/join cycles
-  Guided and shelf are sequentially phased — spawn threads, join, spawn again, join. Merging them into one pass (each
-  worker does both MaxRects and shelf for its assigned widths) halves the thread lifecycle overhead and improves cache
-  locality since the same width's sprite list is touched once.
+Notes on the compact-mode search in `spratlayout`, for changes that touch packing speed.
+This file describes the current design; measure before and after with
+`scripts/benchmark-trim.sh` rather than relying on estimates.
 
-  3. O(n²) free-rect pruning inside pack_compact_maxrects
-  Every time a sprite is placed, prune_free_rects does an O(n²) containment scan to discard dominated rectangles. For
-  large sprite sets the free-rect list can grow significantly. This is the core per-packing cost and runs entirely on a
-  single thread — no parallelism is possible inside it without a fundamentally different data structure (e.g. a spatial
-  index). This is the hardest win but potentially the biggest one.
+## Current search
 
-  4. No pruning across (sort × heuristic) combos within a width
-  For a given width, all 12 combinations (4 sorts × 3 heuristics) are always attempted. If the first combo already
-  produces a result that can't beat the global best, the remaining 11 could be skipped. The candidate-level pruning exists
-   before entering the width, but not within it.
+`search_compact_layout` (`src/commands/spratlayout/search.cpp`) does two passes:
 
-  5. Candidate count
-  ~20–60 candidates × 16 packing attempts each. The offset step grid ({0, ±1, ±2, ±4, ±8, ±12, ±16, ±20} × 4 anchors) is
-  generous. With a warm seed cache the search could be narrowed to a smaller window around the known-good width rather
-  than the full grid.
+1. **Seed pass** — tries every sort mode and MaxRects heuristic at a seed width.
+2. **Guided width search** — builds a small set of width candidates from the seed,
+   the square-root target, the limits and a fixed offset grid, then tries the guided
+   sort orders and heuristics at each width.
 
-  Summary by effort vs. impact:
+The guided pass runs on `--threads` workers. Workers claim the next width with an atomic
+index (`next_width_index`), so a slow width does not stall a statically assigned range.
+Each worker also tries the shelf packer for the same width, so MaxRects and shelf share
+one thread lifecycle. A cheap optimistic bound (`width_could_beat`) skips widths that
+cannot beat the best layout found so far.
 
-  ┌────────────────────────────────────────────────────┬────────┬───────────────────────────────────────┐
-  │                       Change                       │ Effort │                Impact                 │
-  ├────────────────────────────────────────────────────┼────────┼───────────────────────────────────────┤
-  │ Atomic work index (dynamic scheduling)             │ Low    │ Medium — eliminates load imbalance    │
-  ├────────────────────────────────────────────────────┼────────┼───────────────────────────────────────┤
-  │ Merge guided + shelf into one pass                 │ Low    │ Small — saves two thread cycles       │
-  ├────────────────────────────────────────────────────┼────────┼───────────────────────────────────────┤
-  │ Per-width early exit across (sort × heuristic)     │ Medium │ Small-medium                          │
-  ├────────────────────────────────────────────────────┼────────┼───────────────────────────────────────┤
-  │ Narrower candidate window when seed is warm        │ Medium │ Medium — fewer packing runs           │
-  ├────────────────────────────────────────────────────┼────────┼───────────────────────────────────────┤
-  │ Replace O(n²) free-rect pruning with spatial index │ High   │ Potentially large for big sprite sets │
-  └────────────────────────────────────────────────────┴────────┴───────────────────────────────────────┘
+## Remaining costs
 
-  The atomic work index is the most straightforward improvement given the existing code structure — want me to implement
-  it?
+- `pack_compact_maxrects` prunes dominated free rectangles with an O(n²) containment
+  scan after each placement. This is the main per-packing cost and is single-threaded.
+- For each width the guided pass tries four sort orders and three heuristics, plus shelf.
+  Early exit after a candidate can no longer beat the best helps, but the first
+  combinations are still all attempted.
+- The width candidate set is deliberately small (four anchors times the offset grid),
+  not an exhaustive scan. Widening it increases quality at a roughly linear cost.
+
+## Measuring
+
+```sh
+scripts/benchmark-trim.sh
+```
+
+Record wall time, peak memory and the resulting atlas dimensions. A change that improves
+packing quality but makes the default path noticeably slower should be exposed as an
+option, not made the default.

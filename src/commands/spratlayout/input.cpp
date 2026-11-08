@@ -17,6 +17,10 @@
 #include <string_view>
 #include <unordered_set>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 #include "core/cli_parse.h"
 #include "core/i18n.h"
 
@@ -31,6 +35,9 @@ namespace {
 constexpr uintmax_t k_max_file_size = 1000000000; // 1GB
 constexpr size_t k_tar_read_buffer_size = 10240;
 constexpr size_t k_max_extension_len = 10;
+// Extraction limits: an archive is untrusted input, so cap how much it can write.
+constexpr size_t k_max_archive_entries = 100000;
+constexpr uintmax_t k_max_extracted_bytes = 10ULL * 1024 * 1024 * 1024; // 10 GiB
 
 std::string normalize_path_key(const fs::path& path) {
     std::error_code ec;
@@ -159,10 +166,18 @@ bool extract_archive(struct archive* a, const fs::path& output_dir) {
         return false;
     }
 
-    archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS);
+    // SECURE_* stops an entry from being written through a symlink or via ".."/absolute
+    // paths. The code below also skips symlinks and hardlinks, so an archive can only
+    // create regular files below the private extraction directory.
+    archive_write_disk_set_options(ext,
+        ARCHIVE_EXTRACT_TIME | ARCHIVE_EXTRACT_PERM | ARCHIVE_EXTRACT_ACL | ARCHIVE_EXTRACT_FFLAGS
+        | ARCHIVE_EXTRACT_SECURE_SYMLINKS | ARCHIVE_EXTRACT_SECURE_NODOTDOT);
 
     bool had_error = false;
+    bool stop_extraction = false;
     struct archive_entry* entry = nullptr;
+    size_t entry_count = 0;
+    uintmax_t extracted_bytes = 0;
 
     while (true) {
         la_ssize_t r = archive_read_next_header(a, &entry);
@@ -175,8 +190,16 @@ bool extract_archive(struct archive* a, const fs::path& output_dir) {
             break;
         }
 
-        // Skip directories
-        if (archive_entry_filetype(entry) == AE_IFDIR) {
+        if (++entry_count > k_max_archive_entries) {
+            std::cerr << tr("Error: Archive has more than ") << k_max_archive_entries
+                      << tr(" entries; refusing to extract it") << '\n';
+            had_error = true;
+            break;
+        }
+
+        // Only regular files are extracted. Directories are recreated as parents, and
+        // symlinks/hardlinks/special files could redirect later writes outside output_dir.
+        if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_hardlink(entry) != nullptr) {
             continue;
         }
 
@@ -207,10 +230,20 @@ bool extract_archive(struct archive* a, const fs::path& output_dir) {
             bool block_error = false;
 
             while (archive_read_data_block(a, &buff, &size, &offset) == ARCHIVE_OK) {
+                if (size > k_max_extracted_bytes - extracted_bytes) {
+                    std::cerr << tr("Error: Archive expands to more than ") << k_max_extracted_bytes
+                              << tr(" bytes; refusing to extract it") << '\n';
+                    had_error = true;
+                    block_error = true;
+                    stop_extraction = true;
+                    break;
+                }
+                extracted_bytes += size;
                 if (archive_write_data_block(ext, buff, size, offset) < ARCHIVE_OK) {
                     std::cerr << tr("Error: Failed to write archive data: ") << archive_error_string(ext) << '\n';
                     had_error = true;
                     block_error = true;
+                    stop_extraction = true;
                     break;
                 }
             }
@@ -219,6 +252,9 @@ bool extract_archive(struct archive* a, const fs::path& output_dir) {
                 std::cerr << tr("Error: Failed to finish archive entry: ") << archive_error_string(ext) << '\n';
                 had_error = true;
             }
+        }
+        if (stop_extraction) {
+            break;
         }
     }
 
@@ -299,6 +335,7 @@ bool create_extraction_dir(const std::string& prefix, fs::path& out) {
         std::array<char, 17> hex{};
         std::snprintf(hex.data(), hex.size(), "%016llx", static_cast<unsigned long long>(id));
         fs::path dir = base / (prefix + hex.data());
+#ifdef _WIN32
         // create_directory returns false, without an error, if the folder already exists.
         if (fs::create_directory(dir, ec)) {
             fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace, ec);
@@ -308,6 +345,17 @@ bool create_extraction_dir(const std::string& prefix, fs::path& out) {
         if (ec) {
             return false;
         }
+#else
+        // mkdir applies the private mode atomically, so there is no window where the
+        // directory exists with the process umask's permissions.
+        if (::mkdir(dir.c_str(), S_IRWXU) == 0) {
+            out = std::move(dir);
+            return true;
+        }
+        if (errno != EEXIST) {
+            return false;
+        }
+#endif
     }
     return false;
 }
@@ -324,14 +372,26 @@ public:
     }
 
     bool contains(const fs::path& path, const fs::path* root) const {
-        if (paths_.contains(normalize_path_key(path))) {
-            return true;
-        }
-        if (root != nullptr) {
-            std::error_code ec;
-            fs::path relative = fs::relative(path, *root, ec);
-            if (!ec && paths_.contains(relative.lexically_normal().string())) {
+        const auto matches = [&](const fs::path& candidate) {
+            if (paths_.contains(normalize_path_key(candidate))) {
                 return true;
+            }
+            if (root != nullptr) {
+                std::error_code ec;
+                const fs::path relative = fs::relative(candidate, *root, ec);
+                if (!ec && paths_.contains(relative.lexically_normal().string())) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        // Excluding a folder excludes everything below it.
+        for (fs::path candidate = path; !candidate.empty(); candidate = candidate.parent_path()) {
+            if (matches(candidate)) {
+                return true;
+            }
+            if (candidate == candidate.parent_path()) {
+                break;
             }
         }
         return false;

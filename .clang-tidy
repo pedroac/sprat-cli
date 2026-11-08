@@ -18,9 +18,8 @@ Checks: >
   -cppcoreguidelines-pro-type-vararg,
   -modernize-use-trailing-return-type,
   -readability-identifier-length,
-  -readability-math-missing-parentheses
-  -c-cpp-flylint,
-  -tidycppcoreguidelines-init-variables
+  -readability-math-missing-parentheses,
+  -cppcoreguidelines-init-variables
 
 # Only show warnings for files in the src directory (ignores stb)
 HeaderFilterRegex: 'src/.*'

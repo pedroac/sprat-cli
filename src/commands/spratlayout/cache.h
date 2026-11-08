@@ -48,6 +48,7 @@ struct LayoutCacheKey {
     double scale = 1.0;
     bool trim_transparent = false;
     bool allow_rotate = false;
+    bool incremental = false;
     bool preserve_source_order = false;
     bool multipack = false;
     bool rotate_ccw = false;

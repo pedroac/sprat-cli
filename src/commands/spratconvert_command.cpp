@@ -40,8 +40,10 @@ namespace fs = std::filesystem;
 #include "core/file_io.h"
 #include "core/i18n.h"
 #include "core/output_pattern.h"
+#include "core/output_path.h"
 #include "core/fnv1a.h"
 #include <libjsonnet++.h>
+#include <json.hpp>
 
 namespace {
 
@@ -2086,9 +2088,6 @@ fs::path find_transforms_dir() {
     if (std::optional<fs::path> user_dir = resolve_user_transforms_dir()) {
         candidates.push_back(*user_dir);
     }
-#ifdef SPRAT_SOURCE_DIR
-    candidates.push_back(fs::path(SPRAT_SOURCE_DIR) / "transforms");
-#endif
     candidates.emplace_back(SPRAT_GLOBAL_TRANSFORMS_DIR);
 
     for (const auto& candidate : candidates) {
@@ -2683,235 +2682,112 @@ struct TransformResult {
     std::string filename;                       // optional --output-dir name for content
     struct FileEntry { std::string filename; std::string content; };
     std::vector<FileEntry> files;              // multi-file mode
+    bool files_mode = false;                    // the transform returned a "files" array
 };
 
-// Unescape a JSON string (assumes well-formed JSON produced by Jsonnet).
-static std::string json_unescape_string(const std::string& src, size_t start, size_t end) {
-    std::string out;
-    out.reserve(end - start);
-    for (size_t i = start; i < end; ) {
-        if (src[i] == '\\' && i + 1 < end) {
-            char next = src[i + 1];
-            switch (next) {
-                case '"':  out += '"';  i += 2; break;
-                case '\\': out += '\\'; i += 2; break;
-                case '/':  out += '/';  i += 2; break;
-                case 'b':  out += '\b'; i += 2; break;
-                case 'f':  out += '\f'; i += 2; break;
-                case 'n':  out += '\n'; i += 2; break;
-                case 'r':  out += '\r'; i += 2; break;
-                case 't':  out += '\t'; i += 2; break;
-                case 'u': {
-                    if (i + 5 < end) {
-                        unsigned int cp = 0;
-                        for (int k = 0; k < 4; ++k) {
-                            char h = src[i + 2 + k];
-                            cp <<= 4;
-                            if (h >= '0' && h <= '9') cp |= static_cast<unsigned int>(h - '0');
-                            else if (h >= 'a' && h <= 'f') cp |= static_cast<unsigned int>(h - 'a' + 10);
-                            else if (h >= 'A' && h <= 'F') cp |= static_cast<unsigned int>(h - 'A' + 10);
-                        }
-                        // Encode code point as UTF-8
-                        if (cp < 0x80) {
-                            out += static_cast<char>(cp);
-                        } else if (cp < 0x800) {
-                            out += static_cast<char>(0xC0 | (cp >> 6));
-                            out += static_cast<char>(0x80 | (cp & 0x3F));
-                        } else {
-                            out += static_cast<char>(0xE0 | (cp >> 12));
-                            out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                            out += static_cast<char>(0x80 | (cp & 0x3F));
-                        }
-                        i += 6;
-                    } else {
-                        out += src[i];
-                        ++i;
-                    }
-                    break;
-                }
-                default:
-                    out += src[i];
-                    ++i;
-                    break;
-            }
-        } else {
-            out += src[i];
-            ++i;
-        }
-    }
-    return out;
-}
-
-// Find and extract the raw content of a JSON string value for a given key.
-// Returns true and sets value_start/value_end (the range inside the quotes) if found.
-static bool find_json_string_value(const std::string& json, const std::string& key,
-                                   size_t& value_start, size_t& value_end) {
-    const std::string needle = "\"" + key + "\"";
-    size_t pos = 0;
-    while (pos < json.size()) {
-        size_t kp = json.find(needle, pos);
-        if (kp == std::string::npos) return false;
-        pos = kp + needle.size();
-        // skip whitespace and colon
-        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' ||
-               json[pos] == '\n' || json[pos] == '\r')) ++pos;
-        if (pos >= json.size() || json[pos] != ':') continue;
-        ++pos;
-        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' ||
-               json[pos] == '\n' || json[pos] == '\r')) ++pos;
-        if (pos >= json.size() || json[pos] != '"') continue;
-        ++pos;
-        value_start = pos;
-        // scan to end of string value
-        while (pos < json.size()) {
-            if (json[pos] == '\\') {
-                pos += 2;
-            } else if (json[pos] == '"') {
-                value_end = pos;
-                return true;
-            } else {
-                ++pos;
-            }
-        }
-    }
-    return false;
-}
-
-// Parse the JSON object output from a Jsonnet transform evaluation.
-// Windows opens a device instead of a file for these names, with any extension ("con.anim",
-// "nul.json"), so the output would silently go nowhere.
-static bool is_windows_reserved_name(const std::string& name) {
-    std::string stem = name.substr(0, name.find('.'));
-    std::ranges::transform(stem, stem.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") {
-        return true;
-    }
-    return stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) &&
-           stem[3] >= '1' && stem[3] <= '9';
-}
-
-// A transform-provided filename must name a file directly inside --output-dir: no
-// directories, no parent references and nothing Windows treats as a drive or device path.
-// Rules are the same on every platform, so output written on one works on the others.
-static bool is_safe_output_filename(const std::string& name) {
-    if (name.empty() || name == "." || name == "..") {
-        return false;
-    }
-    // Windows drops a trailing dot or space, so "a." would overwrite "a".
-    if (name.back() == '.' || name.back() == ' ' || is_windows_reserved_name(name)) {
-        return false;
-    }
-    return std::ranges::none_of(name, [](char c) {
-        const auto u = static_cast<unsigned char>(c);
-        return u < 0x20 || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
-               c == '"' || c == '<' || c == '>' || c == '|';
-    });
-}
-
-static std::string unsafe_output_filename_error(const std::string& name) {
-    return std::string(tr("Transform output filename must be a plain file name that is valid on every "
-                          "platform (no folders, no device names such as CON or NUL, no trailing dot "
-                          "or space): ")) + name;
-}
-
+// A transform result is a JSON object. Parse it as JSON rather than searching the text,
+// so a nested field cannot be mistaken for a top-level one.
 bool parse_transform_result(const std::string& json, TransformResult& out, std::string& error) {
-    // Extract name
-    size_t vs = 0, ve = 0;
-    if (find_json_string_value(json, "name", vs, ve)) {
-        out.name = json_unescape_string(json, vs, ve);
+    const nlohmann::json root = nlohmann::json::parse(json, nullptr, false);
+    if (root.is_discarded()) {
+        error = tr("Transform result is not valid JSON");
+        return false;
     }
-    if (find_json_string_value(json, "description", vs, ve)) {
-        out.description = json_unescape_string(json, vs, ve);
+    if (!root.is_object()) {
+        error = tr("Transform result must be a JSON object");
+        return false;
     }
-    if (find_json_string_value(json, "icon", vs, ve)) {
-        out.icon = json_unescape_string(json, vs, ve);
+
+    const auto read_string = [&](const char* key, std::string& value) -> bool {
+        const auto it = root.find(key);
+        if (it == root.end()) {
+            return true;
+        }
+        if (!it->is_string()) {
+            error = std::string(tr("Transform field '")) + key + tr("' must be a string");
+            return false;
+        }
+        value = it->get<std::string>();
+        return true;
+    };
+
+    if (!read_string("name", out.name) || !read_string("description", out.description)
+        || !read_string("icon", out.icon) || !read_string("extension", out.extension)) {
+        return false;
     }
-    if (find_json_string_value(json, "extension", vs, ve)) {
-        out.extension = json_unescape_string(json, vs, ve);
-    } else {
+    if (root.find("extension") == root.end()) {
         error = tr("Transform result missing required field: extension");
         return false;
     }
 
-    // Check for "files" array first — if present we're in multi-file mode and must
-    // NOT try to extract "content" from the top level, because "content" also appears
-    // as a key inside each files[] entry and find_json_string_value would match that.
-    const std::string files_key = "\"files\"";
-    size_t fp = json.find(files_key);
-    if (fp != std::string::npos) {
-        fp += files_key.size();
-        // skip to '['
-        while (fp < json.size() && json[fp] != '[') ++fp;
-        if (fp >= json.size()) {
-            error = tr("Malformed files array in transform result");
+    const auto check_filename = [&](const std::string& name) -> bool {
+        if (sprat::core::is_safe_output_filename(name)) {
+            return true;
+        }
+        error = std::string(tr("Transform output filename must be a plain file name that is valid on every "
+                               "platform (no folders, no device names such as CON or NUL, no trailing dot "
+                               "or space): ")) + name;
+        return false;
+    };
+
+    const auto files_it = root.find("files");
+    if (files_it != root.end()) {
+        out.files_mode = true;
+        if (!files_it->is_array()) {
+            error = tr("Transform field 'files' must be an array");
             return false;
         }
-        ++fp; // skip '['
-        while (fp < json.size()) {
-            // skip whitespace
-            while (fp < json.size() && (json[fp] == ' ' || json[fp] == '\t' ||
-                   json[fp] == '\n' || json[fp] == '\r' || json[fp] == ',')) ++fp;
-            if (fp >= json.size() || json[fp] == ']') break;
-            if (json[fp] != '{') { ++fp; continue; }
-            // find filename and content within this object
-            size_t obj_end = fp;
-            int depth = 0;
-            while (obj_end < json.size()) {
-                if (json[obj_end] == '{') ++depth;
-                else if (json[obj_end] == '}') { --depth; if (depth == 0) { ++obj_end; break; } }
-                else if (json[obj_end] == '"') {
-                    ++obj_end;
-                    while (obj_end < json.size() && json[obj_end] != '"') {
-                        if (json[obj_end] == '\\') ++obj_end;
-                        ++obj_end;
-                    }
-                }
-                ++obj_end;
-            }
-            std::string obj_str = json.substr(fp, obj_end - fp);
-            TransformResult::FileEntry entry;
-            size_t fvs = 0, fve = 0;
-            if (find_json_string_value(obj_str, "filename", fvs, fve)) {
-                entry.filename = json_unescape_string(obj_str, fvs, fve);
-            }
-            if (find_json_string_value(obj_str, "content", fvs, fve)) {
-                entry.content = json_unescape_string(obj_str, fvs, fve);
-            }
-            if (!entry.filename.empty()) {
-                if (!is_safe_output_filename(entry.filename)) {
-                    error = unsafe_output_filename_error(entry.filename);
-                    return false;
-                }
-                const bool duplicate = std::ranges::any_of(out.files, [&](const auto& fe) {
-                    return fe.filename == entry.filename;
-                });
-                if (duplicate) {
-                    error = tr("Transform produces the same output filename twice: ") + entry.filename;
-                    return false;
-                }
-                out.files.push_back(std::move(entry));
-            }
-            fp = obj_end;
-        }
-        return true;
-    }
-
-    // No "files" key — check for top-level "content" (single-file mode).
-    if (find_json_string_value(json, "content", vs, ve)) {
-        out.content = json_unescape_string(json, vs, ve);
-        // Optional name for --output-dir (stdout output ignores it), e.g. "atlas.png.meta".
-        if (find_json_string_value(json, "filename", vs, ve)) {
-            out.filename = json_unescape_string(json, vs, ve);
-            if (!out.filename.empty() && !is_safe_output_filename(out.filename)) {
-                error = unsafe_output_filename_error(out.filename);
+        for (const auto& item : *files_it) {
+            if (!item.is_object()) {
+                error = tr("Each entry of 'files' must be an object");
                 return false;
             }
+            const auto filename_it = item.find("filename");
+            const auto content_it = item.find("content");
+            if (filename_it == item.end() || !filename_it->is_string()
+                || content_it == item.end() || !content_it->is_string()) {
+                error = tr("Each entry of 'files' needs string 'filename' and 'content' fields");
+                return false;
+            }
+            TransformResult::FileEntry entry;
+            entry.filename = filename_it->get<std::string>();
+            entry.content = content_it->get<std::string>();
+            if (entry.filename.empty()) {
+                error = tr("Transform output filename must not be empty");
+                return false;
+            }
+            if (!check_filename(entry.filename)) {
+                return false;
+            }
+            const bool duplicate = std::ranges::any_of(out.files, [&](const auto& fe) {
+                return fe.filename == entry.filename;
+            });
+            if (duplicate) {
+                error = tr("Transform produces the same output filename twice: ") + entry.filename;
+                return false;
+            }
+            out.files.push_back(std::move(entry));
         }
         return true;
     }
 
-    error = tr("Transform result must have either 'content' or 'files' field");
-    return false;
+    const auto content_it = root.find("content");
+    if (content_it == root.end()) {
+        error = tr("Transform result must have either 'content' or 'files' field");
+        return false;
+    }
+    if (!content_it->is_string()) {
+        error = tr("Transform field 'content' must be a string");
+        return false;
+    }
+    out.content = content_it->get<std::string>();
+    if (!read_string("filename", out.filename)) {
+        return false;
+    }
+    if (!out.filename.empty() && !check_filename(out.filename)) {
+        return false;
+    }
+    return true;
 }
 
 fs::path resolve_transform_path(const std::string& transform_arg) {
@@ -3101,7 +2977,7 @@ void print_usage() {
               << tr("\n")
               << tr("Options:\n")
               << tr("  --transform NAME|PATH      Transform name or path (default: json)\n")
-              << tr("  --atlas, -a PATTERN        Atlas path pattern for atlas_* placeholders\n")
+              << tr("  --atlas, -a PATTERN        Atlas path pattern for atlas_* placeholders (alias: -o, --output)\n")
               << tr("  --image-path PATTERN       Image path written into the metadata (default: the --atlas path as given)\n")
               << tr("  --output-dir PATH          Write output to PATH/{variant}{extension} instead of stdout\n")
               << tr("  --list-transforms          Print available transforms and exit\n")
@@ -3384,7 +3260,11 @@ int run_spratconvert(int argc, char** argv) {
                             const std::string& out_dir,
                             const std::string& file_stem,
                             std::ostream* stdout_out) -> int {
-        if (!result.files.empty()) {
+        if (result.files_mode) {
+            // A transform may legitimately produce no files (for example, no animations).
+            if (result.files.empty()) {
+                return 0;
+            }
             // Multi-file mode: requires --output-dir
             if (out_dir.empty()) {
                 std::cerr << tr("Transform produces multiple files; use --output-dir\n");

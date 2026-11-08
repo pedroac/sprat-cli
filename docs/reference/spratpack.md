@@ -4,14 +4,14 @@
 
 ## Output
 
-- Single atlas → PNG to stdout
+- Single atlas → PNG (or WebP/AVIF, or DDS with `--gpu-compress`) to stdout
 - Multipack layout → TAR stream (containing PNG files) to stdout
 
 ## All options
 
 ### Output specification
 
-- `-a FORMAT` — Output filename pattern (e.g., `-a atlas_%d.png`, `-a sheet.png`)
+- `-a PATTERN` — Output filename pattern (e.g., `-a atlas_%d.png`, `-a sheet.png`); aliases: `-o`, `--output`
   - For single atlases: `-a output.png` writes to that file
   - For multipack: `-a atlas_%d.png` generates `atlas_0.png`, `atlas_1.png`, etc.
 - `--atlas-index N` — Extract only atlas index N (useful for multipack debugging)
@@ -28,23 +28,26 @@
 ### Compression & format
 
 - `--zopfli` — Use Zopfli algorithm for smaller PNG (significantly slower; better than standard deflate)
+- `--format png|webp|avif` — Output image format (default: `png`); WebP/AVIF need libwebp/libavif at build time
+- `--quality N` — WebP/AVIF quality from 0 to 100; the default, 100, is lossless
 - `--gpu-compress dxt1|dxt5` — Compress to GPU-native DXT format
-  - `dxt1` — RGB, best compression (4:1 ratio)
-  - `dxt5` — RGBA with alpha (6:1 ratio)
+  - `dxt1` — RGB, 4 bits per pixel (8:1 versus RGBA32)
+  - `dxt5` — RGBA with alpha, 8 bits per pixel (4:1 versus RGBA32)
   - Requires libsquish; outputs `.dds` files
 - `--gpu-quality fast|best` — Compression quality for `--gpu-compress` (default: `fast`)
   - `fast` — range fit algorithm
   - `best` — cluster fit, ~25x slower, 1–2 dB better quality
-- `--protect` — Basic XOR-based obfuscation (sets "SPRAT!" signature; `spratunpack` auto-detects and deobfuscates)
+- `--protect` — Basic XOR-based obfuscation (sets the "SPRAT!" signature; `spratunpack` auto-detects and deobfuscates). Ignored with `--gpu-compress`.
 
 ### Variants & scaling
 
 - `--path-suffix SUFFIX` — Load variant images with suffix (e.g., `--path-suffix _red` loads `hero_red.png` instead of `hero.png`)
-- `--scale-filter lanczos|linear|cubic` — Resampling filter for `--output-scale` (default: `lanczos`)
+- `--scale-filter nearest|bilinear|bicubic|mitchell` — Resampling filter for `--output-scale` (default: `nearest`)
 
 ### Performance
 
 - `--threads N` — Parallel sprite decode and blit (when sprites don't overlap)
+- `--debug` — Enable detailed error reporting and draw frame lines for visualization
 
 ## Advanced: Dilation
 
@@ -79,7 +82,7 @@ Hardware texture compression for direct GPU loading.
 ```
 
 Details:
-- 4:1 (DXT1) or 6:1 (DXT5) compression ratios
+- 8:1 (DXT1) or 4:1 (DXT5) compression ratios versus RGBA32
 - Loads directly into GPU memory without decompression
 - Atlases padded to multiple of 4 (Direct3D 10+ requirement)
 - Sprite coordinates unchanged (padding at right/bottom only)
@@ -115,7 +118,7 @@ Basic XOR-based asset obfuscation.
 
 Details:
 - Sets "SPRAT!" magic signature
-- `spratunpack` and other tools auto-detect and deobfuscate
+- `spratunpack` auto-detects and deobfuscates
 - Basic obfuscation only (not cryptographic security)
 
 ## Variant atlases (palette swaps)

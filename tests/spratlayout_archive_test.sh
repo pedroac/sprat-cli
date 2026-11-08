@@ -61,6 +61,12 @@ echo "Test 3: failed runs remove their extraction folder"
     echo "FAILED: expected the layout to fail" >&2
     exit 1
 }
+tar -cf - -C "$tmp_dir/a" car.png | "$spratlayout_bin" - > "$tmp_dir/stdin.txt"
+grep -q '"car.png"' "$tmp_dir/stdin.txt" || {
+    echo "FAILED: tar on stdin did not produce a layout:" >&2
+    cat "$tmp_dir/stdin.txt" >&2
+    exit 1
+}
 tar -cf - -C "$tmp_dir/a" car.png | "$spratlayout_bin" - --max-width 10 > /dev/null 2>&1 || true
 if [ "$(leftovers)" != "0" ]; then
     echo "FAILED: extraction folder left after a failed run" >&2

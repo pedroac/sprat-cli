@@ -557,6 +557,7 @@ std::string build_layout_signature(const LayoutCacheKey& key, const std::vector<
         .add_scale(key.scale)
         .add_flag(key.trim_transparent)
         .add_flag(key.allow_rotate)
+        .add_flag(key.incremental)
         .add_flag(key.preserve_source_order)
         .add_flag(key.multipack)
         .add(key.rotate_ccw ? "ccw" : "cw")
@@ -570,6 +571,7 @@ std::string build_layout_signature(const LayoutCacheKey& key, const std::vector<
 
 // Seeds hold positions only, so padding (checked when applying a seed), the rotation
 // direction and deduplication (applied before packing) are not part of the signature.
+// Incremental runs produce different positions, so they need their own seed.
 std::string build_layout_seed_signature(const LayoutCacheKey& key, const std::vector<ImageSource>& sources) {
     SignatureBuilder sig;
     sig.add_profile_and_limits(key)
@@ -577,6 +579,7 @@ std::string build_layout_seed_signature(const LayoutCacheKey& key, const std::ve
         .add_scale(key.scale)
         .add_flag(key.trim_transparent)
         .add_flag(key.allow_rotate)
+        .add_flag(key.incremental)
         .add_flag(key.preserve_source_order)
         .add_flag(key.multipack)
         .add(key.order_key);

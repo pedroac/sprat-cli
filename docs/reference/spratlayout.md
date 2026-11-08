@@ -23,11 +23,12 @@
 
 ### Packing algorithm
 
-- `--mode compact|pot|fast` — Packing algorithm choice (default: `fast`)
+- `--mode compact|pot|fast|grid` — Packing algorithm choice (default: `fast`)
   - `compact` — Optimized bin packing, slower but better utilization
   - `pot` — Power-of-two dimensions only (512×512, 1024×512, etc.)
   - `fast` — Shelf algorithm, fast but less efficient
-- `--optimize gpu|space` — Optimize for GPU-friendly dimensions or minimum area (default: `space` for `fast`, `gpu` for `compact`/`pot`)
+  - `grid` — Uniform cells, left-to-right and top-to-bottom; all sprites must have the same size
+- `--optimize gpu|space` — Optimize for GPU-friendly dimensions or minimum area (default: `gpu`)
 - `--max-width N` — Maximum atlas width (no default limit)
 - `--max-height N` — Maximum atlas height (no default limit)
 - `--no-max-width` — Disable max width limit from profile
@@ -37,9 +38,8 @@
 ### Spacing & trimming
 
 - `--padding N` — Pixels between sprites (default: 0)
-- `--extrude N` — Repeat edge pixels N times to prevent sampling artifacts (requires `padding >= extrude * 2`)
+- `--extrude N` — Repeat edge pixels N times to prevent sampling artifacts; padding is raised to at least `extrude * 2`
 - `--trim-transparent` — Remove empty borders from each sprite
-- `--trim-common-margin` — Remove borders that are common to all sprites
 
 ### Sprite transformation
 
@@ -47,9 +47,10 @@
 - `--rotate-direction cw|ccw` — Direction rotated sprites are oriented (default: `cw`)
   - `cw` — Clockwise (TexturePacker, Phaser, Godot, Unity, Aseprite, plist)
   - `ccw` — Counter-clockwise (libGDX)
-- `--scale F` — Pre-scale all images (0.0–1.0); animation frames of one size stay one size at any scale
+- `--scale F` — Pre-scale all images (0 < F ≤ 1); animation frames of one size stay one size at any scale
 - `--source-resolution WxH` — Original design resolution (for calculating target scale)
-- `--target-resolution WxH` — Target resolution (scales layout when source is known)
+- `--target-resolution WxH` — Target resolution; must be given together with `--source-resolution`
+- `--resolution-reference largest|smallest` — Which axis ratio drives the scale (default: `largest`)
 
 ### Deduplication
 
@@ -66,14 +67,14 @@
 ### Sorting & ordering
 
 - `--sort name|none|stable[:metric]` — Sort sprites in layout (default: `none`)
-  - `name` — Alphabetical by path
-  - `none` — Natural filename order (filesystem order)
-  - `stable[:metric]` — Consistent order with optional metric (`area`, `width`, `height`, `perimeter`)
+  - `name` — Natural filename order, enforced in the output
+  - `none` — Keep the input order and let the packer reorder for efficiency
+  - `stable[:metric]` — Deterministic order by size, then path; metric is `area` (default), `maxside`, `height`, `width` or `perimeter`
 - Directory inputs always read in natural filename order for reproducibility
 
 ### Incremental packing
 
-- `--incremental` — Reuse positions from previous layout, pack only new/changed sprites (single atlas only)
+- `--incremental` — Reuse positions from the previous layout and pack only new/changed sprites. Single atlas only; `pot` keeps power-of-two sides; `grid` ignores it.
 
 ### Performance
 
@@ -97,14 +98,13 @@ Profile search paths:
 ### Profile format
 
 ```ini
-[my_profile]
+[profile my_profile]
 mode=compact
 optimize=gpu
 padding=2
 max_width=2048
 max_height=2048
 trim_transparent=true
-deduplicate=exact
 rotate=true
 preset=quality
 sort=stable:area
@@ -116,7 +116,9 @@ zopfli=true
 image_quality=90
 ```
 
-Command-line flags override profile values. Unknown keys are errors.
+Command-line flags override profile values. Unknown keys are errors. Deduplication is
+configured with `--deduplicate`, `--dedup-threshold` and `--dedup-tolerance`; it is not a
+profile key.
 
 ## Layout caching
 
@@ -190,8 +192,8 @@ Each `spratconvert` format handles multiple atlases appropriately.
 ### .spratlayoutignore
 Directory inputs honor `.spratlayoutignore` (like `.gitignore`):
 ```
-# Skip all test images
-test_*.png
+# Skip one test image
+test_sprite.png
 
 # Skip a folder
 ignored_folder/

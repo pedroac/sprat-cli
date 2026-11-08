@@ -60,7 +60,9 @@ Each tool does one thing well and communicates via text:
 sheet.png ──► spratframes ──► frames.txt ──► spratunpack ──► ./recovered_frames
 ```
 
-`spratlayout` does math only and does not process image pixels, so it is very fast; its layouts are also cached.
+`spratlayout` computes positions without writing pixels; with the default options it reads
+only image headers, and trimming or deduplication loads pixels when needed. Its layouts are
+also cached.
 
 ## Documentation
 

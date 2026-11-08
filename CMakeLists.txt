@@ -526,6 +526,7 @@ add_library(spratcore STATIC
     src/core/cli_parse.cpp
     src/core/layout_parser.cpp
     src/core/output_pattern.cpp
+    src/core/output_path.cpp
     src/core/perceptual_dedup.cpp
     src/core/i18n.cpp
     src/core/stb_impl.cpp
@@ -543,6 +544,11 @@ add_library(spratcore STATIC
 )
 
 target_include_directories(spratcore PUBLIC src)
+if(MSVC)
+    target_compile_options(spratcore PUBLIC /W4)
+else()
+    target_compile_options(spratcore PUBLIC -Wall -Wextra -Wno-unused-parameter)
+endif()
 target_include_directories(spratcore SYSTEM PRIVATE ${STB_DIR})
 # nlohmann/json, bundled with jsonnet; used to read JSON frame definitions.
 target_include_directories(spratcore SYSTEM PRIVATE ${jsonnet_SOURCE_DIR}/third_party/json)
@@ -615,10 +621,10 @@ target_link_libraries(spratunpack PRIVATE spratcore ${LIBARCHIVE_LIBRARIES})
 target_include_directories(spratunpack PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
 target_include_directories(spratunpack SYSTEM PRIVATE ${STB_DIR})
 
-target_compile_definitions(spratconvert PRIVATE SPRAT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 # The profile lookup is compiled into spratcore, so the define must be set there.
 target_compile_definitions(spratcore PRIVATE
-    SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg")
+    SPRAT_GLOBAL_PROFILE_CONFIG="${CMAKE_INSTALL_FULL_DATADIR}/sprat/spratprofiles.cfg"
+    SPRAT_GLOBAL_TRANSFORMS_DIR="${CMAKE_INSTALL_FULL_DATADIR}/sprat/transforms")
 
 # Keep a default profile config beside built binaries (e.g. build-win/) so
 # spratlayout can resolve it via exe-directory lookup without extra setup.

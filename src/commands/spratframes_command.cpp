@@ -123,7 +123,6 @@ struct FramesConfig {
     int tolerance = k_default_tolerance;
     int min_sprite_size = k_default_min_sprite_size;
     int max_sprites = k_default_max_sprites;
-    bool force = false;
 };
 
 class SpriteFramesDetector {

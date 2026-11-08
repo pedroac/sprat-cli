@@ -150,4 +150,41 @@ if grep -q '"b.png"' "$layout3"; then
     exit 1
 fi
 
+# --- Test 4: incremental and non-incremental runs do not share cached layouts ---
+echo "Test 4: incremental and non-incremental cache entries are separate"
+cache_frames="$tmp_dir/cache_frames"
+mkdir -p "$cache_frames"
+cat > "$tmp_dir/two.b64" <<'EOF'
+iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGNk+M/wn4GBgYGJAQoAHhgCAu/QjeYAAAAASUVORK5CYII=
+EOF
+cat > "$tmp_dir/six.b64" <<'EOF'
+iVBORw0KGgoAAAANSUhEUgAAAAYAAAAGCAYAAADgzO9IAAAAFUlEQVR4nGNk+M/wnwELYMImSC8JACkDAgrjPfwZAAAAAElFTkSuQmCC
+EOF
+base64 --decode < "$tmp_dir/two.b64" > "$cache_frames/a.png"
+cp "$cache_frames/a.png" "$cache_frames/b.png"
+cp "$cache_frames/a.png" "$cache_frames/c.png"
+
+cache_one="$tmp_dir/cache_one"
+cache_two="$tmp_dir/cache_two"
+mkdir -p "$cache_one" "$cache_two"
+run_cache() {
+    local cache_dir="$1"
+    shift
+    TMPDIR="$(fix_path "$cache_dir")" TMP="$(fix_path "$cache_dir")" TEMP="$(fix_path "$cache_dir")" \
+        "$spratlayout_bin" "$(fix_path "$cache_frames")" \
+        --profiles-config "$(fix_path "$profiles_cfg")" "$@"
+}
+
+run_cache "$cache_one" --incremental --mode compact --padding 4 --sort name > "$tmp_dir/cache_inc1.txt"
+base64 --decode < "$tmp_dir/six.b64" > "$cache_frames/d.png"
+run_cache "$cache_one" --incremental --mode compact --padding 4 --sort name > "$tmp_dir/cache_inc2.txt"
+run_cache "$cache_one" --mode compact --padding 4 --sort name > "$tmp_dir/cache_noninc_reused.txt"
+run_cache "$cache_two" --mode compact --padding 4 --sort name > "$tmp_dir/cache_noninc_fresh.txt"
+
+if ! diff -q "$tmp_dir/cache_noninc_reused.txt" "$tmp_dir/cache_noninc_fresh.txt" > /dev/null; then
+    echo "Test 4 FAIL: a non-incremental run reused an incremental layout" >&2
+    diff -u "$tmp_dir/cache_noninc_fresh.txt" "$tmp_dir/cache_noninc_reused.txt" >&2 || true
+    exit 1
+fi
+
 echo "All incremental packing tests passed."

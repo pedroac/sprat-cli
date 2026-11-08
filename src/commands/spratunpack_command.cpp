@@ -28,6 +28,7 @@ namespace fs = std::filesystem;
 #include "core/image_limits.h"
 #include "core/parallel.h"
 #include "core/layout_parser.h"
+#include "core/output_path.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -117,6 +118,19 @@ public:
         // Check every frame before writing anything, so a bad frames file leaves no partial output.
         if (!validate_frames()) {
             return false;
+        }
+        if (config_.debug) {
+            std::cerr << tr("Atlas: ") << width_ << "x" << height_
+                      << tr(", frames: ") << frames_.size() << "\n";
+            for (const SpriteFrame& frame : frames_) {
+                std::cerr << "  " << to_quoted(frame.name)
+                          << " rect:" << frame.frame.x << "," << frame.frame.y
+                          << "," << frame.frame.w << "," << frame.frame.h
+                          << " canvas:" << frame.canvas_w << "x" << frame.canvas_h
+                          << " offset:" << frame.offset_x << "," << frame.offset_y
+                          << " atlas:" << frame.atlas_index
+                          << (frame.rotated ? " rotated" : "") << "\n";
+            }
         }
         if (config_.stdout_mode) {
             return unpack_to_stdout();
@@ -540,17 +554,13 @@ private:
     // Frame names become file paths (on disk or inside the TAR), so they must stay
     // relative and must not climb out of the output location (path traversal guard).
     static bool check_frame_name(const std::string& name) {
-        const fs::path name_path(name);
-        if (name_path.has_root_path()) {
-            std::cerr << tr("Error: Frame name is an absolute path: ") << to_quoted(name) << "\n";
-            return false;
+        std::string error;
+        if (sprat::core::is_safe_relative_output_path(name, error)) {
+            return true;
         }
-        const fs::path normalized = name_path.lexically_normal();
-        if (normalized.empty() || normalized.begin()->string() == "..") {
-            std::cerr << tr("Error: Frame name escapes output directory: ") << to_quoted(name) << "\n";
-            return false;
-        }
-        return true;
+        std::cerr << tr("Error: Frame name ") << to_quoted(name)
+                  << tr(" is not a safe output path: ") << error << "\n";
+        return false;
     }
 
     // Reads a JSON number as int; TexturePacker-style files may store coordinates as floats.
@@ -1019,7 +1029,7 @@ void print_usage() {
               << tr("  --keep-trim                Write only the packed pixels instead of restoring the original size\n")
               << tr("  --atlas-index N            Atlas of a multipack layout that the image is (default: detected)\n")
               << tr("  -j, --threads N            Number of threads to use (default: auto)\n")
-              << tr("  --debug                    Enable detailed error reporting\n")
+              << tr("  --debug                    Print atlas and frame details to stderr\n")
               << tr("  -h, --help                 Show this help message\n")
               << tr("  -v, --version              Show version\n");
 }

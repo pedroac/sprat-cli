@@ -1619,4 +1619,29 @@ grep -qF 'Animation "mixed" range "0..9999999" is too long' "$tmp_dir/frames.err
 grep -qF 'Frame line "- frame "f/idle 1.png"..idle" has a broken quote or range' "$tmp_dir/frames.err"
 grep -qF 'Animation "mixed" has no frames' "$tmp_dir/frames.err"
 
+# ── Nested fields in a transform result must not shadow top-level ones ───────
+cat > "$tmp_dir/nested.jsonnet" <<'NESTED'
+{
+  name: "nested",
+  extension: ".txt",
+  a: { content: "WRONG", extension: ".wrong", files: [] },
+  content: "RIGHT",
+}
+NESTED
+"$convert_bin" --transform "$(fix_path "$tmp_dir/nested.jsonnet")" < "$layout_file" \
+    > "$tmp_dir/nested.out"
+if [ "$(cat "$tmp_dir/nested.out")" != "RIGHT" ]; then
+    echo "nested transform fields shadowed the top-level content" >&2
+    cat "$tmp_dir/nested.out" >&2
+    exit 1
+fi
+mkdir -p "$tmp_dir/nested_out"
+"$convert_bin" --transform "$(fix_path "$tmp_dir/nested.jsonnet")" \
+    --output-dir "$(fix_path "$tmp_dir/nested_out")" < "$layout_file"
+[ -f "$tmp_dir/nested_out/nested.txt" ] || {
+    echo "nested transform extension shadowed the top-level extension" >&2
+    ls -la "$tmp_dir/nested_out" >&2
+    exit 1
+}
+
 echo "convert_test.sh: ok"

@@ -7,13 +7,15 @@
 ### Transform selection
 
 - `--transform NAME|PATH` — Built-in format name or path to `.jsonnet` file
-  - Built-in: `json`, `xml`, `csv`, `raw`, `css`, `godot`, `phaser-hash`, `phaser-array`, `phaser-anims`, `aseprite`, `plist`, `libgdx`, `unity.json`, `unity.meta`, `unity.anim`
+  - Built-in: `json`, `xml`, `csv`, `raw`, `css`, `godot`, `phaser-hash`, `phaser-array`, `phaser-anims`, `aseprite`, `plist`, `libgdx`, `unity` (group), `unity.json`, `unity.meta`, `unity.anim`
   - Custom: `--transform ./my-transform.jsonnet`
 - `--list-transforms` — List all built-in formats with descriptions
+- `--list-transforms-json` — List built-in formats as JSON
+- `--transforms-dir` — Print the transforms directory and exit
 
 ### Output specification
 
-- `-a PATTERN` — Atlas filename pattern (e.g., `-a atlas_%d.png`)
+- `-a PATTERN` — Atlas filename pattern (e.g., `-a atlas_%d.png`); aliases: `-o`, `--output`
   - Used for determining texture keys and GUIDs
   - Essential for multipack layouts
 - `--image-path PATTERN` — Override path reference in metadata (same `%d` syntax)
@@ -30,8 +32,6 @@
 
 ### Variants
 
-- `--variant NAME` — Variant name for output files (e.g., `--variant red` for `layout_red.json`)
-
 ## Built-in transforms
 
 | Name | Extension | Output | Notes |
@@ -43,7 +43,7 @@
 | `css` | `.css` | CSS | CSS sprite sheet |
 | `aseprite` | `.json` | JSON | Aseprite JSON Array format; frame tags from animations |
 | `libgdx` | `.atlas` | Text | LibGDX Atlas format; handles multipack |
-| `godot` | `.tres` | Text | Godot SpriteFrames resource |
+| `godot` | `.json` | JSON | Godot SpriteFrames resource |
 | `phaser-hash` | `.json` | JSON | Phaser 3 hash-keyed sprite sheet |
 | `phaser-array` | `.json` | JSON | Phaser 3 array-keyed sprite sheet |
 | `phaser-anims` | `.json` | JSON | Phaser 3 animation config only |
@@ -66,8 +66,9 @@
 ### Rotation support
 
 - `rot` formats: `json`, `raw`, `xml`, `csv`, `css` — Report rotation in clockwise degrees (90 or 270)
-- `rot-fixed`: `phaser-hash`, `phaser-array`, `aseprite`, `plist`, `godot`, `unity.json` — Fixed convention; fail with error if layout rotation doesn't match
-- `no-rot`: `libgdx`, `unity.meta`, `unity` — Refuse rotated sprites in any direction
+- `rot-fixed cw`: `phaser-hash`, `phaser-array`, `aseprite`, `plist`, `godot`, `unity.json` — Fail with an error if the layout's rotation direction is not `cw`
+- `rot-fixed ccw`: `libgdx` — Fail with an error unless the layout uses `--rotate-direction ccw`
+- `no-rot`: `unity.meta` and the `unity` group — Refuse rotated sprites in either direction
 
 ## Sprite data (JSON output)
 
@@ -214,6 +215,9 @@ Use:
 ./build/spratconvert --transform ./per-sprite.jsonnet --output-dir ./out < layout.txt
 ```
 
+An empty `files` array is allowed and writes nothing (for example, a transform that emits
+one file per animation when the layout has no animations).
+
 ### Jsonnet reference data
 
 Available via `std.extVar("sprat")`:
@@ -240,6 +244,8 @@ Available via `std.extVar("sprat")`:
 | `animation_count`, `marker_count`, `sprite_count` | number | Counts |
 | `output_stem`, `output_stem_hash_hex` | string | Variant name and FNV-1a hash |
 | `output_pattern_hash_hex` | string | Hash of `-a` pattern (stable across transforms) |
+| `output_pattern` | string | The `-a` pattern as given (empty without one) |
+| `fps` | number | Default animation speed |
 | `animations_path`, `markers_path`, `puppets_path` | string | Data file paths |
 
 **Per sprite (`sprites[]`):**
@@ -247,6 +253,8 @@ Available via `std.extVar("sprat")`:
 | Field | Description |
 |---|---|
 | `name`, `path`, `index`, `atlas_index` | Identity |
+| `atlas_path` | string | Path of the atlas image this sprite belongs to |
+| `atlas_width`, `atlas_height` | number | Dimensions of that atlas |
 | `x`, `y`, `w`, `h` | Packed rectangle (atlas pixels) |
 | `content_w`, `content_h` | Dimensions accounting for rotation |
 | `source_w`, `source_h` | Original size including trim |

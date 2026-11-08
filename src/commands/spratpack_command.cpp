@@ -820,6 +820,17 @@ int run_spratpack(int argc, char** argv) {
         std::cerr << tr("Error: --zopfli only applies to PNG output\n");
         return 1;
     }
+    if (has_gpu_compress) {
+        if (output_format != "png") {
+            std::cerr << tr("Warning: --format is ignored with --gpu-compress (writing DDS)\n");
+        }
+        if (use_zopfli) {
+            std::cerr << tr("Warning: --zopfli is ignored with --gpu-compress\n");
+        }
+        if (protect) {
+            std::cerr << tr("Warning: --protect is ignored with --gpu-compress\n");
+        }
+    }
 
     if (debug) {
         draw_frame_lines = true;

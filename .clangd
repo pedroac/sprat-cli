@@ -2,7 +2,7 @@
 # https://clangd.llvm.org/config/
 
 CompileFlags:
-  CompilationDatabase: "."
+  CompilationDatabase: "build"
   Add: 
     - -std=c++20
     - -Wall

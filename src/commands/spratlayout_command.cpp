@@ -84,7 +84,7 @@ bool env_flag_enabled(const char* name) {
 }
 
 void print_usage() {
-    std::cout << tr("Usage: spratlayout <folder> [OPTIONS]\n")
+    std::cout << tr("Usage: spratlayout <folder|file|-> [OPTIONS]\n")
               << tr("       spratlayout --stdin-list [OPTIONS]\n")
               << tr("\n")
               << tr("Scan an image folder/list/tar and write a text layout to standard output.\n")
@@ -100,14 +100,15 @@ void print_usage() {
               << tr("  --profile NAME             Profile name from config (default: fast)\n")
               << tr("  --profiles-config PATH     Use an explicit profile configuration file\n")
               << tr("  --default-profiles-config  Print the default profiles config path and exit\n")
-              << tr("  --mode MODE                Packing algorithm: compact, pot, or fast\n")
+              << tr("  --mode MODE                Packing algorithm: compact, pot, fast, or grid\n")
+              << tr("                             (grid needs equal-size sprites; it makes uniform cells)\n")
               << tr("  --optimize TARGET          Optimization metric: gpu (min max-side) or space (min area)\n")
               << tr("  --max-width N              Maximum atlas width\n")
               << tr("  --max-height N             Maximum atlas height\n")
               << tr("  --no-max-width             Disable width limit (even if profile sets one)\n")
               << tr("  --no-max-height            Disable height limit (even if profile sets one)\n")
               << tr("  --padding N                Extra pixels between packed sprites\n")
-              << tr("  --extrude N                Repeat edge pixels N times (padding should be >= extrude * 2)\n")
+              << tr("  --extrude N                Repeat edge pixels N times (padding is raised to >= extrude * 2)\n")
               << tr("  --source-resolution WxH    Source design resolution baseline\n")
               << tr("  --target-resolution WxH    Target output resolution\n")
               << tr("  --resolution-reference REF Axis ratio driver: largest or smallest\n")
@@ -177,9 +178,7 @@ struct LayoutArgs {
     bool multipack = false;
     bool has_multipack_override = false;
     std::string deduplicateMode = "none";
-    bool has_deduplicate_override = false;
     int dedup_threshold = sprat::core::k_default_dedup_hash_threshold;
-    bool has_dedup_threshold_override = false;
     int dedup_tolerance = sprat::core::k_default_dedup_pixel_tolerance;
     FrameSort frame_sort = FrameSort::Name;
     StableMetric stable_metric = StableMetric::Area;
@@ -323,14 +322,12 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
                 std::cerr << tr("Valid modes: none, exact, perceptual\n");
                 return 1;
             }
-            args.has_deduplicate_override = true;
         } else if (arg == "--dedup-threshold" && i + 1 < argc) {
             const std::string value = argv[++i];
             if (!parse_non_negative_int(value, args.dedup_threshold) || args.dedup_threshold > 64) {
                 std::cerr << tr("Invalid dedup threshold: ") << value << tr(" (must be 0-64)\n");
                 return 1;
             }
-            args.has_dedup_threshold_override = true;
         } else if (arg == "--dedup-tolerance" && i + 1 < argc) {
             const std::string value = argv[++i];
             if (!parse_non_negative_int(value, args.dedup_tolerance) || args.dedup_tolerance > 255) {
@@ -363,7 +360,7 @@ int try_parse_args(int argc, char** argv, LayoutArgs& args) {
             args.has_incremental_override = true;
         } else if (arg == "--stdin-list") {
             args.stdin_list = true;
-        } else if (arg.starts_with("-")) {
+        } else if (arg.size() > 1 && arg[0] == '-') {
             std::cerr << tr("Unknown argument: ") << arg << "\n";
             return 1;
         } else {
@@ -673,6 +670,10 @@ bool open_input(const LayoutArgs& args, const fs::path& cwd, InputContext& input
         return true;
     }
     if (args.folder == "-") {
+#ifdef _WIN32
+        // A tar stream is binary; text mode would translate CRLF and corrupt it.
+        _setmode(_fileno(stdin), _O_BINARY);
+#endif
         if (!open_stdin_archive_input(input)) {
             std::cerr << tr("Error: Failed to load content from stdin\n");
             return false;
@@ -873,6 +874,8 @@ void prewarm_compact_profiles(const LayoutArgs& args, const LayoutSettings& sett
         prewarm_key.mode = prewarm_mode;
         prewarm_key.optimize_target = prewarm_optimize_target;
         prewarm_key.multipack = false;
+        // Prewarmed candidates are full layouts, never incremental ones.
+        prewarm_key.incremental = false;
         const std::string prewarm_signature = build_layout_signature(prewarm_key, sources);
         if (prewarm_signature == cache.layout_signature) {
             continue;
@@ -1004,14 +1007,6 @@ int run_spratlayout(int argc, char** argv) {
     if (early_exit >= 0) {
         return early_exit;
     }
-#ifdef _WIN32
-    // Set stdin to binary mode only when --stdin-list is active so path data
-    // read from stdin is not corrupted by \r\n translation.
-    if (args.stdin_list) {
-        _setmode(_fileno(stdin), _O_BINARY);
-    }
-#endif
-
     const fs::path exec_dir = sprat::core::get_executable_dir(argv[0]);
     if (args.show_profiles_config) {
         for (const fs::path& candidate : build_default_profiles_config_candidates(exec_dir)) {
@@ -1087,6 +1082,7 @@ int run_spratlayout(int argc, char** argv) {
     key.scale = settings.scale;
     key.trim_transparent = settings.trim_transparent;
     key.allow_rotate = settings.allow_rotate;
+    key.incremental = settings.incremental;
     key.preserve_source_order = !enforce_name_order && !enforce_stable_order;
     key.multipack = settings.multipack;
     key.rotate_ccw = settings.rotate_ccw;

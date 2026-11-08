@@ -21,9 +21,9 @@ ls *.png | ./build/spratlayout --stdin-list > layout.txt
 |---|---|
 | `--trim-transparent` | Remove empty borders from sprites to save space |
 | `--padding N` | Add N pixels between sprites to prevent texture bleeding (default: 0) |
-| `--extrude N` | Repeat edge pixels N times (combine with padding to prevent sampling artifacts) |
+| `--extrude N` | Repeat edge pixels N times (padding is raised to at least `2 × N` automatically) |
 | `--rotate` | Allow 90° rotation for tighter packing |
-| `--scale F` | Pre-scale images (0.0–1.0, e.g., 0.5 for half size) |
+| `--scale F` | Pre-scale images (0 < F ≤ 1, e.g., 0.5 for half size) |
 | `--deduplicate exact` | Merge pixel-identical sprites (saves atlas space) |
 | `--multipack` | Split across multiple atlases if needed |
 
@@ -72,6 +72,7 @@ ls *.png | ./build/spratlayout --stdin-list > layout.txt
 - **`fast`** (default): Quick, good-enough packing using shelf algorithm. Best for large datasets.
 - **`compact`**: Better utilization, slower. Good for mobile and console.
 - **`pot`**: Forces power-of-two dimensions (512×512, 1024×512, etc.).
+- **`grid`**: Places every sprite in a uniform cell, left-to-right and top-to-bottom. All sprites must have the same size; use `compact` for mixed sizes.
 
 ## Profiles
 
@@ -79,14 +80,13 @@ Save your favorite settings in a profile and reuse them:
 
 **~/.config/sprat/spratprofiles.cfg**
 ```ini
-[mobile]
+[profile mobile]
 mode=compact
 optimize=space
 padding=2
 trim_transparent=true
-deduplicate=exact
 
-[console]
+[profile console]
 mode=pot
 max_width=2048
 max_height=2048

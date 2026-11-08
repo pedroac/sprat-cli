@@ -12,8 +12,8 @@
 ./build/spratconvert --transform json < layout.txt > layout.json
 
 # Generate for a specific engine
-./build/spratconvert --transform godot < layout.txt > sprites.tres
-./build/spratconvert --transform unity.json < layout.txt > SpriteData.json
+./build/spratconvert --transform godot < layout.txt > sprites.json
+./build/spratconvert --transform unity --output-dir ./out -a atlas.png < layout.txt
 ./build/spratconvert --transform phaser-hash < layout.txt > sprites.json
 ```
 
@@ -26,20 +26,21 @@
 | `--image-path PATTERN` | Path reference written in metadata (use when metadata and images are in different folders) |
 | `--output-dir DIR` | Write multiple files to a directory (required for some formats) |
 | `--auto-animations` | Detect animations from sprite filenames (e.g., `walk_01.png`, `walk_02.png` → `walk` animation) |
-| `--markers FILE` | Include pivot points, hitboxes, etc. (see [Markers](../guides/markers.md)) |
-| `--animations FILE` | Include named animations (see [Animations](../guides/animations.md)) |
+| `--markers FILE` | Include pivot points, hitboxes, etc. (see [Markers & Animations](markers-animations.md)) |
+| `--animations FILE` | Include named animations (see [Markers & Animations](markers-animations.md)) |
+| `--puppets FILE` | Include cutout puppet rigs, poses and sequences |
 
 ## Quick examples
 
 ### For Godot (single file)
 ```sh
-./build/spratconvert --transform godot < layout.txt > sprites.tres
+./build/spratconvert --transform godot < layout.txt > sprites.json
 ```
 
 ### For Unity (with metadata files)
 ```sh
-./build/spratconvert --transform unity.json --output-dir ./out -a atlas.png < layout.txt
-# Creates: out/atlas.json, out/atlas.meta, out/animations/*.anim
+./build/spratconvert --transform unity --output-dir ./out -a atlas.png < layout.txt
+# Creates: out/atlas.json, out/atlas.png.meta, and one .anim per animation
 ```
 
 ### For Phaser (with auto-detected animations)
@@ -84,7 +85,7 @@ Then:
 | `aseprite` | Aseprite, animation tools | JSON Array format |
 | `libgdx` | libGDX (Java) | Native format |
 | `css` | Web (CSS sprites) | One-page websites |
-| `raw` | C/C++ | Compact binary-like format |
+| `raw` | C/C++ | Space-separated text tokens for a one-pass loader |
 
 ## What's next?
 

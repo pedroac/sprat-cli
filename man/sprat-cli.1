@@ -28,6 +28,14 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-a\fR \fIPATTERN\fR]
 [\fB\-\-atlas\-index\fR \fIN\fR]
 [\fB\-\-extrude\fR \fIN\fR]
+[\fB\-\-dilate\fR \fIN\fR]
+[\fB\-\-format\fR png|webp|avif]
+[\fB\-\-quality\fR \fIN\fR]
+[\fB\-\-gpu\-compress\fR dxt1|dxt5]
+[\fB\-\-gpu\-quality\fR fast|best]
+[\fB\-\-output\-scale\fR \fIFACTOR\fR]
+[\fB\-\-scale\-filter\fR FILTER]
+[\fB\-\-path\-suffix\fR \fISUFFIX\fR]
 [\fB\-\-protect\fR]
 [\fB\-\-zopfli\fR]
 [\fB\-\-frame\-lines\fR]
@@ -42,6 +50,8 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-image\-path\fR \fIPATTERN\fR]
 [\fB\-\-output\-dir\fR \fIPATH\fR]
 [\fB\-\-list\-transforms\fR]
+[\fB\-\-list\-transforms\-json\fR]
+[\fB\-\-transforms\-dir\fR]
 [\fB\-\-markers\fR \fIPATH\fR]
 [\fB\-\-animations\fR \fIPATH\fR]
 [\fB\-\-auto\-animations\fR]
@@ -60,6 +70,8 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fIatlas.png\fR|\fB\-\fR]
 [\fB\-\-frames\fR \fIPATH\fR]
 [\fB\-\-output\fR \fIDIR\fR]
+[\fB\-\-keep\-trim\fR]
+[\fB\-\-atlas\-index\fR \fIN\fR]
 [\fB\-\-threads\fR \fIN\fR]
 [\fB\-\-debug\fR]
 .SH DESCRIPTION
@@ -280,7 +292,7 @@ Use an explicit profile configuration file.
 .TP
 \fB\-\-mode\fR compact|pot|fast|grid
 Override packing mode from selected profile.
-\fBgrid\fR places every sprite in a uniform cell (sized to the largest frame) arranged left-to-right, top-to-bottom, so any frame can be addressed by column and row index.
+\fBgrid\fR places every sprite in a uniform cell arranged left-to-right, top-to-bottom, so any frame can be addressed by column and row index. All sprites must have the same size; use \fBcompact\fR for mixed sizes.
 \fBpot\fR atlases are always powers of two, with or without padding; \fB\-\-max\-width\fR/\fB\-\-max\-height\fR allow the largest power of two within them.
 .TP
 \fB\-\-optimize\fR gpu|space
@@ -302,7 +314,7 @@ Disable height limit even if selected profile defines one.
 Extra pixels between packed sprites. Overrides profile value.
 .TP
 \fB\-\-extrude\fR \fIN\fR
-Repeat edge pixels N times (padding should be >= extrude * 2).
+Repeat edge pixels N times. Padding is raised to at least extrude * 2.
 .TP
 \fB\-\-source\-resolution\fR \fIWxH\fR
 Source design resolution baseline (for example \fB800x600\fR). Must be used together with \fB\-\-target\-resolution\fR.

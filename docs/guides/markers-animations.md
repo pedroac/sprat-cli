@@ -110,7 +110,8 @@ Sprite filenames like:
 - `walk_01.png`, `walk_02.png` → `walk` animation
 - `idle_1.png`, `idle_2.png` → `idle` animation
 
-Pattern: `{animation_name}_{frame_number}.png` with consistent zero-padding.
+The suffix is a trailing number, with or without zero-padding (`walk_1.png` and
+`walk_01.png` both group under `walk`).
 
 ## Usage in JSON output
 

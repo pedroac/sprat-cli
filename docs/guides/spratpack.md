@@ -16,12 +16,14 @@
 
 | Option | What it does |
 |---|---|
-| `-a FORMAT` | Output filename pattern (e.g., `-a atlas_%d.png`, `-a sheet.png`) |
+| `-a PATTERN` | Output filename pattern (e.g., `-a atlas_%d.png`, `-a sheet.png`) |
 | `--frame-lines` | Draw red rectangles around each sprite (useful for debugging) |
 | `--line-width N` | Width of frame lines (default: 1) |
 | `--line-color R,G,B[,A]` | Color of frame lines (default: 255,0,0,255 for red) |
 | `--dilate N` | Bleed opaque pixels into transparent edges (prevents dark halos with GPU filtering) |
 | `--threads N` | Parallel sprite processing |
+
+PNG is the default output. `--format webp` and `--format avif` are available when the build includes libwebp/libavif; `--gpu-compress dxt1|dxt5` writes DDS when libsquish is available.
 
 ## Quick examples
 
