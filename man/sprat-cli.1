@@ -486,13 +486,13 @@ pose "\fIname\fR"
 .br
 sequence "\fIname\fR" [fps:\fIN\fR] [loop:\fImode\fR]
 .br
-\- pose "\fIpose\fR" [in:\fIframes\fR] [hold:\fIframes\fR] [ease:linear|step]
+\- pose "\fIpose\fR" [in:\fIframes\fR] [hold:\fIframes\fR] [ease:linear|step] [step:\fIparts\fR] [linear:\fIparts\fR]
 .PP
 Parts are drawn in file order, back first.
 Every part is placed one way: attached to another part, or by \fBat:\fIX\fB,\fIY\fR, where its sprite's pivot goes in the puppet's space, whose origin is the puppet's pivot (Y down, original-image pixels). Any number of parts may be positioned.
 A part's first \fBattach\fR is its parent; further ones, and every \fBattach\fR of a positioned part, are constraints that may close loops. Two positioned parts can't be attached.
 A \fBpose\fR sets only the parts it names, so poses layer: a variant, an angle relative to the parent (within its joint's limits) or around a positioned part's pivot, an attached part's offset from the parent marker, or a positioned part's position.
-A \fBsequence\fR plays poses at its \fBfps\fR (default 8, up to 100) with the animation loop modes: each step reaches its pose in \fBin\fR frames, tweened with \fBease:linear\fR or snapped at the end with \fBease:step\fR, then holds it \fBhold\fR frames; variants snap when the pose arrives. Only what a step's pose sets changes, so sequences on different parts combine.
+A \fBsequence\fR plays poses at its \fBfps\fR (default 8, up to 100) with the animation loop modes: each step reaches its pose in \fBin\fR frames, tweened with \fBease:linear\fR or snapped at the end with \fBease:step\fR (\fBstep:\fR and \fBlinear:\fR list, comma-separated, parts of the pose that ease the other way), then holds it \fBhold\fR frames; variants snap when the pose arrives. Only what a step's pose sets changes, so sequences on different parts combine.
 In the rest pose every part shows its first variant with angle and offset 0. A positioned part's sprite pivot goes at its position; an attached part's child marker goes where its parent's marker lands, moved by its offset, and it turns by its parent's turn plus its own angle. Parts are drawn in file order.
 A part's variants are sprites (path, name or index) or animations, interchangeable, named after them unless \fB\->\fR names them.
 An \fBattach\fR line pins the child part's point marker, in every sprite it shows, to the parent part's marker, whose shape (a point, or the inside of a circle, rectangle or polygon) is where the child's point may be.

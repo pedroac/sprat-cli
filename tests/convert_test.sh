@@ -305,11 +305,11 @@ ANIMS
 # and plays as it does (LOOP 3 is once-pingpong). The global marker comes before the
 # sprites; b's pivot at 0,0 still sets HAS_PIVOT; the deduplicated d names a by index.
 # The sheet line totals no puppets, 1 global marker, 6 markers, 3 vertices, 2 frames, no
-# parts, variants or joints, and 104 string bytes: spawn 5, sprites 1+14 + 1+14 + 5+18 +
+# parts, variants, joints, poses, settings, sequences, steps or part eases, and 104 string bytes: spawn 5, sprites 1+14 + 1+14 + 5+18 +
 # 1+14, markers 3+4+4+4+5, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
-sprat-raw 8
-sheet 1 0 0 1 4 2 0 1 6 3 2 0 0 0 0 0 0 0 104
+sprat-raw 9
+sheet 1 0 0 1 4 2 0 1 6 3 2 0 0 0 0 0 0 0 0 104
 atlas 64 32 0:
 marker 0 1 1 0 0 0 0 5:spawn
 sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 3 1:a 14:./frames/a.png
@@ -356,15 +356,16 @@ pose "wave"
 pose "buzz"
 - part "fly" at:-4,-28 angle:90
 sequence "dance" fps:12 loop:once
-- pose "wave" in:2 hold:3
-- pose buzz hold:1 ease:step
+- pose "wave" in:2 hold:3 step:"arm"
+- pose buzz hold:1 ease:step linear:fly
 PUPPETS
-# 1 puppet, 3 parts, 4 variants, 3 joints, 2 poses, 3 settings, 1 sequence and 2 steps;
+# 1 puppet, 3 parts, 4 variants, 3 joints, 2 poses, 3 settings, 1 sequence, 2 steps and 2
+# part eases (the arm snaps in a linear step, the fly tweens in a snapping one);
 # strings add hé 3, body 4 + a 1 + body-2 6, arm 3 + swing 5, fly 3 + b 1, the markers
 # pivot 5 + zone 4, hit 3 + zone 4 and hit 3 + zone 4, the poses wave 4 and buzz 4, and the
 # sequence dance 5 to the 104 bytes above.
 cat > "$tmp_dir/expected.puppets.sprat" <<'RAW'
-sheet 1 0 0 1 4 2 1 1 6 3 2 3 4 3 2 3 1 2 166
+sheet 1 0 0 1 4 2 1 1 6 3 2 3 4 3 2 3 1 2 2 166
 puppet 3 3 2 1 3:hé
 part -1 1 0 -20 2 4:body
 variant 0 0 1:a
@@ -382,8 +383,8 @@ set 1 0 1 -30 1 1 -2 0 0 0
 pose 1 4:buzz
 set 2 -1 1 90 0 0 0 1 -4 -28
 sequence 12 1 2 5:dance
-step 0 2 3 0
-step 1 0 1 1
+step 0 2 3 0 1 1 1
+step 1 0 1 1 1 2 0
 RAW
 "$convert_bin" --transform raw --markers "$(fix_path "$raw_markers_file")" \
   --animations "$(fix_path "$raw_animations_file")" --puppets "$(fix_path "$raw_puppets_file")" \
@@ -428,6 +429,8 @@ assert (dance["name"], dance["fps"], dance["loop"], dance["frame_count"], dance[
     == ("dance", 12, "once", 6, 0.5), dance
 assert [(t["pose_name"], t["in"], t["hold"], t["ease"]) for t in dance["steps"]] \
     == [("wave", 2, 3, "linear"), ("buzz", 0, 1, "step")], dance
+assert [[(e["part"], e["part_name"], e["ease"]) for e in t["part_eases"]] for t in dance["steps"]] \
+    == [[(1, "arm", "step")], [(2, "fly", "linear")]], dance
 assert [(v["name"], v["kind"], v["sprite_index"], v["animation_index"]) for v in parts[1]["variants"]] \
     == [("swing", "animation", -1, 1)], parts
 assert (joint["child_name"], joint["parent_name"], joint["leeway"], joint["angle_min"], joint["angle_max"]) \
@@ -496,17 +499,24 @@ pose_fails '- part x angle:1' 'sequence "s"' '- pose "nope" hold:1'
 grep -qF 'Puppet "p" sequence "s" plays unknown pose "nope"' "$tmp_dir/bad.puppets.err"
 pose_fails '- part x angle:1' 'sequence "s"' 'sequence "s"'
 grep -qF 'Puppet "p" has more than one sequence "s"' "$tmp_dir/bad.puppets.err"
+pose_fails '- part x angle:1' 'sequence "s"' '- pose q hold:1 step:x,"z"'
+grep -qF 'Puppet "p" sequence "s" step 1 eases unknown part "z"' "$tmp_dir/bad.puppets.err"
 pose_fails '- part x angle:1' 'sequence "s" fps:101'
 grep -qF 'Sequence line "sequence "s" fps:101" has fps 101, above the limit of 100' "$tmp_dir/bad.puppets.err"
 # Without fps or loop, a sequence plays at 8 fps and loops; its lines are checked one by one.
 printf '%s\n' 'puppet "p"' 'part "x" at:0,0' 'pose "q"' '- part x angle:1' \
   'sequence "s" fps:0 loop:twice speed:2' '- pose q in:-1 hold:100001 ease:smooth' '- pose q' \
-  '- pose q in:1' '- pose' 'sequence "empty"' 'sequence ""' 'part "w" at:1,1' '- pose q hold:1' \
+  '- pose q in:1 step:x,"x" linear:x ease:linear' '- pose q in:1 ease:step step:x' '- pose q in:1 step:w' \
+  '- pose' 'sequence "empty"' 'sequence ""' 'part "w" at:1,1' '- pose q hold:1' \
   > "$tmp_dir/sequence.puppets.txt"
 "$convert_bin" --transform raw --puppets "$(fix_path "$tmp_dir/sequence.puppets.txt")" < "$raw_layout_file" \
   > "$tmp_dir/sequence.sprat" 2> "$tmp_dir/sequence.err"
-grep -qF 'sequence 8 0 1 1:s' "$tmp_dir/sequence.sprat"
-grep -qF 'step 0 1 0 0' "$tmp_dir/sequence.sprat"
+grep -qF 'sequence 8 0 3 1:s' "$tmp_dir/sequence.sprat"
+grep -qF 'step 0 1 0 0 1 0 1' "$tmp_dir/sequence.sprat"
+grep -qF 'step 0 1 0 1 0' "$tmp_dir/sequence.sprat"
+grep -qF 'Step line "- pose q in:1 step:x,"x" linear:x ease:linear" eases part "x" more than once; the first is kept' "$tmp_dir/sequence.err"
+grep -qF 'Step line "- pose q in:1 ease:step step:x" eases part "x" step, as the whole step does; it is ignored' "$tmp_dir/sequence.err"
+grep -qF 'Puppet "p" sequence "s" step 3 eases part "w", which pose "q" doesn'"'"'t set; it is ignored' "$tmp_dir/sequence.err"
 grep -qF 'sequence 8 0 0 5:empty' "$tmp_dir/sequence.sprat"
 grep -qF 'fps "0" is not a whole number of frames per second, 1 or more' "$tmp_dir/sequence.err"
 grep -qF 'loop "twice" is not one of loop, once, pingpong, once-pingpong' "$tmp_dir/sequence.err"

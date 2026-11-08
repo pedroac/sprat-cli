@@ -1,9 +1,10 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 8
+//   sprat-raw 9
 //   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS
-//         VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS STRING_BYTES
+//         VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS PART_EASES
+//         STRING_BYTES
 //   atlas W H PATH                                                (ATLASES lines)
 //   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME           (GLOBAL_MARKERS lines)
 //   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y
@@ -19,7 +20,7 @@
 //   set PART VARIANT HAS_ANGLE ANGLE HAS_OFFSET OFFSET_X OFFSET_Y HAS_POSITION X Y
 //                                                                 (SETTINGS lines after a pose)
 //   sequence FPS LOOP STEPS NAME                                  (SEQUENCES lines after the poses)
-//   step POSE IN HOLD EASE                                        (STEPS lines after a sequence)
+//   step POSE IN HOLD EASE PART_EASES [PART EASE]...              (STEPS lines after a sequence)
 //
 // Strings are length-prefixed ("<utf8 bytes>:<bytes>"), so they may hold spaces or newlines.
 // An empty string means "none". Enums are numbers: marker type point=0 circle=1 rectangle=2
@@ -57,8 +58,11 @@
 // line. A step reaches pose POSE (an index into the puppet's poses) in IN frames, then
 // holds it HOLD frames; IN + HOLD is at least 1, and each at most 100000. EASE is how the
 // values it sets get there: linear=0 tweens them over IN, step=1 keeps the old ones through
-// IN and snaps. Variants always snap when the pose arrives, at the end of IN. Only what the
-// pose sets changes, so sequences on different parts combine.
+// IN and snaps. Each of its PART_EASES pairs gives a part (a part index, set by the pose, in
+// part order) that eases the other way, EASE as above. Variants always snap when the pose
+// arrives, at the end of IN. Only what the pose sets changes, so sequences on different
+// parts combine.
+// Version 9 added each step's PART_EASES and their total on the sheet line.
 // Version 8 added SEQUENCES and STEPS and the sequence records.
 // Version 7 removed the puppet's REFERENCE and added POSES and SETTINGS, each joint's
 // CONSTRAINT, and the pose records.
@@ -144,7 +148,9 @@ local set_line(st) =
   line(["set", st.part, st.variant, bool(st.has_angle), st.angle, bool(st.has_offset),
         st.offset_x, st.offset_y, bool(st.has_position), st.x, st.y]);
 local ease_values = { linear: 0, step: 1 };
-local step_line(st) = line(["step", st.pose, st["in"], st.hold, ease_values[st.ease]]);
+local step_line(st) =
+  line(["step", st.pose, st["in"], st.hold, ease_values[st.ease], std.length(st.part_eases)]
+       + std.flattenArrays([[e.part, ease_values[e.ease]] for e in st.part_eases]));
 local sequence_lines(sq) =
   line(["sequence", sq.fps, loop_bits[sq.loop], std.length(sq.steps), str(sq.name)])
   + std.join("", [step_line(st) for st in sq.steps]);
@@ -164,6 +170,7 @@ local parts = [p for pp in puppets for p in pp.parts];
 local joints = [jt for pp in puppets for jt in pp.joints];
 local poses = [po for pp in puppets for po in pp.poses];
 local sequences = [sq for pp in puppets for sq in pp.sequences];
+local steps = [st for sq in sequences for st in sq.steps];
 
 local global_markers = [m for m in sprat.markers if m.sprite_index < 0];
 
@@ -183,14 +190,15 @@ local string_bytes =
   + sum([str_bytes(sq.name) for sq in sequences]);
 
 local header =
-  "sprat-raw 8\n"
+  "sprat-raw 9\n"
   + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
           std.length(puppets), std.length(global_markers), std.length(all_markers),
           sum([vertex_count(m) for m in all_markers]), sum([frame_count(a) for a in animations]),
           std.length(parts), sum([std.length(p.variants) for p in parts]), std.length(joints),
           std.length(poses), sum([std.length(po.parts) for po in poses]),
-          std.length(sequences), sum([std.length(sq.steps) for sq in sequences]), string_bytes]);
+          std.length(sequences), std.length(steps), sum([std.length(st.part_eases) for st in steps]),
+          string_bytes]);
 
 {
   name: "Raw",

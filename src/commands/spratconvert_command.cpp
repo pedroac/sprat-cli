@@ -974,8 +974,8 @@ void resolve_alias_sources(std::vector<AnimationItem>& animations) {
 // Poses only name what they change, so they layer (walk + smile).
 //
 // A sequence plays poses one after another at its own fps: each step reaches its pose in
-// `in` frames (tweened, or snapped at the end with ease:step) and holds it for `hold`
-// frames. Only what a step's pose sets moves, and variants snap when the step's pose
+// `in` frames (tweened, or snapped at the end with ease:step; some parts may ease the other
+// way) and holds it for `hold` frames. Only what a step's pose sets moves, and variants snap when the step's pose
 // arrives. sprat describes the rig, its poses and sequences; engines play them.
 
 // Most degrees a joint's angle range, or a pose's angle, may reach either way.
@@ -1033,12 +1033,19 @@ struct PuppetPose {
     std::vector<PoseSetting> settings;  // in part order
 };
 
+// A part that eases differently from the rest of its step.
+struct StepPartEase {
+    size_t part = 0;
+    bool snap = false;  // step: keep its old values through `in`, then snap
+};
+
 // One step of a sequence: reach a pose in `in` frames, then hold it `hold` frames.
 struct SequenceStep {
     size_t pose = 0;
     int in = 0;
     int hold = 0;
     bool snap = false;  // ease:step: keep the old pose through `in`, then snap
+    std::vector<StepPartEase> part_eases;  // in part order, each the other way from `snap`
 };
 
 struct PuppetSequence {
@@ -1077,8 +1084,11 @@ bool parse_angle_range(const std::string& value, int& min, int& max) {
 }
 
 // Splits "KEY:VALUE" settings, where a value may be quoted to hold spaces
-// (variant:"run back"). A word without a colon has an empty key. False on a broken quote.
-bool split_settings(const std::string& text, std::vector<std::pair<std::string, std::string>>& out) {
+// (variant:"run back"). A word without a colon has an empty key. With `lists`, a value may
+// be a comma-separated list of them (step:"eyes",mouth), returned with a newline between
+// items. False on a broken quote.
+bool split_settings(const std::string& text, std::vector<std::pair<std::string, std::string>>& out,
+                    bool lists = false) {
     size_t pos = 0;
     while (true) {
         while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
@@ -1096,15 +1106,24 @@ bool split_settings(const std::string& text, std::vector<std::pair<std::string, 
         std::string key = text.substr(pos, end - pos);
         pos = end + 1;
         std::string value;
-        if (pos < text.size() && text[pos] == '"') {
-            std::string quote_error;
-            if (!parse_quoted(text, pos, value, quote_error)) {
-                return false;
+        while (true) {
+            std::string item;
+            if (pos < text.size() && text[pos] == '"') {
+                std::string quote_error;
+                if (!parse_quoted(text, pos, item, quote_error)) {
+                    return false;
+                }
+            } else {
+                const size_t item_end = std::min(text.size(), text.find_first_of(lists ? " \t," : " \t", pos));
+                item = text.substr(pos, item_end - pos);
+                pos = item_end;
             }
-        } else {
-            const size_t value_end = std::min(text.size(), text.find_first_of(" \t", pos));
-            value = text.substr(pos, value_end - pos);
-            pos = value_end;
+            value += item;
+            if (!lists || pos >= text.size() || text[pos] != ',') {
+                break;
+            }
+            value += '\n';
+            ++pos;
         }
         out.emplace_back(std::move(key), std::move(value));
     }
@@ -1130,10 +1149,17 @@ struct PendingPose {
     std::vector<PendingPosePart> parts;
 };
 
-// A sequence before its poses are known: steps name them.
+// A part a step line eases differently, before the part is known.
+struct PendingPartEase {
+    std::string part;
+    bool snap = false;
+};
+
+// A sequence before its poses and parts are known: steps name them.
 struct PendingSequence {
     PuppetSequence sequence;
     std::vector<std::string> step_poses;  // in step order, beside sequence.steps
+    std::vector<std::vector<PendingPartEase>> step_part_eases;  // likewise
 };
 
 // Resolves a puppet's attach lines into parents, joints and constraints, places every
@@ -1280,7 +1306,28 @@ bool finish_puppet(PuppetItem& puppet, const std::vector<PendingAttach>& attache
                                                {puppet.name, sequence.name, pending.step_poses[i]});
                 return false;
             }
-            sequence.steps[i].pose = it->second;
+            SequenceStep& step = sequence.steps[i];
+            step.pose = it->second;
+            const PuppetPose& pose = puppet.poses[step.pose];
+            for (const PendingPartEase& ease : pending.step_part_eases[i]) {
+                const auto part = part_index.find(ease.part);
+                if (part == part_index.end()) {
+                    error = sprat::core::tr_format(
+                        "Puppet \"{0}\" sequence \"{1}\" step {2} eases unknown part \"{3}\"",
+                        {puppet.name, sequence.name, std::to_string(i + 1), ease.part});
+                    return false;
+                }
+                const bool set = std::ranges::any_of(
+                    pose.settings, [&part](const PoseSetting& setting) { return setting.part == part->second; });
+                if (!set) {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Puppet \"{0}\" sequence \"{1}\" step {2} eases part \"{3}\", which pose \"{4}\" doesn't set; it is ignored",
+                        {puppet.name, sequence.name, std::to_string(i + 1), ease.part, pose.name}));
+                    continue;
+                }
+                step.part_eases.push_back({part->second, ease.snap});
+            }
+            std::ranges::sort(step.part_eases, {}, &StepPartEase::part);
         }
         if (sequence.steps.empty()) {
             warnings.push_back(sprat::core::tr_format("Puppet \"{0}\" sequence \"{1}\" has no steps",
@@ -1527,15 +1574,16 @@ bool read_sequence_settings(const std::string& settings, const std::string& line
 }
 
 // Reads a sequence's "- pose" line: the pose, then in:FRAMES, hold:FRAMES and
-// ease:linear|step, each at most once. False, with a warning, when it names no pose or
-// lasts no frame; a setting that doesn't fit is reported and ignored.
+// ease:linear|step, each at most once, and step:PARTS and linear:PARTS, the parts that ease
+// the other way (comma-separated, any number of times). False, with a warning, when it
+// names no pose or lasts no frame; a setting that doesn't fit is reported and ignored.
 bool read_sequence_step_line(const std::string& trimmed, std::string& pose, SequenceStep& step,
-                             std::vector<std::string>& warnings) {
+                             std::vector<PendingPartEase>& part_eases, std::vector<std::string>& warnings) {
     size_t pos = trimmed.find("pose") + 4;
     std::vector<std::pair<std::string, std::string>> items;
-    if (!read_name_at(trimmed, pos, pose) || !split_settings(trimmed.substr(pos), items)) {
+    if (!read_name_at(trimmed, pos, pose) || !split_settings(trimmed.substr(pos), items, true)) {
         warnings.push_back(sprat::core::tr_format(
-            "Puppets file line \"{0}\" is not - pose \"POSE\" [in:FRAMES] [hold:FRAMES] [ease:linear|step]; it is ignored",
+            "Puppets file line \"{0}\" is not - pose \"POSE\" [in:FRAMES] [hold:FRAMES] [ease:linear|step] [step:PARTS] [linear:PARTS]; it is ignored",
             {trimmed}));
         return false;
     }
@@ -1562,6 +1610,20 @@ bool read_sequence_step_line(const std::string& trimmed, std::string& pose, Sequ
         } else if (key == "ease" && !has_ease && (value == "linear" || value == "step")) {
             has_ease = true;
             step.snap = value == "step";
+        } else if (key == "step" || key == "linear") {
+            std::istringstream parts(value);
+            std::string part;
+            while (std::getline(parts, part)) {
+                if (part.empty()) {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Step line \"{0}\" {1} names an empty part; it is ignored", {trimmed, key}));
+                } else if (std::ranges::any_of(part_eases, [&part](const PendingPartEase& e) { return e.part == part; })) {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Step line \"{0}\" eases part \"{1}\" more than once; the first is kept", {trimmed, part}));
+                } else {
+                    part_eases.push_back({part, key == "step"});
+                }
+            }
         } else {
             warnings.push_back(sprat::core::tr_format(
                 "Step line \"{0}\" has an unknown or repeated setting \"{1}\"; it is ignored",
@@ -1573,6 +1635,14 @@ bool read_sequence_step_line(const std::string& trimmed, std::string& pose, Sequ
             "Step line \"{0}\" lasts no frame; give it in:FRAMES or hold:FRAMES; it is ignored", {trimmed}));
         return false;
     }
+    // Only the parts that ease the other way from the step are kept.
+    std::erase_if(part_eases, [&](const PendingPartEase& ease) {
+        if (ease.snap != step.snap) return false;
+        warnings.push_back(sprat::core::tr_format(
+            "Step line \"{0}\" eases part \"{1}\" {2}, as the whole step does; it is ignored",
+            {trimmed, ease.part, ease.snap ? "step" : "linear"}));
+        return true;
+    });
     return true;
 }
 
@@ -1699,9 +1769,11 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
             }
             std::string pose;
             SequenceStep step;
-            if (read_sequence_step_line(trimmed, pose, step, warnings)) {
+            std::vector<PendingPartEase> part_eases;
+            if (read_sequence_step_line(trimmed, pose, step, part_eases, warnings)) {
                 current_sequence->sequence.steps.push_back(step);
                 current_sequence->step_poses.push_back(std::move(pose));
+                current_sequence->step_part_eases.push_back(std::move(part_eases));
             }
         } else if (keyword == "pose") {
             current_part = nullptr;
@@ -2474,7 +2546,15 @@ std::string build_sprat_json(
                 j += ",\"in\":" + std::to_string(step.in);
                 j += ",\"hold\":" + std::to_string(step.hold);
                 j += ",\"ease\":\"" + std::string(step.snap ? "step" : "linear") + "\"";
-                j += "}";
+                j += ",\"part_eases\":[";
+                for (size_t ei = 0; ei < step.part_eases.size(); ++ei) {
+                    if (ei > 0) j += ',';
+                    const StepPartEase& ease = step.part_eases[ei];
+                    j += "{\"part\":" + std::to_string(ease.part);
+                    j += ",\"part_name\":\"" + escape_json(puppet.parts[ease.part].name) + "\"";
+                    j += ",\"ease\":\"" + std::string(ease.snap ? "step" : "linear") + "\"}";
+                }
+                j += "]}";
             }
             j += "]}";
         }
