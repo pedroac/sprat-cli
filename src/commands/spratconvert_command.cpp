@@ -1514,8 +1514,9 @@ bool parse_tint(const std::string& value, std::array<int, 3>& rgb) {
 }
 
 // Reads a pose's "- part" line: the part, then variant:NAME, angle:DEGREES, offset:X,Y,
-// at:X,Y, scale:S or scale:X,Y, opacity:A and tint:#RRGGBB, in any order, each at most once. False, with a warning, when it names no part;
-// a setting that doesn't fit is reported and ignored.
+// at:X,Y, scale:S or scale:X,Y, opacity:A and tint:#RRGGBB, in any order, each at most once.
+// False, with a warning, when it names no part; a setting that doesn't fit is reported and
+// ignored.
 bool read_pose_part_line(const std::string& trimmed, PendingPosePart& out, std::vector<std::string>& warnings) {
     out.line = trimmed;
     size_t pos = trimmed.find("part") + 4;
