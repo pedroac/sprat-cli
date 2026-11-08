@@ -186,6 +186,7 @@ jobs:
           Copy-Item -Path transforms -Destination $outDir -Recurse -Force
           Copy-Item -Path LICENSE -Destination $outDir -Force
           Copy-Item -Path README.md -Destination $outDir -Force
+          Copy-Item -Path docs -Destination $outDir -Recurse -Force
           Compress-Archive -Path "$outDir/*" -DestinationPath "dist/sprat-cli-windows-x64.zip" -Force
 
       - name: Upload packaged artifact

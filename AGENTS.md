@@ -49,6 +49,7 @@ between commands.
 - `tests/` — C++ unit tests and shell/Python integration tests, registered in
   `tests/CMakeLists.txt`; asset baselines in `tests/baselines/`.
 - `man/sprat-cli.1` — manual page.
+- `docs/` — detailed user docs, linked from `README.md`.
 
 ## Coding practices
 
@@ -89,7 +90,8 @@ ctest --test-dir build --output-on-failure
 Any change that affects requirements, usage, options, defaults or results
 **must** update the relevant docs in the same change:
 
-- `README.md`
+- `README.md` (overview and quick start only)
+- `docs/*.md` (detailed docs, one page per tool or format)
 - `man/sprat-cli.1`
 - `--help` text of the affected tool
 - `README-assets/` examples when visual output changes
