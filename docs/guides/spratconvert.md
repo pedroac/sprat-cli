@@ -29,6 +29,7 @@
 | `--markers FILE` | Include pivot points, hitboxes, etc. (see [Markers & Animations](markers-animations.md)) |
 | `--animations FILE` | Include named animations (see [Markers & Animations](markers-animations.md)) |
 | `--puppets FILE` | Include cutout puppet rigs, poses and sequences |
+| `--tiles FILE` | Include tile types, themes, variations and flags |
 
 ## Quick examples
 

@@ -56,6 +56,7 @@ sprat-cli \- sprite atlas layout and packing pipeline
 [\fB\-\-animations\fR \fIPATH\fR]
 [\fB\-\-auto\-animations\fR]
 [\fB\-\-puppets\fR \fIPATH\fR]
+[\fB\-\-tiles\fR \fIPATH\fR]
 .PP
 .B spratframes
 [\fB\-\-has\-rectangles\fR]
@@ -193,8 +194,8 @@ Transforms are Jsonnet files, selected by name (for example \fBjson\fR, \fBraw\f
 Named transforms are searched in the \fBtransforms\fR directory beside the executable, the user data directory, and the global install directory.
 \fB\-\-list\-transforms\fR lists them.
 .PP
-Optional \fB\-\-markers\fR, \fB\-\-animations\fR and \fB\-\-puppets\fR files add markers (pivots, hitboxes, ...), animations and puppet rigs to the data transforms receive.
-Without them, markers, animations and puppets are read from the layout stream.
+Optional \fB\-\-markers\fR, \fB\-\-animations\fR, \fB\-\-puppets\fR and \fB\-\-tiles\fR files add markers (pivots, hitboxes, ...), animations, puppet rigs and tile types to the data transforms receive.
+Without them, markers, animations, puppets and tiles are read from the layout stream.
 A \fBroot\fR line in these files resolves relative paths; sprite names are not changed by it.
 In the layout stream they share the layout's \fBroot\fR line; a second one is an error.
 Names in these files may not be empty.
@@ -209,13 +210,13 @@ Layout \fBalias\fR lines are expanded into frames that share the canonical sprit
 A transform evaluates to an object with \fBname\fR, \fBdescription\fR, \fBextension\fR, and either \fBcontent\fR (one output, optionally named by \fBfilename\fR with \fB\-\-output\-dir\fR) or \fBfiles\fR, an array of \fB{filename, content}\fR that requires \fB\-\-output\-dir\fR.
 File names must be plain names that are valid on every platform, or nothing is written.
 .PP
-The layout data is \fBstd.extVar("sprat")\fR: global fields such as \fBscale\fR (and \fBscale_text\fR, the same value as text), \fBextrude\fR, \fBmultipack\fR, \fBatlases\fR, \fBsprites\fR, \fBanimations\fR, \fBpuppets\fR and \fBmarkers\fR (each with \fBsprite_index\fR, \-1 for global markers).
+The layout data is \fBstd.extVar("sprat")\fR: global fields such as \fBscale\fR (and \fBscale_text\fR, the same value as text), \fBextrude\fR, \fBmultipack\fR, \fBatlases\fR, \fBsprites\fR, \fBanimations\fR, \fBpuppets\fR, \fBtiles\fR, \fBtile_flags\fR and \fBmarkers\fR (each with \fBsprite_index\fR, \-1 for global markers).
 Each sprite has its atlas rect (\fBx\fR, \fBy\fR, \fBw\fR, \fBh\fR, \fBatlas_index\fR), trims, \fBsource_w\fR/\fBsource_h\fR, \fBrotated\fR, \fBhas_pivot\fR and pivot fields (absolute and normalized), nine-slice fields, its \fBmarkers\fR, \fBalias_of\fR, and stable FNV-1a name hashes.
 Marker files use original-image pixels; exported markers, pivots, trims and nine-slice insets are scaled by the layout's \fBscale\fR into atlas pixels.
 Shared helpers live in \fBsprat.libsonnet\fR (\fBimport "sprat.libsonnet"\fR).
 README.md lists every field.
 .PP
-The built-in JSON transform produces a top-level \fBatlases\fR array (each entry has \fBwidth\fR, \fBheight\fR, \fBpath\fR), a flat top-level \fBsprites\fR array, and a top-level \fBmarkers\fR array of global markers when there are any. Sprite spatial data is grouped into nested objects: \fBrect\fR (\fBx\fR, \fBy\fR, \fBw\fR, \fBh\fR), \fBpivot\fR (\fBx\fR, \fBy\fR), and \fBtrim\fR (\fBleft\fR, \fBtop\fR, \fBright\fR, \fBbottom\fR). Index fields are omitted from \fBsprites[]\fR and \fBanimations[]\fR entries.
+The built-in JSON transform produces a top-level \fBatlases\fR array (each entry has \fBwidth\fR, \fBheight\fR, \fBpath\fR), a flat top-level \fBsprites\fR array, and a top-level \fBmarkers\fR array of global markers when there are any. Sprite spatial data is grouped into nested objects: \fBrect\fR (\fBx\fR, \fBy\fR, \fBw\fR, \fBh\fR), \fBpivot\fR (\fBx\fR, \fBy\fR), and \fBtrim\fR (\fBleft\fR, \fBtop\fR, \fBright\fR, \fBbottom\fR). Index fields are omitted from \fBsprites[]\fR and \fBanimations[]\fR entries. With tiles it also writes a \fBtiles\fR array and a \fBtile_flags\fR table (each flag's \fBindex\fR and \fBname\fR), so a consumer can map the bits in a tile's \fBflags_bitmask\fR back to flag names.
 .PP
 The \fBAseprite\fR transform produces an Aseprite JSON Array sprite sheet. When animations are present the \fBframeTags\fR array is built from them; an animation whose frames are not one ascending run becomes several tags.
 .PP
@@ -511,6 +512,28 @@ An \fBattach\fR line pins the child part's point marker, in every sprite it show
 \fBleeway\fR lets it drift up to \fIN\fR original-image pixels beyond that (default 0); \fBangle\fR limits how far, in degrees clockwise, the child turns relative to its parent (between \-360 and 360; default free).
 Missing markers, parts without variants, puppets without parts, empty poses and sequences, and steps that last no frame are reported. Attaching an unknown part, a part to itself or two positioned parts, a cycle of parents, repeated puppet, part, variant or pose names, a part with neither a position nor a parent, and a pose that sets an unknown part or variant, sets a part twice, turns it beyond its joint's limits, moves an attached part or offsets a positioned one, and a sequence that plays an unknown pose, repeats a sequence name or has an fps above 100 are errors.
 Currently the \fBraw\fR transform writes puppets; custom transforms read \fBsprat.puppets\fR.
+.RE
+.TP
+\fB\-\-tiles\fR \fIPATH\fR
+Load a tiles plaintext file: tile types with codes, layers, flags, themes and sprite variations with neighbor rules. Lines:
+.RS
+.PP
+flags \fIname\fR [\fIname\fR ...]
+.br
+tile "\fIname\fR" code:\fIC\fR [layers:\fIN\fR[,\fIN\fR...]] [flags:\fIf\fR[,\fIf\fR...]]
+.br
+theme "\fIname\fR"
+.br
+\- sprite "\fIsprite\fR" [rules:\fItext\fR]
+.br
+\- sprite:"\fIsprite\fR" [rules:\fItext\fR]
+.PP
+\fBflags\fR defines the flag names in order: the first is bit 0, up to 32. Define flags before the tiles that use them.
+A \fBtile\fR code is a single alphanumeric character and must be unique; a tile without exactly one valid code is ignored. \fBlayers\fR lists layer IDs for editors and does not affect rules.
+A \fBtheme\fR belongs to the current tile, and a \fB\- sprite\fR line adds a variation to the current theme: a sprite path (resolved against \fBroot\fR like markers paths) or a sprite name, quoted if it has spaces. The colon form \fB\- sprite:\fR\fIsprite\fR is the same line.
+\fBrules\fR is free text describing the neighbor rule (for example \fBisolated\fR or \fBg[2,46]\fR); \fBspratconvert\fR stores it without interpreting it.
+Problems are reported and the offending line or tile is ignored; a tiles file never stops the conversion.
+The \fBjson\fR transform writes \fBtiles\fR and \fBtile_flags\fR; custom transforms read \fBsprat.tiles\fR and \fBsprat.tile_flags\fR.
 .RE
 .SS spratframes
 .TP

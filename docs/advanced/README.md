@@ -17,7 +17,7 @@ Use these when you need to:
   - Serialization details
   - Loading from C/C++
 
-- **[Markers, Animations & Puppets](data-files.md)** — Complete DSL reference
+- **[Markers, Animations, Puppets & Tiles](data-files.md)** — Complete DSL reference
   - Marker types and shapes
   - Animation loop modes and aliases
   - Puppet rigging, poses, sequences

@@ -28,6 +28,7 @@
 - `--markers FILE` — Include markers (pivots, hitboxes, etc.)
 - `--animations FILE` — Include named animations and sequences
 - `--puppets FILE` — Include puppet rigs, poses, and sequences
+- `--tiles FILE` — Include tile types, themes, variations and flags
 - `--auto-animations` — Auto-detect animations from sprite filenames (e.g., `walk_01.png` → `walk` animation)
 
 ### Variants
@@ -240,13 +241,15 @@ Available via `std.extVar("sprat")`:
 | `scale`, `extrude` | number | Layout-level scale and extrusion |
 | `scale_text` | string | Scale as text (up to 8 sig digits) |
 | `puppets`, `has_puppets`, `puppet_count` | object/bool/number | Puppet rigs (if included) |
+| `tiles`, `has_tiles`, `tile_count` | array/bool/number | Tile types (if included) |
+| `tile_flags` | array | Flag table: each `{index, name}` maps a `flags_bitmask` bit to its flag |
 | `has_animations`, `has_markers` | boolean | Whether animations/markers present |
 | `animation_count`, `marker_count`, `sprite_count` | number | Counts |
 | `output_stem`, `output_stem_hash_hex` | string | Variant name and FNV-1a hash |
 | `output_pattern_hash_hex` | string | Hash of `-a` pattern (stable across transforms) |
 | `output_pattern` | string | The `-a` pattern as given (empty without one) |
 | `fps` | number | Default animation speed |
-| `animations_path`, `markers_path`, `puppets_path` | string | Data file paths |
+| `animations_path`, `markers_path`, `puppets_path`, `tiles_path` | string | Data file paths |
 
 **Per sprite (`sprites[]`):**
 
@@ -291,6 +294,17 @@ Available via `std.extVar("sprat")`:
 | `joints` | `{index, child, parent, child_marker, parent_marker, leeway, has_angle, angle_min, angle_max}` |
 | `poses` | Pose definitions with part variants and transforms |
 | `sequences` | Animation sequences with timing and easing |
+
+**Per tile (`tiles[]`):**
+
+| Field | Description |
+|---|---|
+| `name`, `index` | Tile identity |
+| `code` | Single alphanumeric tile code |
+| `layers` | Layer IDs for editors (does not affect rules) |
+| `flags_bitmask` | Bits of the flags set on this tile (see `tile_flags`) |
+| `themes` | Themes, each `{index, name, variations}` |
+| `themes[].variations` | `{index, name, sprite_index, sprite_name, sprite_path, rules}` |
 
 ### Shared helpers
 

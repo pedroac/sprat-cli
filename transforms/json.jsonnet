@@ -38,6 +38,27 @@ local atlas_obj(at) = {
   path: at.path,
 };
 
+local variation_obj(v) = {
+  name: v.name,
+  sprite_index: v.sprite_index,
+  sprite_name: v.sprite_name,
+  sprite_path: v.sprite_path,
+  rules: v.rules,
+};
+
+local theme_obj(t) = {
+  name: t.name,
+  variations: [variation_obj(v) for v in t.variations],
+};
+
+local tile_obj(t) = {
+  name: t.name,
+  code: t.code,
+  layers: t.layers,
+  flags_bitmask: t.flags_bitmask,
+  themes: [theme_obj(th) for th in t.themes],
+};
+
 local result = {
   multipack: sprat.multipack,
   scale: sprat.scale,
@@ -46,6 +67,10 @@ local result = {
   sprites: [sprite_obj(s) for s in sprat.sprites],
 } +
 (if sprat.has_animations then { animations: [anim_obj(a) for a in sprat.animations] } else {}) +
+(if sprat.has_tiles then {
+  tile_flags: [{ index: f.index, name: f.name } for f in sprat.tile_flags],
+  tiles: [tile_obj(t) for t in sprat.tiles],
+} else {}) +
 // Markers given before any path in the markers file, which belong to no one sprite.
 (local globals = [m for m in sprat.markers if m.sprite_index < 0];
  if std.length(globals) > 0 then { markers: globals } else {});

@@ -273,6 +273,51 @@ fi
 grep -q '"atlases"' "$tmp_dir/out.builtin.json"
 grep -q '"animations"' "$tmp_dir/out.builtin.json"
 
+# ── Tiles (--tiles) ──────────────────────────────────────────────────────────
+tiles_file="$tmp_dir/tiles.txt"
+cat > "$tiles_file" <<'TILES'
+flags solid water
+tile grass code:G layers:0,2 flags:solid,water
+theme default
+- sprite "./frames/a.png" rules:isolated
+- sprite:b rules:g[2,46]
+TILES
+
+"$convert_bin" --transform json --tiles "$(fix_path "$tiles_file")" < "$layout_file" > "$tmp_dir/out.tiles.json"
+grep -q '"tiles": \[' "$tmp_dir/out.tiles.json"
+grep -q '"tile_flags": \[' "$tmp_dir/out.tiles.json"
+grep -q '"name": "solid"' "$tmp_dir/out.tiles.json"
+grep -q '"name": "water"' "$tmp_dir/out.tiles.json"
+grep -q '"code": "G"' "$tmp_dir/out.tiles.json"
+grep -q '"flags_bitmask": 3' "$tmp_dir/out.tiles.json"
+grep -q '"sprite_path": "./frames/a.png"' "$tmp_dir/out.tiles.json"
+grep -q '"rules": "isolated"' "$tmp_dir/out.tiles.json"
+grep -q '"rules": "g\[2,46\]"' "$tmp_dir/out.tiles.json"
+# The colon form "- sprite:NAME" is the same line as "- sprite NAME".
+grep -q '"sprite_name": "b"' "$tmp_dir/out.tiles.json"
+
+# A duplicate code on one line is reported and the tile is dropped, without breaking the
+# JSON output or taking the code away from a later tile.
+printf 'tile a code:A code:B\ntile b code:A\n' > "$tmp_dir/tiles.code.txt"
+"$convert_bin" --transform json --tiles "$(fix_path "$tmp_dir/tiles.code.txt")" < "$layout_file" \
+  > "$tmp_dir/out.tiles.code.json" 2> "$tmp_dir/tiles.code.err"
+grep -qF 'Tile "a" has more than one code' "$tmp_dir/tiles.code.err"
+grep -q '"code": "A"' "$tmp_dir/out.tiles.code.json"
+if grep -q '"code": "B"' "$tmp_dir/out.tiles.code.json"; then
+  echo "tile with a duplicate code was kept" >&2
+  exit 1
+fi
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m json.tool "$(fix_path "$tmp_dir/out.tiles.code.json")" > /dev/null
+fi
+
+# Tiles lines are read from the layout stream when --tiles is absent.
+cat "$layout_file" "$tiles_file" > "$tmp_dir/layout.tiles.txt"
+"$convert_bin" --transform json < "$tmp_dir/layout.tiles.txt" > "$tmp_dir/out.tiles.stream.json"
+grep -q '"name": "grass"' "$tmp_dir/out.tiles.stream.json"
+
+"$convert_bin" --help | grep -q -- '--tiles'
+
 # ── Raw transform (sprat-lib's input) ────────────────────────────────────────
 raw_layout_file="$tmp_dir/raw.layout.txt"
 cat > "$raw_layout_file" <<'LAYOUT'

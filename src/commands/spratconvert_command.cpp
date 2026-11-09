@@ -1780,12 +1780,25 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
 
     std::istringstream iss(puppets_text);
     std::string line;
+    // A tiles block in the layout stream also uses "- sprite" for its variations; track
+    // the block so those lines aren't mistaken for puppet variants.
+    bool in_tiles_block = false;
     while (std::getline(iss, line)) {
         std::string trimmed = trim_copy(line);
         if (trimmed.empty() || trimmed[0] == '#') {
             continue;
         }
         const std::string keyword = sprat::core::metadata_line_keyword(trimmed);
+        if (from_layout_stream) {
+            if (keyword == "flags" || keyword == "tile" || keyword == "theme") {
+                in_tiles_block = true;
+            } else if (keyword == "puppet") {
+                in_tiles_block = false;
+            }
+        }
+        if (from_layout_stream && keyword == "- sprite" && in_tiles_block) {
+            continue;
+        }
         if (!is_puppets_keyword(keyword)) {
             if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
@@ -1976,12 +1989,14 @@ static std::vector<std::string> split_commas(const std::string& value) {
 std::vector<TileItem> parse_tiles_data(
     const std::string& tiles_text,
     bool from_layout_stream,
+    const Layout& layout,
     const std::unordered_map<std::string, int>& sprite_by_path,
     const std::unordered_map<std::string, int>& sprite_by_name,
     const std::vector<std::string>& sprite_names,
+    std::vector<TileFlag>& tile_flags,
     std::vector<std::string>& warnings) {
     std::vector<TileItem> tiles;
-    std::vector<TileFlag> flags;
+    tile_flags.clear();
     std::istringstream iss(tiles_text);
     std::string line;
     std::string raw_root;
@@ -1995,7 +2010,17 @@ std::vector<TileItem> parse_tiles_data(
         if (trimmed.empty() || trimmed[0] == '#') {
             continue;
         }
-        const std::string keyword = sprat::core::metadata_line_keyword(trimmed);
+        std::string keyword = sprat::core::metadata_line_keyword(trimmed);
+        // "- sprite:NAME" is the same line as "- sprite NAME"; only the keyword differs.
+        if (keyword.starts_with("- sprite:")) {
+            keyword = "- sprite";
+        }
+        // A puppet in the layout stream ends any tiles block; its "- sprite" lines are not
+        // tile variations.
+        if (from_layout_stream && keyword == "puppet") {
+            current_tile = nullptr;
+            current_theme = nullptr;
+        }
         if (!is_tiles_keyword(keyword)) {
             if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
@@ -2023,7 +2048,7 @@ std::vector<TileItem> parse_tiles_data(
                         "Flag \"{0}\" is defined more than once; it is ignored", {flag_name}));
                     continue;
                 }
-                if (flags.size() >= static_cast<size_t>(k_max_tile_flags)) {
+                if (tile_flags.size() >= static_cast<size_t>(k_max_tile_flags)) {
                     warnings.push_back(sprat::core::tr_format(
                         "Too many flags (max {0}); flag \"{1}\" is ignored",
                         {std::to_string(k_max_tile_flags), flag_name}));
@@ -2032,50 +2057,48 @@ std::vector<TileItem> parse_tiles_data(
                 }
                 TileFlag f;
                 f.name = flag_name;
-                f.index = static_cast<int>(flags.size());
-                flags.push_back(std::move(f));
+                f.index = static_cast<int>(tile_flags.size());
+                tile_flags.push_back(std::move(f));
             }
         } else if (keyword == "tile") {
             // tile NAME code:C [layers:N,N,...] [flags:F,F,...]
+            current_tile = nullptr;
+            current_theme = nullptr;
+
             size_t pos = 4;  // skip "tile"
             std::string tile_name;
             if (!read_name_at(trimmed, pos, tile_name)) {
                 warnings.push_back(tr("Tile line has no valid name; it is ignored"));
                 continue;
             }
-            current_tile = nullptr;
-            current_theme = nullptr;
 
-            // Parse attributes
+            std::vector<std::pair<std::string, std::string>> attrs;
+            if (!split_settings(trimmed.substr(pos), attrs)) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Tile line \"{0}\" has an unterminated quote; it is ignored", {trimmed}));
+                continue;
+            }
+
             std::vector<int> layers;
             uint32_t flags_bitmask = 0;
             char code = 0;
-            size_t code_count = 0;
+            bool has_code = false;
+            bool code_conflict = false;
 
-            std::istringstream attrs(trimmed.substr(pos));
-            std::string attr;
-            while (attrs >> attr) {
-                const size_t colon_pos = attr.find(':');
-                if (colon_pos == std::string::npos) {
-                    continue;
-                }
-                const std::string key = attr.substr(0, colon_pos);
-                const std::string value = attr.substr(colon_pos + 1);
-
+            for (const auto& [key, value] : attrs) {
                 if (key == "code") {
                     if (value.size() != 1 || !std::isalnum(static_cast<unsigned char>(value[0]))) {
                         warnings.push_back(tr("Tile code must be a single alphanumeric character; it is ignored"));
                         continue;
                     }
-                    code = value[0];
-                    code_count++;
-                    if (!tile_codes.insert(code).second) {
+                    if (has_code) {
                         warnings.push_back(sprat::core::tr_format(
-                            "Tile code \"{0}\" is used more than once; it is ignored", {std::string(1, code)}));
-                        code_count--;
-                        code = 0;
+                            "Tile \"{0}\" has more than one code; it is ignored", {tile_name}));
+                        code_conflict = true;
                         continue;
                     }
+                    code = value[0];
+                    has_code = true;
                 } else if (key == "layers") {
                     const std::vector<std::string> parts = split_commas(value);
                     for (const auto& part : parts) {
@@ -2090,9 +2113,9 @@ std::vector<TileItem> parse_tiles_data(
                 } else if (key == "flags") {
                     const std::vector<std::string> parts = split_commas(value);
                     for (const auto& flag_name : parts) {
-                        const auto it = std::find_if(flags.begin(), flags.end(),
+                        const auto it = std::find_if(tile_flags.begin(), tile_flags.end(),
                                                      [&](const TileFlag& f) { return f.name == flag_name; });
-                        if (it == flags.end()) {
+                        if (it == tile_flags.end()) {
                             warnings.push_back(sprat::core::tr_format(
                                 "Tile \"{0}\" references unknown flag \"{1}\"; it is ignored",
                                 {tile_name, flag_name}));
@@ -2100,12 +2123,25 @@ std::vector<TileItem> parse_tiles_data(
                         }
                         flags_bitmask |= (1u << it->index);
                     }
+                } else {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Tile line \"{0}\" has unknown setting \"{1}\"; it is ignored", {trimmed, key}));
                 }
             }
 
-            if (code_count != 1) {
+            if (code_conflict) {
+                continue;
+            }
+            if (!has_code) {
                 warnings.push_back(sprat::core::tr_format(
                     "Tile \"{0}\" has no valid code; it is ignored", {tile_name}));
+                continue;
+            }
+            // Reserve the code only once the tile is accepted, so a rejected tile doesn't
+            // take its code away from a later one.
+            if (!tile_codes.insert(code).second) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Tile code \"{0}\" is used more than once; it is ignored", {std::string(1, code)}));
                 continue;
             }
 
@@ -2116,9 +2152,9 @@ std::vector<TileItem> parse_tiles_data(
             tile.flags_bitmask = flags_bitmask;
             tiles.push_back(std::move(tile));
             current_tile = &tiles.back();
-            current_theme = nullptr;
         } else if (keyword == "theme") {
             // theme NAME
+            current_theme = nullptr;
             if (!current_tile) {
                 warnings.push_back(tr("Theme line outside a tile block; it is ignored"));
                 continue;
@@ -2134,45 +2170,92 @@ std::vector<TileItem> parse_tiles_data(
             current_tile->themes.push_back(std::move(theme));
             current_theme = &current_tile->themes.back();
         } else if (keyword == "- sprite") {
-            // - sprite:NAME [rules:CONSTRAINT]
+            // - sprite NAME [rules:CONSTRAINT]  or  - sprite:NAME [rules:CONSTRAINT]
             if (!current_theme) {
-                warnings.push_back(tr("Sprite variation outside a theme block; it is ignored"));
+                // In the layout stream this may be a puppet's "- sprite" line.
+                if (!from_layout_stream) {
+                    warnings.push_back(tr("Sprite variation outside a theme block; it is ignored"));
+                }
                 continue;
             }
-            size_t pos = trimmed.find("sprite") + 6;
-            std::istringstream rest(trimmed.substr(pos));
-            std::string sprite_attr;
-            std::string rules_attr;
+            size_t pos = std::string("- sprite").size();
+            while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
+                ++pos;
+            }
+            if (pos < trimmed.size() && trimmed[pos] == ':') {
+                ++pos;  // "- sprite:NAME"
+            }
 
-            while (rest >> sprite_attr) {
-                const size_t colon_pos = sprite_attr.find(':');
-                if (colon_pos == std::string::npos) {
+            std::string sprite_key;
+            // split_settings leaves a bare quoted token quoted, so read a leading quoted name first.
+            if (pos < trimmed.size() && trimmed[pos] == '"') {
+                std::string quote_error;
+                if (!parse_quoted(trimmed, pos, sprite_key, quote_error)) {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Tile sprite line \"{0}\" has an unterminated quote; it is ignored", {trimmed}));
                     continue;
                 }
-                const std::string key = sprite_attr.substr(0, colon_pos);
-                const std::string value = sprite_attr.substr(colon_pos + 1);
+            }
 
-                if (key == "sprite") {
-                    // Resolve sprite by name/path
-                    const int sprite_idx = resolve_sprite_index(raw_root, value, sprite_by_path, sprite_by_name);
-                    if (sprite_idx < 0) {
+            std::vector<std::pair<std::string, std::string>> settings;
+            if (!split_settings(trimmed.substr(pos), settings)) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Tile sprite line \"{0}\" has an unterminated quote; it is ignored", {trimmed}));
+                continue;
+            }
+
+            std::string rules;
+            bool has_rules = false;
+            bool ok = true;
+            for (const auto& [key, value] : settings) {
+                if (key.empty() || key == "sprite") {
+                    if (!sprite_key.empty()) {
                         warnings.push_back(sprat::core::tr_format(
-                            "Tile sprite \"{0}\" matches no sprite; it is ignored", {value}));
-                        continue;
+                            "Tile sprite line \"{0}\" names more than one sprite; it is ignored", {trimmed}));
+                        ok = false;
+                        break;
                     }
-
-                    TileVariation var;
-                    var.name = value;  // Use sprite name as variation name if not explicit
-                    var.sprite_index = sprite_idx;
-                    var.sprite_name = sprite_names[static_cast<size_t>(sprite_idx)];
-                    var.sprite_path = value;
-                    current_theme->variations.push_back(std::move(var));
+                    sprite_key = value;
                 } else if (key == "rules") {
-                    if (!current_theme->variations.empty()) {
-                        current_theme->variations.back().rules = value;
+                    if (has_rules) {
+                        warnings.push_back(sprat::core::tr_format(
+                            "Tile sprite line \"{0}\" sets rules more than once; it is ignored", {trimmed}));
+                        ok = false;
+                        break;
                     }
+                    rules = value;
+                    has_rules = true;
+                } else {
+                    warnings.push_back(sprat::core::tr_format(
+                        "Tile sprite line \"{0}\" has unknown setting \"{1}\"; it is ignored",
+                        {trimmed, key}));
+                    ok = false;
+                    break;
                 }
             }
+            if (!ok) {
+                continue;
+            }
+            if (sprite_key.empty()) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Tile sprite line \"{0}\" has no sprite; it is ignored", {trimmed}));
+                continue;
+            }
+
+            const int sprite_idx = resolve_sprite_index(raw_root, sprite_key, sprite_by_path, sprite_by_name);
+            if (sprite_idx < 0) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Tile sprite \"{0}\" matches no sprite; it is ignored", {sprite_key}));
+                continue;
+            }
+
+            TileVariation var;
+            var.name = sprite_key;
+            var.sprite_index = sprite_idx;
+            var.sprite_name = sprite_names[static_cast<size_t>(sprite_idx)];
+            var.sprite_path = layout.sprites[static_cast<size_t>(sprite_idx)].path;
+            var.rules = rules;
+            current_theme->variations.push_back(std::move(var));
         }
     }
 
@@ -2421,6 +2504,7 @@ std::string build_sprat_json(
     const std::vector<AnimationItem>& normalized_animations,
     const std::vector<PuppetItem>& puppets,
     const std::vector<TileItem>& tiles,
+    const std::vector<TileFlag>& tile_flags,
     const std::vector<std::vector<MarkerItem>>& sprite_markers,
     int global_pivot_x,
     int global_pivot_y,
@@ -2925,6 +3009,15 @@ std::string build_sprat_json(
     }
     j += "]";
 
+    // tile flags: the name-to-bit table a transform needs to read flags_bitmask
+    j += ",\"tile_flags\":[";
+    for (size_t fi = 0; fi < tile_flags.size(); ++fi) {
+        if (fi > 0) j += ',';
+        j += "{\"index\":" + std::to_string(tile_flags[fi].index);
+        j += ",\"name\":\"" + escape_json(tile_flags[fi].name) + "\"}";
+    }
+    j += "]";
+
     // global markers array
     j += ",\"markers\":[";
     for (size_t mi = 0; mi < marker_items.size(); ++mi) {
@@ -3114,7 +3207,7 @@ std::vector<GroupMember> discover_group_transforms(const std::string& group_name
 // The data of an empty layout, which transforms are evaluated with to read their name and
 // description for listing. Built like real data, so it has every field they may read.
 std::string empty_sprat_json() {
-    return build_sprat_json(Layout{}, {}, {}, {}, {}, {}, {}, 0, 0, false, "", "", "", "", "", "", "", -1);
+    return build_sprat_json(Layout{}, {}, {}, {}, {}, {}, {}, {}, 0, 0, false, "", "", "", "", "", "", "", -1);
 }
 
 void list_transforms() {
@@ -3281,6 +3374,7 @@ void print_usage() {
               << tr("                             loop modes: loop, once, pingpong, once-pingpong\n")
               << tr("  --auto-animations          Group frames into animations by name pattern\n")
               << tr("  --puppets PATH             Load external puppets file (cutout rigs, poses and sequences)\n")
+              << tr("  --tiles PATH               Load external tiles file (tile types, themes and variations)\n")
               << tr("  --help, -h                 Show this help message\n")
               << tr("  --version, -v              Show version\n");
 }
@@ -3527,9 +3621,10 @@ int run_spratconvert(int argc, char** argv) {
 
     // Parse tiles (after puppets since tiles don't have dependencies on them)
     std::vector<std::string> tiles_warnings;
+    std::vector<TileFlag> tile_flags;
     const std::vector<TileItem> tiles =
-        parse_tiles_data(tiles_text, tiles_path_arg.empty(), sprite_index_by_path,
-                         sprite_index_by_name, sprite_names, tiles_warnings);
+        parse_tiles_data(tiles_text, tiles_path_arg.empty(), layout, sprite_index_by_path,
+                         sprite_index_by_name, sprite_names, tile_flags, tiles_warnings);
     for (const std::string& warning : tiles_warnings) {
         std::cerr << tr("Warning: ") << warning << "\n";
     }
@@ -3630,7 +3725,8 @@ int run_spratconvert(int argc, char** argv) {
         int exit_code = 0;
         for (const GroupMember& member : group_members) {
             const std::string sprat_json = build_sprat_json(
-                layout, sprite_names, marker_items, normalized_animations, puppets, tiles, sprite_markers,
+                layout, sprite_names, marker_items, normalized_animations, puppets, tiles, tile_flags,
+                sprite_markers,
                 global_pivot_x, global_pivot_y, has_global_pivot,
                 output_pattern_arg, image_pattern_arg, member.variant,
                 markers_path_arg, animations_path_arg, puppets_path_arg, tiles_path_arg, animation_fps);
@@ -3677,7 +3773,8 @@ int run_spratconvert(int argc, char** argv) {
         : "";
 
     const std::string sprat_json = build_sprat_json(
-        layout, sprite_names, marker_items, normalized_animations, puppets, tiles, sprite_markers,
+        layout, sprite_names, marker_items, normalized_animations, puppets, tiles, tile_flags,
+        sprite_markers,
         global_pivot_x, global_pivot_y, has_global_pivot,
         output_pattern_arg, image_pattern_arg, output_stem,
         markers_path_arg, animations_path_arg, puppets_path_arg, tiles_path_arg, animation_fps);

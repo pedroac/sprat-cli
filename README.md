@@ -10,7 +10,7 @@ A free, scriptable, high-quality sprite packer for any pipeline.
 
 *   **CI/CD Pipelines**: Automate asset generation in your build process.
 *   **Shell Scripting**: Integrate naturally with `|`, `>`, and standard text tools.
-*   **Game Development**: Optimized packing algorithms for GPU memory, plus markers, animations and cutout puppets (rigs, poses and pose sequences) for engines.
+*   **Game Development**: Optimized packing algorithms for GPU memory, plus markers, animations, cutout puppets (rigs, poses and pose sequences) and tile types for engines.
 *   **Web & Apps**: Export to CSS, JSON, XML, or custom formats.
 
 ## Who it's for
