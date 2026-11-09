@@ -317,6 +317,22 @@ printf 'tile grass code:G\ntheme default\ntheme default\n' > "$tmp_dir/tiles.the
   > /dev/null 2> "$tmp_dir/tiles.theme.err"
 grep -qF 'Tile "grass" has more than one theme "default"' "$tmp_dir/tiles.theme.err"
 
+# A variation under an ignored theme is reported, not dropped silently.
+printf 'tile grass code:G\ntheme default\ntheme default\n- sprite a\n' > "$tmp_dir/tiles.theme.sprite.txt"
+"$convert_bin" --transform json --tiles "$(fix_path "$tmp_dir/tiles.theme.sprite.txt")" < "$layout_file" \
+  > /dev/null 2> "$tmp_dir/tiles.theme.sprite.err"
+grep -qF 'Sprite variation outside a theme block' "$tmp_dir/tiles.theme.sprite.err"
+
+# A repeated variation name within a theme is reported and the second one is dropped.
+printf 'tile grass code:G\ntheme default\n- sprite a\n- sprite a\n' > "$tmp_dir/tiles.variation.txt"
+"$convert_bin" --transform json --tiles "$(fix_path "$tmp_dir/tiles.variation.txt")" < "$layout_file" \
+  > "$tmp_dir/out.tiles.variation.json" 2> "$tmp_dir/tiles.variation.err"
+grep -qF 'Tile "grass" theme "default" has more than one variation "a"' "$tmp_dir/tiles.variation.err"
+if [ "$(grep -c '"sprite_name": "a"' "$tmp_dir/out.tiles.variation.json")" -ne 1 ]; then
+  echo "duplicate variation was kept" >&2
+  exit 1
+fi
+
 # Tiles lines are read from the layout stream when --tiles is absent.
 cat "$layout_file" "$tiles_file" > "$tmp_dir/layout.tiles.txt"
 "$convert_bin" --transform json < "$tmp_dir/layout.tiles.txt" > "$tmp_dir/out.tiles.stream.json"

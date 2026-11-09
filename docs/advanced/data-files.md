@@ -115,8 +115,8 @@ Here the face is placed 40 pixels above the puppet's pivot, and the fly is free.
 
 - `flags NAME...` defines the flag names, in order: the first is bit 0, the next bit 1, and so on, up to 32. A repeated name or a flag beyond the limit is ignored with a warning. Define flags before the tiles that use them.
 - `tile "NAME" code:C [layers:N,N,...] [flags:F,F,...]` starts a tile type. `code` is a single alphanumeric character and must be unique; a tile without exactly one valid code is ignored. `layers` lists the layer IDs the tile may appear on; it is for editors and does not affect rules. `flags` names flags defined by an earlier `flags` line; an unknown flag is ignored with a warning.
-- `theme "NAME"` starts a theme of the current tile.
-- `- sprite "SPRITE" [rules:CONSTRAINT]` adds a sprite variation to the current theme. `SPRITE` is a sprite path (resolved against `root` like markers paths) or a sprite name; quote a path with spaces. The colon form `- sprite:"SPRITE"` is the same line. `rules` is free text describing the neighbor rule, such as `isolated` or `g[2,46]`; `spratconvert` stores it without interpreting it. A sprite that matches no sprite is ignored with a warning.
+- `theme "NAME"` starts a theme of the current tile. Theme names must be unique within their tile; a duplicate is ignored with a warning.
+- `- sprite "SPRITE" [rules:CONSTRAINT]` adds a sprite variation to the current theme. `SPRITE` is a sprite path (resolved against `root` like markers paths) or a sprite name; quote a path with spaces. The colon form `- sprite:"SPRITE"` is the same line. `rules` is free text describing the neighbor rule, such as `isolated` or `g[2,46]`; `spratconvert` stores it without interpreting it. A sprite that matches no sprite is ignored with a warning. Variation names must be unique within their theme; a duplicate is ignored with a warning.
 
 Example `tiles.txt`:
 ```txt
