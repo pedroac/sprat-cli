@@ -1780,25 +1780,12 @@ std::vector<PuppetItem> parse_puppets_data(const std::string& puppets_text, bool
 
     std::istringstream iss(puppets_text);
     std::string line;
-    // A tiles block in the layout stream also uses "- sprite" for its variations; track
-    // the block so those lines aren't mistaken for puppet variants.
-    bool in_tiles_block = false;
     while (std::getline(iss, line)) {
         std::string trimmed = trim_copy(line);
         if (trimmed.empty() || trimmed[0] == '#') {
             continue;
         }
         const std::string keyword = sprat::core::metadata_line_keyword(trimmed);
-        if (from_layout_stream) {
-            if (keyword == "flags" || keyword == "tile" || keyword == "theme") {
-                in_tiles_block = true;
-            } else if (keyword == "puppet") {
-                in_tiles_block = false;
-            }
-        }
-        if (from_layout_stream && keyword == "- sprite" && in_tiles_block) {
-            continue;
-        }
         if (!is_puppets_keyword(keyword)) {
             if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
@@ -2002,6 +1989,9 @@ std::vector<TileItem> parse_tiles_data(
     std::string raw_root;
     std::unordered_set<std::string> flag_names;
     std::unordered_set<char> tile_codes;
+    std::unordered_set<std::string> tile_names;
+    std::unordered_set<std::string> theme_names;
+    std::unordered_set<std::string> variation_names;
     TileItem* current_tile = nullptr;
     TileTheme* current_theme = nullptr;
 
@@ -2011,12 +2001,11 @@ std::vector<TileItem> parse_tiles_data(
             continue;
         }
         std::string keyword = sprat::core::metadata_line_keyword(trimmed);
-        // "- sprite:NAME" is the same line as "- sprite NAME"; only the keyword differs.
-        if (keyword.starts_with("- sprite:")) {
-            keyword = "- sprite";
+        // "- variation:NAME" is the same line as "- variation NAME"; only the keyword differs.
+        if (keyword.starts_with("- variation:")) {
+            keyword = "- variation";
         }
-        // A puppet in the layout stream ends any tiles block; its "- sprite" lines are not
-        // tile variations.
+        // A puppet in the layout stream ends any tiles block.
         if (from_layout_stream && keyword == "puppet") {
             current_tile = nullptr;
             current_theme = nullptr;
@@ -2024,7 +2013,7 @@ std::vector<TileItem> parse_tiles_data(
         if (!is_tiles_keyword(keyword)) {
             if (!from_layout_stream || !(is_layout_keyword(keyword) || is_metadata_keyword(keyword))) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Tiles file line \"{0}\" is not a root, flags, tile, theme or - sprite line; it is ignored",
+                    "Tiles file line \"{0}\" is not a root, flags, tile, theme or - variation line; it is ignored",
                     {trimmed}));
             }
             continue;
@@ -2061,11 +2050,17 @@ std::vector<TileItem> parse_tiles_data(
             // tile NAME code:C [layers:N,N,...] [flags:F,F,...]
             current_tile = nullptr;
             current_theme = nullptr;
+            theme_names.clear();
 
             size_t pos = 4;  // skip "tile"
             std::string tile_name;
             if (!read_name_at(trimmed, pos, tile_name)) {
                 warnings.push_back(tr("Tile line has no valid name; it is ignored"));
+                continue;
+            }
+            if (tile_names.count(tile_name) != 0) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Tile \"{0}\" is defined more than once; it is ignored", {tile_name}));
                 continue;
             }
 
@@ -2147,6 +2142,7 @@ std::vector<TileItem> parse_tiles_data(
             tile.code = code;
             tile.layers = layers;
             tile.flags_bitmask = flags_bitmask;
+            tile_names.insert(tile_name);
             tiles.push_back(std::move(tile));
             current_tile = &tiles.back();
         } else if (keyword == "theme") {
@@ -2162,35 +2158,29 @@ std::vector<TileItem> parse_tiles_data(
                 warnings.push_back(tr("Theme line has no valid name; it is ignored"));
                 continue;
             }
-            const bool theme_exists = std::any_of(
-                current_tile->themes.begin(), current_tile->themes.end(),
-                [&](const TileTheme& t) { return t.name == theme_name; });
-            if (theme_exists) {
+            if (!theme_names.insert(theme_name).second) {
                 warnings.push_back(sprat::core::tr_format(
                     "Tile \"{0}\" has more than one theme \"{1}\"; it is ignored",
                     {current_tile->name, theme_name}));
                 continue;
             }
+            variation_names.clear();
             TileTheme theme;
             theme.name = theme_name;
             current_tile->themes.push_back(std::move(theme));
             current_theme = &current_tile->themes.back();
-        } else if (keyword == "- sprite") {
-            // - sprite NAME [rules:CONSTRAINT]  or  - sprite:NAME [rules:CONSTRAINT]
+        } else if (keyword == "- variation") {
+            // - variation NAME [rules:CONSTRAINT]  or  - variation:NAME [rules:CONSTRAINT]
             if (!current_theme) {
-                // In the layout stream this may be a puppet's "- sprite" line; a "- sprite"
-                // under a tile with no theme is a tiles mistake.
-                if (!from_layout_stream || current_tile) {
-                    warnings.push_back(tr("Sprite variation outside a theme block; it is ignored"));
-                }
+                warnings.push_back(tr("Variation line outside a theme block; it is ignored"));
                 continue;
             }
-            size_t pos = std::string("- sprite").size();
+            size_t pos = std::string("- variation").size();
             while (pos < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[pos]))) {
                 ++pos;
             }
             if (pos < trimmed.size() && trimmed[pos] == ':') {
-                ++pos;  // "- sprite:NAME"
+                ++pos;  // "- variation:NAME"
             }
 
             std::string sprite_key;
@@ -2199,7 +2189,7 @@ std::vector<TileItem> parse_tiles_data(
                 std::string quote_error;
                 if (!parse_quoted(trimmed, pos, sprite_key, quote_error)) {
                     warnings.push_back(sprat::core::tr_format(
-                        "Tile sprite line \"{0}\" has an unterminated quote; it is ignored", {trimmed}));
+                        "Tile variation line \"{0}\" has an unterminated quote; it is ignored", {trimmed}));
                     continue;
                 }
             }
@@ -2207,7 +2197,7 @@ std::vector<TileItem> parse_tiles_data(
             std::vector<std::pair<std::string, std::string>> settings;
             if (!split_settings(trimmed.substr(pos), settings)) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Tile sprite line \"{0}\" has an unterminated quote; it is ignored", {trimmed}));
+                    "Tile variation line \"{0}\" has an unterminated quote; it is ignored", {trimmed}));
                 continue;
             }
 
@@ -2215,10 +2205,10 @@ std::vector<TileItem> parse_tiles_data(
             bool has_rules = false;
             bool ok = true;
             for (const auto& [key, value] : settings) {
-                if (key.empty() || key == "sprite") {
+                if (key.empty()) {
                     if (!sprite_key.empty()) {
                         warnings.push_back(sprat::core::tr_format(
-                            "Tile sprite line \"{0}\" names more than one sprite; it is ignored", {trimmed}));
+                            "Tile variation line \"{0}\" names more than one sprite; it is ignored", {trimmed}));
                         ok = false;
                         break;
                     }
@@ -2226,7 +2216,7 @@ std::vector<TileItem> parse_tiles_data(
                 } else if (key == "rules") {
                     if (has_rules) {
                         warnings.push_back(sprat::core::tr_format(
-                            "Tile sprite line \"{0}\" sets rules more than once; it is ignored", {trimmed}));
+                            "Tile variation line \"{0}\" sets rules more than once; it is ignored", {trimmed}));
                         ok = false;
                         break;
                     }
@@ -2234,7 +2224,7 @@ std::vector<TileItem> parse_tiles_data(
                     has_rules = true;
                 } else {
                     warnings.push_back(sprat::core::tr_format(
-                        "Tile sprite line \"{0}\" has unknown setting \"{1}\"; it is ignored",
+                        "Tile variation line \"{0}\" has unknown setting \"{1}\"; it is ignored",
                         {trimmed, key}));
                     ok = false;
                     break;
@@ -2245,20 +2235,17 @@ std::vector<TileItem> parse_tiles_data(
             }
             if (sprite_key.empty()) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Tile sprite line \"{0}\" has no sprite; it is ignored", {trimmed}));
+                    "Tile variation line \"{0}\" has no sprite; it is ignored", {trimmed}));
                 continue;
             }
 
             const int sprite_idx = resolve_sprite_index(raw_root, sprite_key, sprite_by_path, sprite_by_name);
             if (sprite_idx < 0) {
                 warnings.push_back(sprat::core::tr_format(
-                    "Tile sprite \"{0}\" matches no sprite; it is ignored", {sprite_key}));
+                    "Tile variation \"{0}\" matches no sprite; it is ignored", {sprite_key}));
                 continue;
             }
-            const bool variation_exists = std::any_of(
-                current_theme->variations.begin(), current_theme->variations.end(),
-                [&](const TileVariation& v) { return v.name == sprite_key; });
-            if (variation_exists) {
+            if (!variation_names.insert(sprite_key).second) {
                 warnings.push_back(sprat::core::tr_format(
                     "Tile \"{0}\" theme \"{1}\" has more than one variation \"{2}\"; it is ignored",
                     {current_tile->name, current_theme->name, sprite_key}));

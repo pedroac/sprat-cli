@@ -279,8 +279,8 @@ cat > "$tiles_file" <<'TILES'
 flags solid water
 tile grass code:G layers:0,2 flags:solid,water
 theme default
-- sprite "./frames/a.png" rules:isolated
-- sprite:b rules:g[2,46]
+- variation "./frames/a.png" rules:isolated
+- variation:b rules:g[2,46]
 TILES
 
 "$convert_bin" --transform json --tiles "$(fix_path "$tiles_file")" < "$layout_file" > "$tmp_dir/out.tiles.json"
@@ -293,7 +293,7 @@ grep -q '"flags_bitmask": 3' "$tmp_dir/out.tiles.json"
 grep -q '"sprite_path": "./frames/a.png"' "$tmp_dir/out.tiles.json"
 grep -q '"rules": "isolated"' "$tmp_dir/out.tiles.json"
 grep -q '"rules": "g\[2,46\]"' "$tmp_dir/out.tiles.json"
-# The colon form "- sprite:NAME" is the same line as "- sprite NAME".
+# The colon form "- variation:NAME" is the same line as "- variation NAME".
 grep -q '"sprite_name": "b"' "$tmp_dir/out.tiles.json"
 
 # A duplicate code on one line is reported and the tile is dropped, without breaking the
@@ -318,18 +318,48 @@ printf 'tile grass code:G\ntheme default\ntheme default\n' > "$tmp_dir/tiles.the
 grep -qF 'Tile "grass" has more than one theme "default"' "$tmp_dir/tiles.theme.err"
 
 # A variation under an ignored theme is reported, not dropped silently.
-printf 'tile grass code:G\ntheme default\ntheme default\n- sprite a\n' > "$tmp_dir/tiles.theme.sprite.txt"
+printf 'tile grass code:G\ntheme default\ntheme default\n- variation a\n' > "$tmp_dir/tiles.theme.sprite.txt"
 "$convert_bin" --transform json --tiles "$(fix_path "$tmp_dir/tiles.theme.sprite.txt")" < "$layout_file" \
   > /dev/null 2> "$tmp_dir/tiles.theme.sprite.err"
-grep -qF 'Sprite variation outside a theme block' "$tmp_dir/tiles.theme.sprite.err"
+grep -qF 'Variation line outside a theme block' "$tmp_dir/tiles.theme.sprite.err"
 
 # A repeated variation name within a theme is reported and the second one is dropped.
-printf 'tile grass code:G\ntheme default\n- sprite a\n- sprite a\n' > "$tmp_dir/tiles.variation.txt"
+printf 'tile grass code:G\ntheme default\n- variation a\n- variation a\n' > "$tmp_dir/tiles.variation.txt"
 "$convert_bin" --transform json --tiles "$(fix_path "$tmp_dir/tiles.variation.txt")" < "$layout_file" \
   > "$tmp_dir/out.tiles.variation.json" 2> "$tmp_dir/tiles.variation.err"
 grep -qF 'Tile "grass" theme "default" has more than one variation "a"' "$tmp_dir/tiles.variation.err"
 if [ "$(grep -c '"sprite_name": "a"' "$tmp_dir/out.tiles.variation.json")" -ne 1 ]; then
   echo "duplicate variation was kept" >&2
+  exit 1
+fi
+
+# The old "- sprite" keyword is no longer a tile line; it is reported.
+printf 'tile grass code:G\ntheme default\n- sprite a\n' > "$tmp_dir/tiles.old.txt"
+"$convert_bin" --transform json --tiles "$(fix_path "$tmp_dir/tiles.old.txt")" < "$layout_file" \
+  > /dev/null 2> "$tmp_dir/tiles.old.err"
+grep -qF 'is not a root, flags, tile, theme or - variation line' "$tmp_dir/tiles.old.err"
+
+# Tiles and puppets share the layout stream without swallowing each other's lines.
+cat > "$tmp_dir/mixed.txt" <<'MIXED'
+atlas 64,32
+scale 1
+sprite "./frames/a.png" rect:0,0,16,16
+sprite "./frames/b.png" rect:16,0,8,8
+tile grass code:G
+theme default
+- variation a
+puppet "p"
+part "body" at:0,0
+- sprite b
+MIXED
+"$convert_bin" --transform json < "$tmp_dir/mixed.txt" > "$tmp_dir/out.mixed.json" 2> "$tmp_dir/mixed.err"
+grep -q '"name": "grass"' "$tmp_dir/out.mixed.json"
+if [ "$(grep -c '"sprite_name": "a"' "$tmp_dir/out.mixed.json")" -ne 1 ]; then
+  echo "tile variation missing in mixed layout" >&2
+  exit 1
+fi
+if grep -q '"sprite_name": "b"' "$tmp_dir/out.mixed.json"; then
+  echo "puppet sprite leaked into tile variations" >&2
   exit 1
 fi
 

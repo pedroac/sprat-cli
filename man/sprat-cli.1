@@ -524,13 +524,13 @@ tile "\fIname\fR" code:\fIC\fR [layers:\fIN\fR[,\fIN\fR...]] [flags:\fIf\fR[,\fI
 .br
 theme "\fIname\fR"
 .br
-\- sprite "\fIsprite\fR" [rules:\fItext\fR]
+\- variation "\fIsprite\fR" [rules:\fItext\fR]
 .br
-\- sprite:"\fIsprite\fR" [rules:\fItext\fR]
+\- variation:"\fIsprite\fR" [rules:\fItext\fR]
 .PP
 \fBflags\fR defines the flag names in order: the first is bit 0, up to 32. Define flags before the tiles that use them.
 A \fBtile\fR code is a single alphanumeric character and must be unique; a tile without exactly one valid code is ignored. \fBlayers\fR lists layer IDs for editors and does not affect rules.
-A \fBtheme\fR belongs to the current tile, and a \fB\- sprite\fR line adds a variation to the current theme: a sprite path (resolved against \fBroot\fR like markers paths) or a sprite name, quoted if it has spaces. The colon form \fB\- sprite:\fR\fIsprite\fR is the same line.
+A \fBtheme\fR belongs to the current tile, and a \fB\- variation\fR line adds a variation to the current theme: a sprite path (resolved against \fBroot\fR like markers paths) or a sprite name, quoted if it has spaces. The colon form \fB\- variation:\fR\fIsprite\fR is the same line. The first theme of a tile is its default.
 \fBrules\fR is free text describing the neighbor rule (for example \fBisolated\fR or \fBg[2,46]\fR); \fBspratconvert\fR stores it without interpreting it.
 Problems are reported and the offending line or tile is ignored; a tiles file never stops the conversion.
 The \fBjson\fR transform writes \fBtiles\fR and \fBtile_flags\fR; custom transforms read \fBsprat.tiles\fR and \fBsprat.tile_flags\fR.

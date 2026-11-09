@@ -118,7 +118,7 @@ bool is_puppets_keyword(std::string_view keyword) {
 
 bool is_tiles_keyword(std::string_view keyword) {
     return keyword == "root" || keyword == "flags" || keyword == "tile" || keyword == "theme"
-        || keyword == "- sprite" || keyword.starts_with("- sprite:");
+        || keyword == "- variation" || keyword.starts_with("- variation:");
 }
 
 bool is_metadata_keyword(std::string_view keyword) {

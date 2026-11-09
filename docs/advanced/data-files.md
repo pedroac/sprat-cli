@@ -111,23 +111,23 @@ Here the face is placed 40 pixels above the puppet's pivot, and the fly is free.
 
 ## Tiles
 
-`--tiles` expects a plaintext file describing tile types for tile-based maps. A tile type has a one-character code, optional layers and flags, and one or more themes; each theme lists sprite variations, optionally with a neighbor rule. Every line must be a `root`, `flags`, `tile`, `theme` or `- sprite` line (or a `#` comment); anything else is reported. A tiles file is written by hand, so problems are warnings that drop the offending line or tile rather than errors that stop the conversion.
+`--tiles` expects a plaintext file describing tile types for tile-based maps. A tile type has a one-character code, optional layers and flags, and one or more themes; each theme lists sprite variations, optionally with a neighbor rule. Every line must be a `root`, `flags`, `tile`, `theme` or `- variation` line (or a `#` comment); anything else is reported. A tiles file is written by hand, so problems are warnings that drop the offending line or tile rather than errors that stop the conversion.
 
 - `flags NAME...` defines the flag names, in order: the first is bit 0, the next bit 1, and so on, up to 32. A repeated name or a flag beyond the limit is ignored with a warning. Define flags before the tiles that use them.
 - `tile "NAME" code:C [layers:N,N,...] [flags:F,F,...]` starts a tile type. `code` is a single alphanumeric character and must be unique; a tile without exactly one valid code is ignored. `layers` lists the layer IDs the tile may appear on; it is for editors and does not affect rules. `flags` names flags defined by an earlier `flags` line; an unknown flag is ignored with a warning.
 - `theme "NAME"` starts a theme of the current tile. Theme names must be unique within their tile; a duplicate is ignored with a warning.
-- `- sprite "SPRITE" [rules:CONSTRAINT]` adds a sprite variation to the current theme. `SPRITE` is a sprite path (resolved against `root` like markers paths) or a sprite name; quote a path with spaces. The colon form `- sprite:"SPRITE"` is the same line. `rules` is free text describing the neighbor rule, such as `isolated` or `g[2,46]`; `spratconvert` stores it without interpreting it. A sprite that matches no sprite is ignored with a warning. Variation names must be unique within their theme; a duplicate is ignored with a warning.
+- `- variation "SPRITE" [rules:CONSTRAINT]` adds a sprite variation to the current theme. `SPRITE` is a sprite path (resolved against `root` like markers paths) or a sprite name; quote a path with spaces. The colon form `- variation:"SPRITE"` is the same line. `rules` is free text describing the neighbor rule, such as `isolated` or `g[2,46]`; `spratconvert` stores it without interpreting it. A sprite that matches no sprite is ignored with a warning. Variation names must be unique within their theme; a duplicate is ignored with a warning. The first theme of a tile is its default.
 
 Example `tiles.txt`:
 ```txt
 flags solid water
 tile "grass" code:G flags:solid
 theme "default"
-- sprite "grass.png" rules:isolated
-- sprite:"grass-edge.png" rules:g[2,46]
+- variation "grass.png" rules:isolated
+- variation:"grass-edge.png" rules:g[2,46]
 tile "water" code:W flags:water
 theme "default"
-- sprite "water.png"
+- variation "water.png"
 ```
 
 The `json` transform writes the tiles as `tiles` (with `code`, `layers`, `flags_bitmask` and `themes`) and the flag table as `tile_flags` (each with `index` and `name`), so a consumer can map a bit in `flags_bitmask` back to its flag name. Custom transforms get the same data in `sprat.tiles` and `sprat.tile_flags`.
@@ -147,7 +147,7 @@ The `json` transform writes the tiles as `tiles` (with `code`, `layers`, `flags_
 
 ## In the layout stream
 
-Without `--markers`, `--animations`, `--puppets` or `--tiles`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers, animations, puppets and tiles. There they share the layout's own `root` line, so leave out theirs: a second `root` line is an error. Layout files may hold `#` comment lines. A tiles block and a puppet both use `- sprite` lines, so a layout that carries both is ambiguous; put the tiles in a `--tiles` file instead.
+Without `--markers`, `--animations`, `--puppets` or `--tiles`, `spratconvert` reads them from the layout stream itself, so a layout may carry its markers, animations, puppets and tiles. There they share the layout's own `root` line, so leave out theirs: a second `root` line is an error. Layout files may hold `#` comment lines. Tiles and puppets use different keywords (`- variation` and `- sprite`), so a layout may carry both.
 
 Names in these files (sprites, markers, animations, puppets, parts, variants) may not be empty: `""` is reported like a missing name, since the `raw` format writes an empty string as "none".
 
