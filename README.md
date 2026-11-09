@@ -22,17 +22,6 @@ developer to a studio pipeline team.
 You do **not** need to be a programmer for the basic workflow: install the tools, put
 your images in a folder, and run a few commands.
 
-### Who uses it, and why
-
-| You are... | What you get |
-|---|---|
-| **A solo indie or small team** | A free MIT-licensed packer with a short command-line workflow, engine-ready metadata, and no per-seat licence. |
-| **A technical artist or pipeline engineer** | Deterministic layouts, caching, multipack, deduplication, variant atlases, custom Jsonnet transforms, and headless CI-friendly commands. |
-| **A professional studio or big team** | A headless, deterministic packer that fits existing build systems, scales to large sprite sets and variants, and avoids per-seat licensing. |
-| **A tool, GUI or plugin developer** | A plain-text pipeline with stable exit codes, JSON transform discovery, a raw C-friendly format, and a layout format you can inspect or generate. |
-| **A student, hobbyist or game-jam team** | A small set of focused tools you can learn one at a time, with copy-paste examples. |
-| **An open-source or Linux-first project** | An MIT-licensed, build-from-source tool that fits a scripted, reproducible asset pipeline. |
-
 If you want a drag-and-drop editor with a visual packing preview, `sprat-cli` is not that
 by itself; it is designed to be the packing engine behind such a tool as well as a CLI
 you can use directly.
