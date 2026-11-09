@@ -2,10 +2,14 @@
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
 //   sprat-raw 10
-//   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS
-//         VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS PART_EASES
-//         STRING_BYTES
+//   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS TILE_FLAGS TILES THEMES
+//         VARIATIONS GLOBAL_MARKERS MARKERS VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS
+//         SEQUENCES STEPS PART_EASES STRING_BYTES
 //   atlas W H PATH                                                (ATLASES lines)
+//   tile_flag NAME                                                (TILE_FLAGS lines)
+//   tile CODE LAYERS_COUNT [LAYER...] THEMES_COUNT FLAGS_BITMASK NAME (TILES lines)
+//     theme NAME VARIATIONS_COUNT                                 (THEMES after each tile)
+//       variation NAME SPRITE_INDEX RULES                         (VARIATIONS after each theme)
 //   marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME           (GLOBAL_MARKERS lines)
 //   sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y
 //          HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
@@ -69,6 +73,7 @@
 // part order) that eases the other way, EASE as above. Variants always snap when the pose
 // arrives, at the end of IN. Only what the pose sets changes, so sequences on different
 // parts combine.
+// Version 11 (planned) will add TILE_FLAGS, TILES, THEMES, VARIATIONS and their records.
 // Version 10 added each setting's HAS_SCALE SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT
 // TINT_R TINT_G TINT_B.
 // Version 9 added each step's PART_EASES and their total on the sheet line.
@@ -175,6 +180,17 @@ local puppet_lines(pp) =
   + std.join("", [joint_line(jt) for jt in pp.joints])
   + std.join("", [pose_lines(po) for po in pp.poses])
   + std.join("", [sequence_lines(sq) for sq in pp.sequences]);
+local variation_line(v) =
+  line(["variation", str(v.name), v.sprite_index, str(v.rules)]);
+local theme_lines(th) =
+  line(["theme", str(th.name), std.length(th.variations)])
+  + std.join("", [variation_line(v) for v in th.variations]);
+local tile_lines(t) =
+  line(["tile", str(t.code), std.length(t.layers)] + t.layers +
+       [std.length(t.themes), t.flags_bitmask, str(t.name)])
+  + std.join("", [theme_lines(th) for th in t.themes]);
+local tile_flag_line(f) =
+  line(["tile_flag", str(f.name)]);
 
 local puppets = sprat.puppets;
 local parts = [p for pp in puppets for p in pp.parts];
@@ -182,6 +198,11 @@ local joints = [jt for pp in puppets for jt in pp.joints];
 local poses = [po for pp in puppets for po in pp.poses];
 local sequences = [sq for pp in puppets for sq in pp.sequences];
 local steps = [st for sq in sequences for st in sq.steps];
+
+local tiles = if std.objectHas(sprat, 'tiles') then sprat.tiles else [];
+local tile_flags = if std.objectHas(sprat, 'tile_flags') then sprat.tile_flags else [];
+local themes = [th for t in tiles for th in t.themes];
+local variations = [v for t in tiles for th in t.themes for v in th.variations];
 
 local global_markers = [m for m in sprat.markers if m.sprite_index < 0];
 
@@ -198,13 +219,18 @@ local string_bytes =
   + sum([str_bytes(p.name) + sum([str_bytes(v.name) for v in p.variants]) for p in parts])
   + sum([str_bytes(jt.child_marker) + str_bytes(jt.parent_marker) for jt in joints])
   + sum([str_bytes(po.name) for po in poses])
-  + sum([str_bytes(sq.name) for sq in sequences]);
+  + sum([str_bytes(sq.name) for sq in sequences])
+  + sum([str_bytes(t.code) + str_bytes(t.name) for t in tiles])
+  + sum([str_bytes(th.name) for th in themes])
+  + sum([str_bytes(v.name) + str_bytes(v.rules) for v in variations])
+  + sum([str_bytes(f.name) for f in tile_flags]);
 
 local header =
   "sprat-raw 10\n"
   + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
-          std.length(puppets), std.length(global_markers), std.length(all_markers),
+          std.length(puppets), std.length(tile_flags), std.length(tiles), std.length(themes),
+          std.length(variations), std.length(global_markers), std.length(all_markers),
           sum([vertex_count(m) for m in all_markers]), sum([frame_count(a) for a in animations]),
           std.length(parts), sum([std.length(p.variants) for p in parts]), std.length(joints),
           std.length(poses), sum([std.length(po.parts) for po in poses]),
@@ -218,6 +244,8 @@ local header =
   content: header
     + std.join("", [line(["atlas", at.width, at.height, str(at.path)])
                     for at in sprat.atlases])
+    + std.join("", [tile_flag_line(f) for f in tile_flags])
+    + std.join("", [tile_lines(t) for t in tiles])
     + std.join("", [marker_line(m) for m in global_markers])
     + std.join("", [sprite_lines(s) for s in sprat.sprites])
     + std.join("", [anim_line(a) for a in animations])
