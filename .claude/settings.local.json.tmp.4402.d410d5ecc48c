@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/^std::vector<PuppetItem> parse_puppets_data/,/^}/ {print NR\": \"$0}' /home/pedroac/Projects/sprat/sprat-cli/src/commands/spratconvert_command.cpp)",
+      "Bash(cmake --build build)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

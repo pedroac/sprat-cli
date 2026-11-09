@@ -116,8 +116,14 @@ bool is_puppets_keyword(std::string_view keyword) {
         || keyword == "- part" || keyword == "sequence" || keyword == "- pose";
 }
 
+bool is_tiles_keyword(std::string_view keyword) {
+    return keyword == "root" || keyword == "flags" || keyword == "tile" || keyword == "theme"
+        || keyword == "- sprite";
+}
+
 bool is_metadata_keyword(std::string_view keyword) {
-    return is_markers_keyword(keyword) || is_animations_keyword(keyword) || is_puppets_keyword(keyword);
+    return is_markers_keyword(keyword) || is_animations_keyword(keyword) || is_puppets_keyword(keyword)
+        || is_tiles_keyword(keyword);
 }
 
 
