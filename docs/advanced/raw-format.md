@@ -8,14 +8,18 @@ This is the complete technical specification. For common use cases, see [spratco
 per line, every value a space-separated token, and every count written before the records
 it counts, so a loader can size each array before filling it. The `sheet` line also carries
 totals for the whole file (`MARKERS`, global ones included, `VERTICES`, `FRAMES`, puppet
-`PARTS`, `VARIANTS`, `JOINTS`, `POSES`, pose `SETTINGS`, `SEQUENCES` and their `STEPS`, the steps' `PART_EASES`, and `STRING_BYTES`, the UTF-8 bytes of every string), so a loader knows the exact size of the model up front and can allocate it
+`PARTS`, `VARIANTS`, `JOINTS`, `POSES`, pose `SETTINGS`, `SEQUENCES` and their `STEPS`, the steps' `PART_EASES`, tile `TILE_FLAGS`, `TILES`, `THEMES` and `VARIATIONS`, and `STRING_BYTES`, the UTF-8 bytes of every string), so a loader knows the exact size of the model up front and can allocate it
 once; it must reject a file whose records don't match those totals. Strings are length-prefixed (`<UTF-8 byte count>:<bytes>`), so names and
 paths may contain spaces; an empty string (`0:`) means "none".
 
 ```
-sprat-raw 10
-sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS GLOBAL_MARKERS MARKERS VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS PART_EASES STRING_BYTES
+sprat-raw 11
+sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS TILE_FLAGS TILES THEMES VARIATIONS GLOBAL_MARKERS MARKERS VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS SEQUENCES STEPS PART_EASES STRING_BYTES
 atlas W H PATH
+tile_flag NAME
+tile CODE LAYERS_COUNT [LAYER]... THEMES_COUNT FLAGS_BITMASK NAME
+theme NAME VARIATIONS_COUNT
+variation NAME SPRITE_INDEX RULES
 marker TYPE X Y RADIUS W H VERTICES [VX VY]... NAME
 sprite ATLAS X Y W H ROTATION TRIM_L TRIM_T TRIM_R TRIM_B HAS_PIVOT PIVOT_X PIVOT_Y HAS_SLICE SLICE_L SLICE_T SLICE_R SLICE_B SLICE_H SLICE_V ALIAS MARKERS NAME PATH
 anim FPS FLIP LOOP ALIAS FRAMES [SPRITE_INDEX]... NAME
@@ -29,7 +33,13 @@ sequence FPS LOOP STEPS NAME
 step POSE IN HOLD EASE PART_EASES [PART EASE]...
 ```
 
-`GLOBAL_MARKERS` `marker` lines follow the atlases: the markers file's markers before any
+`TILE_FLAGS` `tile_flag` lines follow the atlases, then the `TILES` `tile` lines. A tile's
+`CODE` is a length-prefixed string (one alphanumeric character), `LAYERS_COUNT` is followed by
+that many layer IDs (for editors; they don't affect rules), and `FLAGS_BITMASK` has bit `n`
+set for the flag whose `tile_flag` line is the `n`-th. Each `tile` line is followed by its
+`THEMES_COUNT` `theme` lines, each followed by its `VARIATIONS_COUNT` `variation` lines:
+`SPRITE_INDEX` is a sprite index and `RULES` is the variation's free-text neighbor rule
+(possibly empty). `GLOBAL_MARKERS` `marker` lines follow the tiles: the markers file's markers before any
 `path`. Each sprite's `MARKERS` `marker` lines follow it. `HAS_PIVOT` tells a pivot at `0,0`
 from no pivot (then `PIVOT_X` and `PIVOT_Y` are 0). A sprite's `ALIAS` is the index of the
 regular sprite whose atlas region a deduplicated sprite shares, or `-1`. Enums are numbers: marker types `point`=0,
@@ -60,7 +70,7 @@ each part shows; `LEEWAY` is in atlas pixels, and `ANGLE_MIN` and `ANGLE_MAX` ap
 and collision map fields; version 4 added `GLOBAL_MARKERS`, their lines and `HAS_PIVOT`, and
 replaced the sprite's `ALIAS_OF` path with the `ALIAS` index; version 5 added puppets; version
 6 added the puppet's `REFERENCE` and each part's `HAS_POSITION X Y`; version 7 removed
-`REFERENCE` and added joint constraints and poses; version 8 added sequences; version 9 added each step's `PART_EASES`; version 10 added each setting's `HAS_SCALE SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT TINT_R TINT_G TINT_B`).
+`REFERENCE` and added joint constraints and poses; version 8 added sequences; version 9 added each step's `PART_EASES`; version 10 added each setting's `HAS_SCALE SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT TINT_R TINT_G TINT_B`; version 11 added tiles (`TILE_FLAGS`, `TILES`, `THEMES`, `VARIATIONS` and their records)).
 
 Exported coordinates and sizes stay within 2^24 (16777216) atlas pixels, the limit
 [sprat-lib](https://github.com/pedroac/sprat-lib) enforces, so sums of a few values fit in an

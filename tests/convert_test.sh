@@ -311,10 +311,36 @@ if command -v python3 >/dev/null 2>&1; then
   python3 -m json.tool "$(fix_path "$tmp_dir/out.tiles.code.json")" > /dev/null
 fi
 
+# A repeated theme name within a tile is reported and the second theme is dropped.
+printf 'tile grass code:G\ntheme default\ntheme default\n' > "$tmp_dir/tiles.theme.txt"
+"$convert_bin" --transform json --tiles "$(fix_path "$tmp_dir/tiles.theme.txt")" < "$layout_file" \
+  > /dev/null 2> "$tmp_dir/tiles.theme.err"
+grep -qF 'Tile "grass" has more than one theme "default"' "$tmp_dir/tiles.theme.err"
+
 # Tiles lines are read from the layout stream when --tiles is absent.
 cat "$layout_file" "$tiles_file" > "$tmp_dir/layout.tiles.txt"
 "$convert_bin" --transform json < "$tmp_dir/layout.tiles.txt" > "$tmp_dir/out.tiles.stream.json"
 grep -q '"name": "grass"' "$tmp_dir/out.tiles.stream.json"
+
+# The raw transform writes the tile records and counts them on the sheet line.
+"$convert_bin" --transform raw --tiles "$(fix_path "$tiles_file")" < "$layout_file" > "$tmp_dir/out.tiles.sprat"
+cat > "$tmp_dir/expected.tiles.sprat" <<'RAW'
+sprat-raw 11
+sheet 1 0 0 1 2 0 0 2 1 1 2 0 0 0 0 0 0 0 0 0 0 0 0 83
+atlas 64 32 0:
+tile_flag 5:solid
+tile_flag 5:water
+tile 1:G 2 0 2 1 3 5:grass
+theme 7:default 2
+variation 14:./frames/a.png 0 8:isolated
+variation 1:b 1 7:g[2,46]
+sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1:a 14:./frames/a.png
+sprite 0 16 0 8 8 90 1 2 3 4 0 0 0 0 0 0 0 0 0 0 -1 0 1:b 14:./frames/b.png
+RAW
+if ! diff "$tmp_dir/expected.tiles.sprat" "$tmp_dir/out.tiles.sprat"; then
+  echo "raw transform tiles mismatch" >&2
+  exit 1
+fi
 
 "$convert_bin" --help | grep -q -- '--tiles'
 
@@ -349,12 +375,13 @@ ANIMS
 # String lengths count UTF-8 bytes ("c dé" is 5); an alias points at its source by index
 # and plays as it does (LOOP 3 is once-pingpong). The global marker comes before the
 # sprites; b's pivot at 0,0 still sets HAS_PIVOT; the deduplicated d names a by index.
-# The sheet line totals no puppets, 1 global marker, 6 markers, 3 vertices, 2 frames, no
-# parts, variants, joints, poses, settings, sequences, steps or part eases, and 104 string bytes: spawn 5, sprites 1+14 + 1+14 + 5+18 +
+# The sheet line totals no puppets, tile flags, tiles, themes or variations, 1 global marker,
+# 6 markers, 3 vertices, 2 frames, no parts, variants, joints, poses, settings, sequences,
+# steps or part eases, and 104 string bytes: spawn 5, sprites 1+14 + 1+14 + 5+18 +
 # 1+14, markers 3+4+4+4+5, animations 3+8.
 cat > "$tmp_dir/expected.sprat" <<'RAW'
-sprat-raw 10
-sheet 1 0 0 1 4 2 0 1 6 3 2 0 0 0 0 0 0 0 0 104
+sprat-raw 11
+sheet 1 0 0 1 4 2 0 0 0 0 0 1 6 3 2 0 0 0 0 0 0 0 0 104
 atlas 64 32 0:
 marker 0 1 1 0 0 0 0 5:spawn
 sprite 0 0 0 16 16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 3 1:a 14:./frames/a.png
@@ -405,13 +432,14 @@ sequence "dance" fps:12 loop:once
 - pose "wave" in:2 hold:3 step:"arm"
 - pose buzz hold:1 ease:step linear:fly
 PUPPETS
-# 1 puppet, 3 parts, 4 variants, 3 joints, 2 poses, 3 settings, 1 sequence, 2 steps and 2
-# part eases (the arm snaps in a linear step, the fly tweens in a snapping one);
+# 1 puppet, no tile flags, tiles, themes or variations, 3 parts, 4 variants, 3 joints,
+# 2 poses, 3 settings, 1 sequence, 2 steps and 2 part eases (the arm snaps in a linear
+# step, the fly tweens in a snapping one);
 # strings add hé 3, body 4 + a 1 + body-2 6, arm 3 + swing 5, fly 3 + b 1, the markers
 # pivot 5 + zone 4, hit 3 + zone 4 and hit 3 + zone 4, the poses wave 4 and buzz 4, and the
 # sequence dance 5 to the 104 bytes above.
 cat > "$tmp_dir/expected.puppets.sprat" <<'RAW'
-sheet 1 0 0 1 4 2 1 1 6 3 2 3 4 3 2 3 1 2 2 166
+sheet 1 0 0 1 4 2 1 0 0 0 0 1 6 3 2 3 4 3 2 3 1 2 2 166
 puppet 3 3 2 1 3:hé
 part -1 1 0 -20 2 4:body
 variant 0 0 1:a

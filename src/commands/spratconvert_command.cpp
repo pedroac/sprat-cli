@@ -2165,6 +2165,15 @@ std::vector<TileItem> parse_tiles_data(
                 warnings.push_back(tr("Theme line has no valid name; it is ignored"));
                 continue;
             }
+            const bool theme_exists = std::any_of(
+                current_tile->themes.begin(), current_tile->themes.end(),
+                [&](const TileTheme& t) { return t.name == theme_name; });
+            if (theme_exists) {
+                warnings.push_back(sprat::core::tr_format(
+                    "Tile \"{0}\" has more than one theme \"{1}\"; it is ignored",
+                    {current_tile->name, theme_name}));
+                continue;
+            }
             TileTheme theme;
             theme.name = theme_name;
             current_tile->themes.push_back(std::move(theme));

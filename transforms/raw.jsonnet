@@ -1,7 +1,7 @@
 // raw.jsonnet – Plain-token metadata that a C loader reads in one pass, with no parser
 // library (see sprat-lib). Every value is a space-separated token, one record per line:
 //
-//   sprat-raw 10
+//   sprat-raw 11
 //   sheet SCALE EXTRUDE MULTIPACK ATLASES SPRITES ANIMATIONS PUPPETS TILE_FLAGS TILES THEMES
 //         VARIATIONS GLOBAL_MARKERS MARKERS VERTICES FRAMES PARTS VARIANTS JOINTS POSES SETTINGS
 //         SEQUENCES STEPS PART_EASES STRING_BYTES
@@ -73,7 +73,7 @@
 // part order) that eases the other way, EASE as above. Variants always snap when the pose
 // arrives, at the end of IN. Only what the pose sets changes, so sequences on different
 // parts combine.
-// Version 11 (planned) will add TILE_FLAGS, TILES, THEMES, VARIATIONS and their records.
+// Version 11 added TILE_FLAGS, TILES, THEMES, VARIATIONS and their records.
 // Version 10 added each setting's HAS_SCALE SCALE_X SCALE_Y HAS_OPACITY OPACITY HAS_TINT
 // TINT_R TINT_G TINT_B.
 // Version 9 added each step's PART_EASES and their total on the sheet line.
@@ -226,7 +226,7 @@ local string_bytes =
   + sum([str_bytes(f.name) for f in tile_flags]);
 
 local header =
-  "sprat-raw 10\n"
+  "sprat-raw 11\n"
   + line(["sheet", sprat.scale_text, sprat.extrude, bool(sprat.multipack),
           std.length(sprat.atlases), std.length(sprat.sprites), std.length(animations),
           std.length(puppets), std.length(tile_flags), std.length(tiles), std.length(themes),
